@@ -1,0 +1,20 @@
+[package]
+name = "sop-cli"
+description = "Command line interface for a field-sop content repository."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "sop"
+path = "src/main.rs"
+
+[dependencies]
+sop-core.workspace = true
+sop-repo.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+sha2.workspace = true
+thiserror.workspace = true

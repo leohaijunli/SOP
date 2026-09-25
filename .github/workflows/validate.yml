@@ -1,0 +1,61 @@
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: Lints
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tooling tests
+        run: cargo test --workspace
+
+      - name: Validate content
+        run: cargo run --quiet -p sop-cli -- validate
+
+      - name: Build manifest
+        run: cargo run --quiet -p sop-cli -- index
+
+      - name: Upload manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: field-sop-manifest
+          path: dist/manifest.json
+
+  # Transitional, and deleted with tools/ once the Rust CLI has been trusted in the field
+  # for a while. It is kept in CI so that a divergence between the two implementations
+  # fails the build instead of passing silently. See docs/DECISIONS.md D11.
+  python-cross-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python3 -m pip install --disable-pip-version-check --quiet pyyaml
+
+      - name: Validate content
+        run: python3 tools/validate.py
+
+      - name: Validator negative tests
+        run: python3 tools/selftest.py

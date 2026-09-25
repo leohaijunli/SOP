@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["crates/sop-core", "crates/sop-repo", "crates/sop-cli", "crates/sop-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.88"
+
+[workspace.dependencies]
+sop-core = { path = "crates/sop-core" }
+sop-repo = { path = "crates/sop-repo" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_norway = "0.9"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+sha2 = "0.10"
+
+[profile.release]
+strip = true
+lto = "thin"

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "field-sop",
+  "version": "0.1.0",
+  "identifier": "ca.uvic.field-sop",
+  "build": {
+    "frontendDist": "../../ui/dist",
+    "beforeBuildCommand": "",
+    "beforeDevCommand": ""
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "field-sop",
+        "width": 1560,
+        "height": 980,
+        "minWidth": 1100,
+        "minHeight": 700
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": ["deb", "appimage"],
+    "category": "Science",
+    "shortDescription": "Field procedures and checklist records for geomagnetic survey work",
+    "longDescription": "Runs a checklist step by step, records what happened, and edits the Markdown content that the procedures are written in."
+  }
+}

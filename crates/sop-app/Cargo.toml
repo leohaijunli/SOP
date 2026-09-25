@@ -1,0 +1,22 @@
+[package]
+name = "sop-app"
+description = "The field-sop desktop application: run a checklist and edit the content."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "field-sop"
+path = "src/main.rs"
+
+[dependencies]
+sop-core.workspace = true
+sop-repo.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tauri = { version = "2", features = [] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
