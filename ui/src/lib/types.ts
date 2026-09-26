@@ -186,6 +186,75 @@ export interface StepInput {
   captures: CaptureInput[];
 }
 
+// ---- a running (or ended) run, for the execution and history views -------------------
+
+export interface RunView {
+  sop: string;
+  runId: string;
+  operator: string | null;
+  site: string | null;
+  started: string | null;
+  ended: string | null;
+  runStatus: string | null;
+  snapshotSha256: string | null;
+  sopVersion: string | null;
+  sopCommit: string | null;
+  deviationsCount: number;
+  steps: RunStepView[];
+  runNotes: string[];
+  runAttachments: RunAttachmentView[];
+  recordPath: string;
+}
+
+export interface RunStepView {
+  id: string;
+  title: string;
+  prose: string;
+  severity: string | null;
+  kind: string | null;
+  status: string;
+  reason: string | null;
+  checkboxes: boolean[];
+  captures: RunCaptureView[];
+  notes: string[];
+}
+
+export interface RunCaptureView {
+  key: string;
+  label: string | null;
+  type: string | null;
+  unit: string | null;
+  required: boolean;
+  options: string[];
+  expected: unknown;
+  value: string | null;
+}
+
+export interface RunAttachmentView {
+  path: string;
+  sha256: string;
+  size: number;
+}
+
+// A run event as the Rust shell deserializes it: variant tag is PascalCase, fields
+// are snake_case (the Rust names).
+export type RunEventInput =
+  | { type: "StepOpened"; at: string; step: string }
+  | { type: "CheckboxToggled"; at: string; step: string; index: number; checked: boolean }
+  | { type: "CaptureRecorded"; at: string; step: string; key: string; value: string; unit: string | null }
+  | { type: "CaptureCleared"; at: string; step: string; key: string; reason: string }
+  | { type: "NoteAdded"; at: string; step: string | null; text: string }
+  | {
+      type: "AttachmentAdded";
+      at: string;
+      step: string | null;
+      path: string;
+      sha256: string;
+      size: number;
+    }
+  | { type: "StepStatusChanged"; at: string; step: string; status: string; reason: string | null }
+  | { type: "RunEnded"; at: string; status: string };
+
 export interface StepPatch {
   title?: string | null;
   kind?: string | null;

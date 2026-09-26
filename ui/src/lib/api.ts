@@ -8,6 +8,8 @@ import type {
   Manifest,
   ProcedureChoice,
   ProjectView,
+  RunEventInput,
+  RunView,
   SettingRow,
   Status,
   StepInput,
@@ -79,6 +81,29 @@ export const includeAdd = (file: string, target: string): Promise<string> =>
 
 export const includeRemove = (file: string, target: string): Promise<string> =>
   invoke<string>("include_remove", { file, target });
+
+// ---- runs --------------------------------------------------------------------
+
+export const runStart = (
+  sop: string,
+  runId: string,
+  operator: string,
+  site: string,
+  overrideReason: string | null
+): Promise<RunView> =>
+  invoke<RunView>("run_start", { sop, runId, operator, site, override: overrideReason });
+
+export const runRecord = (sop: string, runId: string, event: RunEventInput): Promise<RunView> =>
+  invoke<RunView>("run_record", { sop, runId, event });
+
+export const runState = (sop: string, runId: string): Promise<RunView> =>
+  invoke<RunView>("run_state", { sop, runId });
+
+export const runEnd = (sop: string, runId: string, status: string): Promise<RunView> =>
+  invoke<RunView>("run_end", { sop, runId, status });
+
+export const runAttach = (sop: string, runId: string, step: string | null, path: string): Promise<RunView> =>
+  invoke<RunView>("run_attach", { sop, runId, step, path });
 
 // ---- helpers ----------------------------------------------------------------
 

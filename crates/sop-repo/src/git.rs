@@ -98,6 +98,13 @@ pub fn state(root: &Path, remote: &str) -> GitState {
     state
 }
 
+/// The short commit at `HEAD`, when the working copy is a git repository.
+pub fn current_commit(root: &Path) -> Option<String> {
+    let commit = run(root, &["rev-parse", "--short", "HEAD"]).ok().flatten()?;
+    let commit = commit.trim();
+    if commit.is_empty() { None } else { Some(commit.to_owned()) }
+}
+
 /// True when the URL embeds a username or a token.
 ///
 /// The same `@` means different things under different schemes, so the rule differs too.

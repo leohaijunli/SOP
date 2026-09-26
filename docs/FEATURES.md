@@ -24,27 +24,27 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 
 | Feature | Notes | Priority |
 |---|---|---|
-| Start a run from a checklist | Freezes `snapshot.md`, opens `events.jsonl` | P3 |
-| Ordered step list with instructions inline | Prose, tables, warnings, and acceptance criteria next to the widgets | P4 |
-| Interactive checkboxes | Every toggle is an event | P4 |
-| Capture entry with unit and expected-range highlight | Operator acknowledges out-of-range values | P4 |
-| Skips and deviations require a reason | Non-negotiable; this is the audit trail | P4 |
-| Notes per step and per run | Free text, timestamped | P4 |
-| Attach a log to a step, or a set to the run | Copied, hashed, filename prefixed with the hash | P3 |
-| Block starting a `draft` checklist | Override is possible and recorded as an event with a reason | P4 |
+| Start a run from a checklist | Freezes `snapshot.md`, opens `events.jsonl` | done |
+| Ordered step list with instructions inline | Prose, tables, warnings, and acceptance criteria next to the widgets | done |
+| Interactive checkboxes | Every toggle is an event | done |
+| Capture entry with unit and expected-range highlight | Operator acknowledges out-of-range values | done |
+| Skips and deviations require a reason | Non-negotiable; this is the audit trail | done |
+| Notes per step and per run | Free text, timestamped | done |
+| Attach a log to a step, or a set to the run | Copied, hashed, filename prefixed with the hash | done |
+| Block starting a `draft` checklist | Override is possible and recorded as an event with a reason | done |
 | Fully offline | No network calls in the app, ever | P4 |
-| Resume after a crash | Replay the log; the run reopens in its last consistent state | P2 |
+| Resume after a crash | Replay the log; the run reopens in its last consistent state | done |
 | Keyboard-first operation | Field use is often one-handed and gloved | P4 |
 
 ## C. Records and audit
 
 | Feature | Notes | Priority |
 |---|---|---|
-| Append-only JSONL event log | Source of truth | P2 |
-| Rendered `record.md` | Human review via GitHub diff | P2 |
-| Template snapshot per run | Record survives repo moves and history rewrites | P3 |
-| Which revision was executed | `sop_version` + `sop_commit` + `snapshot_sha256` | P3 |
-| Immutable change history | Changing a value appends a typed event with a reason | P2 |
+| Append-only JSONL event log | Source of truth | done |
+| Rendered `record.md` | Human review via GitHub diff | done |
+| Template snapshot per run | Record survives repo moves and history rewrites | done |
+| Which revision was executed | `sop_version` + `sop_commit` + `snapshot_sha256` | done |
+| Immutable change history | Changing a value appends a typed event with a reason | done |
 | SHA-256 on every attachment | Verified by the validator, not just recorded | done |
 | Run metadata | Operator, site, sensor model/serial/firmware, hardware, conditions, UTC times | done |
 | Step-level coverage check | A `complete` run with an unfilled or skipped step is a validation error | done |
@@ -60,7 +60,7 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | Deviation count consistency | Declared count must match the log and the record | done |
 | Relative link resolution | | done |
 | Formatting rules | UTF-8, LF, no BOM, single trailing newline, no tab indentation | done |
-| Cross-check `record.md` against `events.jsonl` | Catches hand-edited records | P2 |
+| Cross-check `record.md` against `events.jsonl` | Catches hand-edited records | done |
 | Markdown structural lint | Malformed fences, headings inside steps, mixed-list traps | P1 |
 | Validation in CI on every push and PR | Includes 22 negative tests that must fail | done |
 | Validation available offline in the CLI and the app | So content can be checked at the desk, not only in CI | P3 |
@@ -75,7 +75,7 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | Record and attachments committed together | The record is never separated from its data | P3 |
 | Large-log guidance and optional Git LFS | Policy in `docs/LOGS.md` | done |
 | Manifest generation for fast app loading | `dist/manifest.json` | done |
-| Packaged `.deb` and AppImage | Installed deliberately per laptop, no silent updates | P4 |
+| Packaged `.deb` and AppImage | Installed deliberately per laptop, no silent updates | done |
 
 ## F. Knowledge loop
 
@@ -84,7 +84,7 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | `runs/_inbox/` for unproven observations | Evidence lives separately from the conclusion drawn from it | done |
 | Inbox entry schema and validation | Created, author, observed_in, target, confidence | done |
 | "Promote to procedure" flow | Copies an observation into a proposed procedure edit | P5 |
-| Deviation roll-up across runs | "What keeps going wrong, and where" | P5 |
+| Deviation roll-up across runs | "What keeps going wrong, and where" | done |
 | Guide for opening the resulting PR | Review is the point, not the automation | P5 |
 
 ## G. Analysis across runs
@@ -92,9 +92,9 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | Feature | Notes | Priority |
 |---|---|---|
 | Stable step ids comparable across runs | The reason ids are authored rather than execution-assigned | done |
-| Run history per checklist | Filter by site, sensor, operator, outcome | P4 |
+| Run history per checklist | Filter by site, sensor, operator, outcome | done |
 | Capture trend across runs | e.g. noise floor over successive calibrations | P4 |
-| Export run data as CSV/JSONL | For the processing pipelines in `mag_gcs` and `geomag-uav-survey` | P5 |
+| Export run data as CSV | For the processing pipelines in `mag_gcs` and `geomag-uav-survey` | done |
 | Site and sensor comparison | The primary axis of a multi-site campaign | P5 |
 
 ## H. In-app help

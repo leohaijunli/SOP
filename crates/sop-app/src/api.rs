@@ -87,6 +87,64 @@ pub enum ExpectedInput {
     Select { value: String },
 }
 
+/// A run as the execution view renders it: step definitions merged with run state.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunView {
+    pub sop: String,
+    pub run_id: String,
+    pub operator: Option<String>,
+    pub site: Option<String>,
+    pub started: Option<String>,
+    pub ended: Option<String>,
+    pub run_status: Option<String>,
+    pub snapshot_sha256: Option<String>,
+    pub sop_version: Option<String>,
+    pub sop_commit: Option<String>,
+    pub deviations_count: usize,
+    pub steps: Vec<RunStepView>,
+    pub run_notes: Vec<String>,
+    pub run_attachments: Vec<RunAttachmentView>,
+    pub record_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunStepView {
+    pub id: String,
+    pub title: String,
+    pub prose: String,
+    pub severity: Option<String>,
+    pub kind: Option<String>,
+    pub status: String,
+    pub reason: Option<String>,
+    pub checkboxes: Vec<bool>,
+    pub captures: Vec<RunCaptureView>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunCaptureView {
+    pub key: String,
+    pub label: Option<String>,
+    #[serde(rename = "type")]
+    pub capture_type: Option<String>,
+    pub unit: Option<String>,
+    pub required: bool,
+    pub options: Vec<String>,
+    pub expected: Option<serde_json::Value>,
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunAttachmentView {
+    pub path: String,
+    pub sha256: String,
+    pub size: u64,
+}
+
 /// A whole step, as the "add step" form sends it.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]

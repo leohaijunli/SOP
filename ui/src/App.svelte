@@ -7,16 +7,18 @@
   import SettingsPanel from "./components/SettingsPanel.svelte";
   import ProjectPanel from "./components/ProjectPanel.svelte";
   import AuthoringPanel from "./components/AuthoringPanel.svelte";
+  import ExecutionView from "./components/ExecutionView.svelte";
+  import HistoryView from "./components/HistoryView.svelte";
   import * as api from "./lib/api";
   import type { Manifest } from "./lib/types";
 
-  // Which screen the window is showing. Browse is the run view; the others are
+  // Which screen the window is showing. Run is the execution view; the others are
   // configuration and content editing, reached from the toolbar.
-  type View = "browse" | "settings" | "project" | "authoring";
+  type View = "browse" | "run" | "history" | "settings" | "project" | "authoring";
 
   let manifest: Manifest | null = $state(null);
   let error: string | null = $state(null);
-  let view: View = $state("browse");
+  let view: View = $state("run");
   let helpOpen = $state(true);
   let showSteps = $state(true);
 
@@ -34,10 +36,13 @@
   };
 
   const openView = (next: string): void => {
-    if (next === "browse" || next === "settings" || next === "project" || next === "authoring") {
-      view = next;
+    if (
+      next === "browse" || next === "run" || next === "history" ||
+      next === "settings" || next === "project" || next === "authoring"
+    ) {
+      view = next as View;
     }
-    // The authoring screen edits whatever checklist is current.
+    // The authoring / run / history screens act on whatever checklist is current.
   };
 
   const refresh = async (): Promise<void> => {
@@ -139,6 +144,10 @@
       {#if helpOpen}
         <HelpPanel manifest={manifest} {help} {helpQuery} onHelp={(h) => (help = h)} onQuery={(q) => (helpQuery = q)} />
       {/if}
+    {:else if view === "run"}
+      <ExecutionView {manifest} {checklist} />
+    {:else if view === "history"}
+      <HistoryView {manifest} {checklist} />
     {:else if view === "settings"}
       <SettingsPanel />
     {:else if view === "project"}

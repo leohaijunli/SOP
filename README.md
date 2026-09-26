@@ -8,12 +8,15 @@ Every customizable part of this repo is a plain Markdown file. No build step is
 required to read or edit it; a human with a text editor, a code review, and the desktop
 app are all first-class users.
 
-**Status:** content and format are in place and validated; the application is designed
-but not yet built. Start with `docs/DESIGN.md`.
+**Status:** content and format are validated; the CLI, the event-sourced run recorder
+(P2/P3), and the desktop app (P4, execution + history views) are implemented. Start with
+`docs/DESIGN.md`.
 
 What works today: `sop validate`, `sop index`, `sop preview`, `sop status`,
-`sop project`, `sop remote`, and `sop settings`. What does not exist yet: the desktop
-application, the run-record writer, and attachments. See `docs/DESIGN.md` section 8.
+`sop project`, `sop remote`, `sop settings`, and `sop run start|record|recover|attach|end`
+(plus `sop run deviations` and `sop run export --format csv`). The desktop app
+(`field-sop`) renders Run / History / Browse / Edit / Project / Settings views and is
+packaged as a `.deb` and AppImage on tag (`.github/workflows/validate.yml`).
 
 ## Why this exists
 
@@ -91,6 +94,13 @@ when it is left out, and the current directory after that.
 | `sop status` | Working copy, project, git state, and what content is present. |
 | `sop remote [url]` | Show or set the git remote URL, through `git` itself. |
 | `sop settings [set KEY VALUE]` | Show or change this application's own preferences. |
+| `sop run start <sop> <id> <op> <site> [--override REASON]` | Start a run: freeze a snapshot, open the event log. |
+| `sop run record <sop> <id> <event...>` | Append one event (capture / checkbox / done / skip / deviate / note). |
+| `sop run recover <sop> <id>` | Replay the event log to the run's latest state. |
+| `sop run attach <sop> <id> <file>` | Copy a log in, hashed, and record an attachment event. |
+| `sop run end <sop> <id> <status>` | End the run and write the record file. |
+| `sop run deviations <sop>` | Roll up every deviation across the checklist's runs. |
+| `sop run export <sop> --format csv` | Export run captures as CSV for the processing pipelines. |
 
 ```bash
 ./target/release/sop index

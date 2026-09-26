@@ -80,6 +80,14 @@ enum Command {
         #[command(subcommand)]
         action: Option<SettingsAction>,
     },
+    /// Execute a run: start it, record events, recover it, attach logs.
+    Run {
+        #[command(subcommand)]
+        action: RunAction,
+        /// Repository root. Defaults to the configured working copy, then to here.
+        #[arg(long, value_name = "PATH", global = true)]
+        repo: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -107,6 +115,114 @@ enum SettingsAction {
     Unset { key: String },
 }
 
+#[derive(Debug, Subcommand)]
+enum RunAction {
+    /// Start a run from a checklist, freezing a snapshot and opening the event log.
+    Start {
+        /// The checklist's sop_id.
+        sop: String,
+        /// The run's own id, e.g. 2026-09-25-renfrew-walk02.
+        run_id: String,
+        /// Who is running it.
+        operator: String,
+        /// Where it is being run.
+        site: String,
+        /// Allow starting a draft checklist, recording this reason.
+        #[arg(long, value_name = "REASON")]
+        r#override: Option<String>,
+    },
+    /// Record one event on an open run.
+    Record {
+        /// The checklist's sop_id.
+        sop: String,
+        /// The run's id.
+        run_id: String,
+        #[command(subcommand)]
+        event: RecordEventAction,
+    },
+    /// Recover a run from its event log and print its state.
+    Recover {
+        /// The checklist's sop_id.
+        sop: String,
+        /// The run's id.
+        run_id: String,
+    },
+    /// Copy a file into the run's logs, hashed and recorded as an event.
+    Attach {
+        /// The checklist's sop_id.
+        sop: String,
+        /// The run's id.
+        run_id: String,
+        /// The step to attach it to. Omit to attach to the run.
+        #[arg(long, value_name = "STEP")]
+        step: Option<String>,
+        /// The file to copy in.
+        path: PathBuf,
+    },
+    /// End the run and write the human record file.
+    End {
+        /// The checklist's sop_id.
+        sop: String,
+        /// The run's id.
+        run_id: String,
+        /// complete, partial, or aborted.
+        status: String,
+    },
+    /// Roll up every deviation across a checklist's runs: which steps keep going wrong.
+    Deviations {
+        /// The checklist's sop_id.
+        sop: String,
+    },
+    /// Export a checklist's run data as CSV for the processing pipelines.
+    Export {
+        /// The checklist's sop_id.
+        sop: String,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = ExportFormat::Csv)]
+        format: ExportFormat,
+    },
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+enum ExportFormat {
+    Csv,
+}
+
+#[derive(Debug, Subcommand)]
+enum RecordEventAction {
+    /// Mark a step done.
+    Done { step: String },
+    /// Mark a step skipped; a reason is required.
+    Skip { step: String, reason: String },
+    /// Mark a step deviated; a reason is required.
+    Deviate { step: String, reason: String },
+    /// Record a capture value on a step.
+    Capture {
+        step: String,
+        key: String,
+        value: String,
+        /// The unit to record with the value.
+        #[arg(long, value_name = "UNIT")]
+        unit: Option<String>,
+    },
+    /// Clear a capture value, recording why.
+    Clear { step: String, key: String, reason: String },
+    /// Toggle a checkbox on a step.
+    Checkbox {
+        step: String,
+        index: usize,
+        #[arg(value_parser = clap::builder::BoolishValueParser::new(), action = clap::ArgAction::Set)]
+        checked: bool,
+    },
+    /// Add a note to a step or to the run.
+    Note {
+        /// The step to note. Omit for a run-level note.
+        #[arg(long, value_name = "STEP")]
+        step: Option<String>,
+        text: String,
+    },
+}
+
 fn main() -> ExitCode {
     match Cli::parse().command {
         Command::Validate { repo, files } => run_validate(repo, files),
@@ -116,6 +232,7 @@ fn main() -> ExitCode {
         Command::Remote { url, name, repo } => run_remote(repo, name, url),
         Command::Project { action, repo } => run_project(repo, action),
         Command::Settings { action } => run_settings(action),
+        Command::Run { action, repo } => run_run(repo, action),
     }
 }
 
@@ -497,4 +614,200 @@ fn run_index(repo: Option<PathBuf>, out: Option<PathBuf>) -> ExitCode {
         manifest.help.len()
     );
     ExitCode::SUCCESS
+}
+
+
+fn run_run(repo: Option<PathBuf>, action: RunAction) -> ExitCode {
+    use sop_repo::run;
+    let (_, settings) = load_settings();
+    let repo = repository_for(repo, &settings);
+
+    let result: Result<(), String> = match action {
+        RunAction::Start { sop, run_id, operator, site, r#override } => {
+            run::start(&repo, &sop, &run_id, &operator, &site, r#override.as_deref())
+                .map(|loaded| {
+                    println!("started {run_id} for {sop}");
+                    println!("snapshot {}", loaded.state.snapshot_sha256.as_deref().unwrap_or(""));
+                })
+                .map_err(|error| error.to_string())
+        }
+        RunAction::Record { sop, run_id, event } => {
+            let event = record_event(event);
+            run::record(&repo, &sop, &run_id, &event)
+                .map(|_| println!("recorded on {run_id}"))
+                .map_err(|error| error.to_string())
+        }
+        RunAction::Recover { sop, run_id } => {
+            run::load(&repo, &sop, &run_id)
+                .map(|loaded| {
+                    println!(
+                        "recovered {run_id}: {} step(s), {} deviation(s)",
+                        loaded.state.steps.len(),
+                        loaded.state.deviations()
+                    );
+                    for (id, state) in &loaded.state.steps {
+                        println!("  {id}: {}", state.status.as_str());
+                    }
+                })
+                .map_err(|error| error.to_string())
+        }
+        RunAction::Attach { sop, run_id, step, path } => {
+            run::attach(&repo, &sop, &run_id, step.as_deref(), &path)
+                .map(|attachment| {
+                    println!(
+                        "attached {} (sha256 {}, {} bytes)",
+                        attachment.path,
+                        &attachment.sha256[..attachment.sha256.len().min(12)],
+                        attachment.size
+                    );
+                })
+                .map_err(|error| error.to_string())
+        }
+        RunAction::End { sop, run_id, status } => {
+            run::end(&repo, &sop, &run_id, &status)
+                .map(|_| println!("ended {run_id} ({status})"))
+                .map_err(|error| error.to_string())
+        }
+        RunAction::Deviations { sop } => run_deviations(&repo, &sop)
+            .map(|count| println!("{count} deviation(s) across {sop}")),
+        RunAction::Export { sop, format } => run_export(&repo, &sop, &format)
+            .map(|rows| println!("exported {rows} row(s) across {sop}")),
+    };
+
+    match result {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn record_event(action: RecordEventAction) -> sop_core::RunEvent {
+    match action {
+        RecordEventAction::Done { step } => sop_core::RunEvent::StepStatusChanged {
+            at: now(),
+            step,
+            status: "done".to_owned(),
+            reason: None,
+        },
+        RecordEventAction::Skip { step, reason } => sop_core::RunEvent::StepStatusChanged {
+            at: now(),
+            step,
+            status: "skipped".to_owned(),
+            reason: Some(reason),
+        },
+        RecordEventAction::Deviate { step, reason } => sop_core::RunEvent::StepStatusChanged {
+            at: now(),
+            step,
+            status: "deviated".to_owned(),
+            reason: Some(reason),
+        },
+        RecordEventAction::Capture { step, key, value, unit } => {
+            sop_core::RunEvent::CaptureRecorded {
+                at: now(),
+                step,
+                key,
+                value,
+                unit,
+            }
+        }
+        RecordEventAction::Clear { step, key, reason } => sop_core::RunEvent::CaptureCleared {
+            at: now(),
+            step,
+            key,
+            reason,
+        },
+        RecordEventAction::Checkbox { step, index, checked } => {
+            sop_core::RunEvent::CheckboxToggled {
+                at: now(),
+                step,
+                index,
+                checked,
+            }
+        }
+        RecordEventAction::Note { step, text } => sop_core::RunEvent::NoteAdded {
+            at: now(),
+            step,
+            text,
+        },
+    }
+}
+
+fn now() -> String {
+    sop_core::now_utc_rfc3339()
+}
+
+fn run_deviations(repo: &Repo, sop: &str) -> Result<usize, String> {
+    let prefix = format!("runs/{sop}/");
+    let mut count = 0;
+    for path in repo.discover().runs {
+        let rel = repo.relpath(&path);
+        if !rel.starts_with(&prefix) {
+            continue;
+        }
+        let loaded = repo.load(&path).map_err(|error| error.to_string())?;
+        let run_id = loaded
+            .doc
+            .front
+            .str("run_id")
+            .flatten()
+            .unwrap_or(&rel);
+        for result in &loaded.doc.results {
+            if result.status.as_deref() == Some("deviated") {
+                println!(
+                    "{run_id}\t{step}\t{reason}",
+                    step = result.step.as_deref().unwrap_or("?"),
+                    reason = result.reason.as_deref().unwrap_or("(no reason)")
+                );
+                count += 1;
+            }
+        }
+    }
+    Ok(count)
+}
+
+fn run_export(repo: &Repo, sop: &str, format: &ExportFormat) -> Result<usize, String> {
+    let prefix = format!("runs/{sop}/");
+    let mut rows = 0;
+    match format {
+        ExportFormat::Csv => {
+            let mut out = String::from("run_id,step,key,value\n");
+            for path in repo.discover().runs {
+                let rel = repo.relpath(&path);
+                if !rel.starts_with(&prefix) {
+                    continue;
+                }
+                let loaded = repo.load(&path).map_err(|error| error.to_string())?;
+                let run_id = loaded
+                    .doc
+                    .front
+                    .str("run_id")
+                    .flatten()
+                    .unwrap_or(&rel);
+                for result in &loaded.doc.results {
+                    let step = result.step.as_deref().unwrap_or("?");
+                    for (key, value) in &result.captures {
+                        let key = key.as_str().unwrap_or("?");
+                        let rendered = match value {
+                            sop_core::Value::String(text) => text.clone(),
+                            other => serde_json::to_string(other)
+                                .map(|text| {
+                                    let text = text.trim_matches('"').to_owned();
+                                    if text == "null" { String::new() } else { text }
+                                })
+                                .unwrap_or_default(),
+                        };
+                        out.push_str(&format!(
+                            "{run_id},{step},{key},\"{}\"\n",
+                            rendered.replace('"', "\"\"")
+                        ));
+                        rows += 1;
+                    }
+                }
+            }
+            print!("{out}");
+        }
+    }
+    Ok(rows)
 }

@@ -46,6 +46,11 @@ fn main() {
             commands::capture_remove,
             commands::include_add,
             commands::include_remove,
+            commands::run_start,
+            commands::run_record,
+            commands::run_state,
+            commands::run_end,
+            commands::run_attach,
         ])
         .run(tauri::generate_context!())
         .expect("the window could not start");

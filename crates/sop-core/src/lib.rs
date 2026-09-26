@@ -13,8 +13,10 @@ pub mod error;
 pub mod fence;
 pub mod front;
 pub mod link;
+pub mod run;
 pub mod settings;
 pub mod step;
+pub mod timestamp;
 pub mod vocab;
 
 pub use authoring::{
@@ -26,7 +28,9 @@ pub use error::ParseError;
 pub use fence::Fence;
 pub use front::FrontMatter;
 pub use link::Link;
+pub use run::{replay, render_record, RunError, RunEvent, RunState, RecordStep, StepState, StepStatus};
 pub use settings::{DEFAULT_REMOTE, Settings, SettingsError};
+pub use timestamp::now_utc_rfc3339;
 pub use step::{Capture, CaptureType, Expected, ResultBlock, Step, StepKey};
 
 /// The YAML value type used by front matter and step blocks.

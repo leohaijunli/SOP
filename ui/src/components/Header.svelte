@@ -30,7 +30,9 @@
   <span class="counts">{counts()}</span>
   <span class="spacer"></span>
   <span class="toolbar">
-    <button class:primary={view === "browse"} onclick={() => onView("browse")}>Run</button>
+    <button class:primary={view === "run"} onclick={() => onView("run")}>Run</button>
+    <button class:primary={view === "history"} onclick={() => onView("history")}>History</button>
+    <button class:primary={view === "browse"} onclick={() => onView("browse")}>Browse</button>
     <button class:primary={view === "authoring"} onclick={() => onView("authoring")}>Edit</button>
     <button class:primary={view === "project"} onclick={() => onView("project")}>Project</button>
     <button class:primary={view === "settings"} onclick={() => onView("settings")}>Settings</button>

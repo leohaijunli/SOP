@@ -6,12 +6,13 @@
 //! when the answer is no.
 
 use sop_core::authoring::{ItemRef, Move};
-use sop_repo::{Repo, authoring, git, manifest, project, validate};
+use sop_core::RunEvent;
+use sop_repo::{Repo, authoring, git, manifest, project, run, validate};
 use tauri::State;
 
 use crate::api::{
-    CaptureInput, ContentCounts, GitInfo, ProjectField, ProjectView, SettingRow, Status,
-    StepInput, StepPatch,
+    CaptureInput, ContentCounts, GitInfo, ProjectField, ProjectView, RunAttachmentView,
+    RunCaptureView, RunStepView, RunView, SettingRow, Status, StepInput, StepPatch,
 };
 use crate::state::AppState;
 
@@ -246,6 +247,133 @@ pub fn include_remove(file: String, target: String, state: State<'_, AppState>) 
     let repo = state.repo()?;
     let path = authoring::remove_include(&repo, &file, &target).map_err(text)?;
     Ok(repo.relpath(&path))
+}
+
+// ------------------------------------------------------------------ running
+
+#[tauri::command]
+pub fn run_start(
+    sop: String,
+    run_id: String,
+    operator: String,
+    site: String,
+    r#override: Option<String>,
+    state: State<'_, AppState>,
+) -> Reply<RunView> {
+    let repo = state.repo()?;
+    let loaded = run::start(&repo, &sop, &run_id, &operator, &site, r#override.as_deref())
+        .map_err(text)?;
+    Ok(build_run_view(&loaded, &run_id))
+}
+
+#[tauri::command]
+pub fn run_record(
+    sop: String,
+    run_id: String,
+    event: RunEvent,
+    state: State<'_, AppState>,
+) -> Reply<RunView> {
+    let repo = state.repo()?;
+    let loaded = run::record(&repo, &sop, &run_id, &event).map_err(text)?;
+    Ok(build_run_view(&loaded, &run_id))
+}
+
+#[tauri::command]
+pub fn run_state(sop: String, run_id: String, state: State<'_, AppState>) -> Reply<RunView> {
+    let repo = state.repo()?;
+    let loaded = run::load(&repo, &sop, &run_id).map_err(text)?;
+    Ok(build_run_view(&loaded, &run_id))
+}
+
+#[tauri::command]
+pub fn run_end(sop: String, run_id: String, status: String, state: State<'_, AppState>) -> Reply<RunView> {
+    let repo = state.repo()?;
+    let loaded = run::end(&repo, &sop, &run_id, &status).map_err(text)?;
+    Ok(build_run_view(&loaded, &run_id))
+}
+
+#[tauri::command]
+pub fn run_attach(
+    sop: String,
+    run_id: String,
+    step: Option<String>,
+    path: String,
+    state: State<'_, AppState>,
+) -> Reply<RunView> {
+    let repo = state.repo()?;
+    run::attach(&repo, &sop, &run_id, step.as_deref(), std::path::Path::new(&path))
+        .map_err(text)?;
+    let loaded = run::load(&repo, &sop, &run_id).map_err(text)?;
+    Ok(build_run_view(&loaded, &run_id))
+}
+
+fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
+    use sop_core::run::StepStatus;
+    let state = &loaded.state;
+    let mut steps = Vec::new();
+    for def in &loaded.defs {
+        let step_state = state.steps.get(&def.id);
+        let status = step_state.map(|s| s.status.clone()).unwrap_or(StepStatus::Open);
+        let captures = def
+            .captures
+            .iter()
+            .map(|def| {
+                let value = step_state
+                    .and_then(|s| s.captures.get(&def.key))
+                    .map(|value| match &value.unit {
+                        Some(unit) => format!("{} {}", value.value, unit),
+                        None => value.value.clone(),
+                    });
+                RunCaptureView {
+                    key: def.key.clone(),
+                    label: def.label.clone(),
+                    capture_type: def.capture_type.clone(),
+                    unit: def.unit.clone(),
+                    required: def.required,
+                    options: def.options.clone(),
+                    expected: def.expected.clone(),
+                    value,
+                }
+            })
+            .collect();
+        steps.push(RunStepView {
+            id: def.id.clone(),
+            title: def.title.clone(),
+            prose: def.prose.clone(),
+            severity: def.severity.clone(),
+            kind: def.kind.clone(),
+            status: status.as_str().to_owned(),
+            reason: step_state.and_then(|s| s.reason.clone()),
+            checkboxes: step_state.map(|s| s.checkboxes.clone()).unwrap_or_default(),
+            captures,
+            notes: step_state.map(|s| s.notes.clone()).unwrap_or_default(),
+        });
+    }
+    RunView {
+        sop: state.sop.clone().unwrap_or_default(),
+        run_id: run_id.to_owned(),
+        operator: state.operator.clone(),
+        site: state.site.clone(),
+        started: state.started.clone(),
+        ended: state.ended.clone(),
+        run_status: state.run_status.clone(),
+        snapshot_sha256: state.snapshot_sha256.clone(),
+        sop_version: state.sop_version.clone(),
+        sop_commit: state.sop_commit.clone(),
+        deviations_count: state.deviations(),
+        steps,
+        run_notes: state.run_notes.clone(),
+        run_attachments: state
+            .run_attachments
+            .iter()
+            .map(|a| RunAttachmentView {
+                path: a.path.clone(),
+                sha256: a.sha256.clone(),
+                size: a.size,
+            })
+            .collect(),
+        record_path: loaded.record_path.display().to_string(),
+    }
 }
 
 // ------------------------------------------------------------------ helpers

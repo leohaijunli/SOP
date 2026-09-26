@@ -399,11 +399,16 @@ pub fn parse_step(
 /// Parse a `yaml result` block from a run record.
 pub fn parse_result(info: &str, content: &str, line: usize) -> Result<ResultBlock, ParseError> {
     let map = empty_mapping_as_ok(content, info, line)?;
+    let captures = match map.get("captures") {
+        Some(Value::Mapping(map)) => map.clone(),
+        _ => Mapping::new(),
+    };
     Ok(ResultBlock {
         line,
         step: as_string(&map, "step"),
         status: as_string(&map, "status"),
         reason: as_string(&map, "reason"),
+        captures,
         unknown_keys: unknown_keys(&map, crate::vocab::RESULT_KEYS),
     })
 }
@@ -414,6 +419,8 @@ pub struct ResultBlock {
     pub step: Option<String>,
     pub status: Option<String>,
     pub reason: Option<String>,
+    /// The `captures` mapping of a result block, kept for roll-up and export.
+    pub captures: Mapping,
     pub unknown_keys: Vec<String>,
 }
 

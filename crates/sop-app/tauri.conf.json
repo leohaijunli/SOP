@@ -23,10 +23,20 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
     "targets": ["deb", "appimage"],
     "category": "Science",
     "shortDescription": "Field procedures and checklist records for geomagnetic survey work",
-    "longDescription": "Runs a checklist step by step, records what happened, and edits the Markdown content that the procedures are written in."
+    "longDescription": "Runs a checklist step by step, records what happened, and edits the Markdown content that the procedures are written in.",
+    "icon": ["icons/icon.png"],
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "librsvg2-2"
+        ]
+      }
+    }
   }
 }

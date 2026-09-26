@@ -352,3 +352,156 @@ Take the reference reading twice, at least five minutes apart.
 - 深链指错步骤：现在的解析优先按 id（id 才稳定），序号也认。
 - 改了内容页面不刷新：preview / 桌面应用 manifest 是现生成的，强刷页面即可。
 - 落盘被拒：改动会让仓库不再 validate，工具会拒绝并保持文件不变——把改动改到合规再存。
+
+---
+
+## 五、部署到另一台 Ubuntu 机器
+
+**铁律（`DESIGN.md` §7）：不要在 Arch 开发机上构建发布版再拷过去。** 本机 glibc
+是 2.44，Ubuntu 24.04 是 2.39、22.04 是 2.35，二进制在 Ubuntu 上起不来。发布产物必须
+在 Ubuntu（或目标版本的容器 / CI）里构建。
+
+### 方案一（推荐）：CI 构建 `.deb`，目标机一键安装
+
+1. 给 CI 加打包 job（用 `ubuntu-22.04`，22.04 的包在 24.04 也能装）：
+   - 装系统依赖：`libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libsoup-3.0-dev
+     libayatana-appindicator3-dev build-essential`
+   - 装 Rust + Node，`npm ci && npm run build`，再 `cargo install tauri-cli` 并
+     `tauri build --bundles deb`
+   - 用 `actions/upload-artifact` 上传 `target/release/bundle/deb/*.deb`
+2. 把 `tauri.conf.json` 的 `bundle.active` 改为 `true`，补全各尺寸图标和 `.deb` 的
+   `depends`（`libwebkit2gtk-4.1-0`）。
+3. 目标机部署（连网）：
+   ```bash
+   sudo apt install ./field-sop_0.1.0_amd64.deb
+   ```
+   `.deb` 声明了 `webkit2gtk`，装它时自动拉进渲染引擎，菜单里直接有入口。
+
+### 方案二：在目标 Ubuntu 机器上直接源码构建
+
+```bash
+sudo apt install build-essential libwebkit2gtk-4.1-dev libgtk-3-dev \
+                 librsvg2-dev libsoup-3.0-dev libayatana-appindicator3-dev curl
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # 然后装 Node 18+
+git clone git@github.com:leohaijunli/SOP.git && cd SOP
+cd ui && npm install && npm run build && cd ..
+cargo run -p sop-app        # 或 ./run-app.sh
+```
+
+### 方案三：目标版本容器里打 AppImage（单文件，免安装）
+
+容器内 `tauri build --bundles appimage`，得到一个单个可执行文件拷到目标机。但
+**AppImage 不声明依赖**，目标机必须已装 `libwebkit2gtk-4.1-0`，否则起不来——所以
+`.deb` 才是主产物，AppImage 只是便利。
+
+---
+
+## 六、location（地点）是什么、如何设置/编辑
+
+系统里"地点"不是单一设置，出现在两处，编辑方式不同。
+
+### 1. 步骤上的 capture 字段 `session_location`（问题本身）
+
+定义在 `procedures/conditions-log.md` 的 `yaml step` 块里：
+
+```markdown
+## Location and scene
+
+```yaml step
+id: cond-location
+kind: check
+severity: normal
+captures:
+  - key: session_location      # ← 字段名
+    label: Where the session took place   # ← 界面上显示的问法
+    type: text
+    required: true
+```
+
+- **改"问法 / 字段名 / 是否必填"**：改这个 `yaml step` 块（桌面应用里是 **Edit** 视图
+  的 captures 编辑，或直接改 Markdown）。
+- **它本身不是"值"**：它是一道题，真正的值在每次运行时填。
+
+### 2. 值在运行记录（run）里——这就是你现在编辑不了的
+
+你在界面看到的是 `session_location` 这道题，桌面应用当前**没有记录模式**（DESIGN 的
+P3/P4 阶段，还没写），所以它老实显示 "recording arrives with the app"——不是占位符，
+是实话。值要写进**当次运行的文件** `runs/<sop_id>/<run_id>.md`，放在与该步骤对应的
+`yaml result` 块里：
+
+```markdown
+## Location and scene
+
+```yaml result
+step: cond-location
+status: done
+captures:
+  session_location: "Renfrew 395, hill top near the water tank"
+  nearby_sources: "Power line 200 m east"
+```
+```
+
+`step` 必须对上该步骤的 id（`cond-location`）；`status` 为 `skipped` / `deviated` 时还
+要带 `reason`。每个执行过的步骤各写一个 `yaml result` 块。整个运行的地点写在 run 的
+front-matter `site` 字段（如 `site: Renfrew 395`）。
+
+> 结论：capture 的**定义**用 Edit 视图改；capture 的**值**和整个运行的 **site** 属于
+> 运行记录。现在**记录模式已实现**（`sop run` / 桌面应用 Run 视图）——开跑后把这些
+> 值填进表单，每填一项就是一条事件，自动写进 `runs/<sop>/<run>/events.jsonl` 并渲染
+> 成 `record.md`。改值用 `CaptureCleared` 事件带原因，绝不覆盖旧值。
+
+---
+
+## 七、运行一条记录（run mode）
+
+一条 run 的真相源是事件日志 `events.jsonl`；每一步操作都是一条 typed event，只追加
+不覆盖。崩溃后重放日志即可恢复到最近一致状态。
+
+### 命令行
+
+```bash
+# 开跑（冻结 snapshot、开 events.jsonl、写初始 record）
+sop run start <sop> <run_id> <operator> <site> [--override REASON]
+
+# 记录事件
+sop run record <sop> <run> capture  <step> <key> <value> [--unit UNIT]
+sop run record <sop> <run> checkbox <step> <index> true
+sop run record <sop> <run> done     <step>
+sop run record <sop> <run> skip     <step> <reason>     # reason 必填
+sop run record <sop> <run> deviate  <step> <reason>     # reason 必填
+sop run record <sop> <run> note     [--step STEP] <text>
+
+# 恢复（重放日志）
+sop run recover <sop> <run>
+# 拷入附件（拷贝+哈希+文件名前缀）
+sop run attach <sop> <run> [--step STEP] <file>
+# 结束并写出人类可读的 run 记录文件 runs/<sop>/<run>.md
+sop run end <sop> <run> complete|partial|aborted
+```
+
+安全行为演示：
+
+```bash
+sop run start ground-walk-survey ...            # 拒绝：draft 清单必须 --override 给原因
+sop run record ... skip cond-location           # 拒绝：skipped/deviated 必须带 reason
+```
+
+### 桌面应用 Run 视图
+
+点工具栏 **Run** 进入。选清单 → 填 run id / operator / site（draft 还要 override 原因）→
+Start。之后每一步可：填 captures（有单位、期望范围高亮，越界会提示"acknowledge"）、
+勾选 checkboxes、Mark done / Skip / Deviate（后两者弹原因）、加备注、Attach 附件；
+右侧 End 按钮用 complete/partial/aborted 结束。崩溃重开会自动重放恢复未结束的 run。
+
+### 知识闭环（P5）
+
+```bash
+# 跨 run 的偏差汇总：哪一步总在出问题
+sop run deviations <sop>
+# 导出为 CSV 给处理管线
+sop run export <sop> --format csv
+```
+
+run 记录文件 `runs/<sop>/<run>.md` 是带 front-matter 的合法 run 文件（run_id、sop、
+sop_version、sop_commit、started/ended、status、deviations_count），可被 `validate`、
+`manifest`、桌面应用 History 视图读取，随记录一起提交进 git。

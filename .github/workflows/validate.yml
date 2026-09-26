@@ -39,6 +39,45 @@ jobs:
           name: field-sop-manifest
           path: dist/manifest.json
 
+  # Build the installable desktop app. Ubuntu 22.04 is the oldest release that must be
+  # supported, and a binary built there also runs on 24.04 (DESIGN.md section 7).
+  bundle:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libsoup-3.0-dev \
+            libayatana-appindicator3-dev build-essential curl file
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build the renderer
+        run: |
+          cd ui && npm ci && npm run build
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build the .deb and AppImage
+        run: cargo tauri build --bundles deb,appimage
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: field-sop-bundle
+          path: |
+            target/release/bundle/deb/*.deb
+            target/release/bundle/appimage/*.AppImage
+
   # Transitional, and deleted with tools/ once the Rust CLI has been trusted in the field
   # for a while. It is kept in CI so that a divergence between the two implementations
   # fails the build instead of passing silently. See docs/DECISIONS.md D11.
