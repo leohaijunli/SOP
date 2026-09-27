@@ -407,7 +407,7 @@ pub fn start_with_meta(
     }
     write_events(&dir.join("events.jsonl"), &events)?;
 
-    let loaded_run = load(repo, sop_id, run_id)?;
+    let loaded_run = load(repo, &display_sop, run_id)?;
     write_record(&loaded_run)?;
     // Publish the run file as soon as the run starts, not only at `end`, so a run in
     // progress is already visible to discovery and to the History view. An in-progress

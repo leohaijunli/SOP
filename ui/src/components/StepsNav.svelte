@@ -62,16 +62,21 @@
       <li class="empty">no matching steps</li>
     {:else}
       {#each visibleSteps as { s, i } (text(s.id))}
-        <li data-index={i} aria-current={i === step} onclick={() => onStep(i)}>
-          <span class="title">
-            <span class="dot {text(s.severity)}"></span>
-            <span class="no">{i + 1}</span>{text(s.title)}
-          </span>
-          <span class="meta">
-            {text(s.kind)}{s.deprecated ? " \u00b7 deprecated" : ""} &middot; {text(s.id)}
-          </span>
+        <li data-index={i} aria-current={i === step}>
+          <button type="button" onclick={() => onStep(i)}>
+            <span class="title">
+              <span class="dot {text(s.severity)}"></span>
+              <span class="no">{i + 1}</span>{text(s.title)}
+            </span>
+            <span class="meta">
+              {text(s.kind)}{s.deprecated ? " \u00b7 deprecated" : ""} &middot; {text(s.id)}
+            </span>
+          </button>
         </li>
       {/each}
     {/if}
   </ol>
 </nav>
+<style>
+  li > button { display: block; width: 100%; text-align: left; background: none; border: none; padding: 0; font: inherit; cursor: pointer; }
+</style>

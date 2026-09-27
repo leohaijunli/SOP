@@ -14,6 +14,7 @@
     repository: "Working copy to open. A path, or a path to create.",
     remote: "Name of the git remote to use, for example origin. Not a URL.",
     branch: "Branch runs are recorded on. Absent means the current branch.",
+    "testcase-repo": "Separate repository holding the testplan/ tree (e.g. a clone of this repo on the testcases branch). Absent uses the working copy.",
     "help-open": "Whether the help panel starts open: true or false.",
     "recent-repositories": "Working copies opened before, most recent first.",
   };
@@ -115,8 +116,9 @@
   </p>
   {#each Object.keys(KEY_DESC) as key (key)}
     <div class="field">
-      <label>{key}</label>
+      <label for={key}>{key}</label>
       <input
+        id={key}
         type="text"
         value={settings[key] ?? ""}
         placeholder="(unset)"

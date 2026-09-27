@@ -17,6 +17,8 @@ pub struct Manifest {
     pub project: Option<ProjectEntry>,
     pub procedures: Vec<ProcedureEntry>,
     pub checklists: Vec<ChecklistEntry>,
+    /// Test plans and their cases, from the `testplan/` directory tree.
+    pub testplans: Vec<crate::testplan::TestPlan>,
     pub runs: Vec<RunEntry>,
     /// Help pages for the side panel, in panel order.
     pub help: Vec<HelpEntry>,
@@ -280,6 +282,7 @@ pub fn build(repo: &Repo) -> Manifest {
         project,
         procedures,
         checklists,
+        testplans: crate::testplan::plans(&repo),
         runs,
         help,
         help_sections,

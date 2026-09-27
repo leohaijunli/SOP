@@ -5,7 +5,7 @@
 //! whether an edit is allowed; it only carries the answer back, including the report
 //! when the answer is no.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use sop_core::authoring::{ItemRef, Move};
 use sop_core::RunEvent;
@@ -27,6 +27,270 @@ type Reply<T> = Result<T, String>;
 pub fn manifest_json(state: State<'_, AppState>) -> Reply<String> {
     let repo = state.repo()?;
     Ok(manifest::build(&repo).to_json())
+}
+
+/// The test plans and their cases, from the `testplan/` tree of the testcase repository.
+#[tauri::command]
+pub fn test_plans(state: State<'_, AppState>) -> Reply<Vec<sop_repo::testplan::TestPlan>> {
+    let repo = Repo::open(state.testcase_repo_root()?);
+    Ok(sop_repo::testplan::plans(&repo))
+}
+
+/// Pull the working copy and the testcase repository, fast-forward only, and report.
+#[tauri::command]
+pub fn sync_pull(state: State<'_, AppState>) -> Reply<String> {
+    let mut lines: Vec<String> = Vec::new();
+
+    let work_root = state.root()?;
+    let work_remote = state.settings()?.remote;
+    match git::pull(&work_root, &work_remote) {
+        Ok(log) => lines.push(format!("working copy: {}", log.join("; "))),
+        Err(error) => lines.push(format!("working copy: {error}")),
+    }
+
+    let tc_root = state.testcase_repo_root()?;
+    let tc_remote = state.settings()?.remote;
+    if tc_root != work_root {
+        match git::pull(&tc_root, &tc_remote) {
+            Ok(log) => lines.push(format!("test cases: {}", log.join("; "))),
+            Err(error) => lines.push(format!("test cases: {error}")),
+        }
+    }
+
+    Ok(lines.join("\n"))
+}
+
+/// Commit and push the testcase repository after the operator changed a case or plan.
+#[tauri::command]
+pub fn testcase_push(message: String, state: State<'_, AppState>) -> Reply<String> {
+    let root = state.testcase_repo_root()?;
+    let remote = state.settings()?.remote;
+    let report = git::commit_and_push(&root, &remote, &message).map_err(text)?;
+    Ok(report.log.join("; "))
+}
+
+/// Duplicate a test case (a plan folder's md) so a repeat or variant experiment has its
+/// own case. The copy gets a new id and title from its new filename.
+#[tauri::command]
+pub fn duplicate_test_case(path: String, state: State<'_, AppState>) -> Reply<String> {
+    let repo = Repo::open(state.testcase_repo_root()?);
+    let src = resolve_file(&repo, &path)?;
+    if !src.is_file() {
+        return Err(format!("{path}: no such test case"));
+    }
+    let parent = src.parent().unwrap_or_else(|| repo.root());
+    let stem = src
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("case")
+        .to_owned();
+
+    let mut n = 2;
+    let dest = loop {
+        let candidate = parent.join(format!("{stem}-{n}.md"));
+        if !candidate.exists() {
+            break candidate;
+        }
+        n += 1;
+    };
+
+    let text = std::fs::read_to_string(&src)
+        .map_err(|error| format!("{}: {error}", src.display()))?;
+    let new_id = dest
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&stem)
+        .to_owned();
+    let text = sop_core::front::set_field(&text, "sop_id", &new_id).unwrap_or(text);
+    let text = sop_core::front::set_field(&text, "title", &new_id.replace('-', " ")).unwrap_or(text);
+    std::fs::write(&dest, text)
+        .map_err(|error| format!("{}: {error}", dest.display()))?;
+    Ok(repo.relpath(&dest))
+}
+
+/// Delete a test case (remove its md from the plan folder).
+#[tauri::command]
+pub fn delete_test_case(path: String, state: State<'_, AppState>) -> Reply<()> {
+    let repo = Repo::open(state.testcase_repo_root()?);
+    let file = resolve_file(&repo, &path)?;
+    std::fs::remove_file(&file)
+        .map_err(|error| format!("{}: {error}", file.display()))?;
+    Ok(())
+}
+
+/// Import a markdown file into a plan folder as a new test case. The source file is
+/// copied in under a unique name and given a fresh id/title so it is a runnable case.
+#[tauri::command]
+pub fn import_test_case(plan_path: String, source: String, state: State<'_, AppState>) -> Reply<String> {
+    let repo = Repo::open(state.testcase_repo_root()?);
+    let plan_dir = resolve_file(&repo, &plan_path)?;
+    if !plan_dir.is_dir() {
+        return Err(format!("{plan_path}: no such plan folder"));
+    }
+    let src = resolve_file(&repo, &source)?;
+    let text = std::fs::read_to_string(&src)
+        .map_err(|error| format!("{}: {error}", src.display()))?;
+
+    let stem = src
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| "case".to_owned());
+
+    let mut candidate = plan_dir.join(format!("{stem}.md"));
+    let mut n = 2;
+    while candidate.exists() {
+        candidate = plan_dir.join(format!("{stem}-{n}.md"));
+        n += 1;
+    }
+
+    let new_id = candidate
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&stem)
+        .to_owned();
+    let text = sop_core::front::set_field(&text, "sop_id", &new_id).unwrap_or(text);
+    let text = sop_core::front::set_field(&text, "title", &new_id.replace('-', " ")).unwrap_or(text);
+    std::fs::write(&candidate, text)
+        .map_err(|error| format!("{}: {error}", candidate.display()))?;
+    Ok(repo.relpath(&candidate))
+}
+
+/// Create a new test plan: a folder under `testplan/` with a `plan.md` carrying its title.
+#[tauri::command]
+pub fn create_test_plan(name: String, title: String, state: State<'_, AppState>) -> Reply<String> {
+    let name = name.trim().to_lowercase();
+    if !sop_core::vocab::is_valid_id(&name) {
+        return Err("plan name must be a lowercase id with hyphens".to_owned());
+    }
+    let root = state.testcase_root()?;
+    let dir = root.join(&name);
+    if dir.exists() {
+        return Err(format!("plan '{name}' already exists"));
+    }
+    let title = title.trim();
+    let title = if title.is_empty() { name.clone() } else { title.to_owned() };
+    std::fs::create_dir_all(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
+    let plan_file = dir.join("plan.md");
+    let text = format!(
+        "---\ntitle: {}\norder: 100\nversion: 1\n---\n\n{}\n",
+        sop_core::front::format_scalar(&title),
+        title
+    );
+    std::fs::write(&plan_file, text).map_err(|error| format!("{}: {error}", plan_file.display()))?;
+    Ok(dir.display().to_string())
+}
+
+/// A compact test summary table of every run for a checklist: test item, notes, sensor,
+/// site, start time, and the attached log file names. Written to `out` (via the save
+/// dialog the frontend opens) and returned as text so the window can show it.
+#[tauri::command]
+pub fn run_summary(
+    sop: String,
+    out: String,
+    state: State<'_, AppState>,
+) -> Reply<String> {
+    let repo = state.repo()?;
+    let text = build_summary_markdown(&repo, &sop)?;
+    let path = PathBuf::from(&out);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&path, text.as_bytes())
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    Ok(path.display().to_string())
+}
+
+/// Build the summary table for one checklist's runs.
+fn build_summary_markdown(repo: &Repo, sop: &str) -> Result<String, String> {
+    use std::fmt::Write as _;
+
+    let sop_dir = repo.root().join("runs").join(sop);
+    let mut rows: Vec<SummaryRow> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&sop_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "md") {
+                continue;
+            }
+            let Some(id) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+            let loaded = match run::load(repo, sop, id) {
+                Ok(loaded) => loaded,
+                Err(_) => continue,
+            };
+            rows.push(summary_row(&loaded.state));
+        }
+    }
+    rows.sort_by(|a, b| a.time.cmp(&b.time));
+
+    let mut out = String::from("| Test item | Notes | Sensor | Site | Time | Log file |\n");
+    out.push_str("|---|---|---|---|---|---|\n");
+    for row in rows {
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} | {} | {} |",
+            esc(&row.item),
+            esc(&row.notes),
+            esc(&row.sensor),
+            esc(&row.site),
+            esc(&row.time),
+            esc(&row.logs)
+        );
+    }
+    Ok(out)
+}
+
+struct SummaryRow {
+    item: String,
+    notes: String,
+    sensor: String,
+    site: String,
+    time: String,
+    logs: String,
+}
+
+fn summary_row(state: &sop_core::run::RunState) -> SummaryRow {
+    let mut notes: Vec<String> = state.run_notes.clone();
+    for step in state.steps.values() {
+        notes.extend(step.notes.iter().cloned());
+    }
+    let sensor = state
+        .sensor
+        .as_ref()
+        .map(|s| s.model.as_str().to_owned())
+        .unwrap_or_default();
+    let logs = state
+        .run_attachments
+        .iter()
+        .filter_map(|a| {
+            std::path::Path::new(&a.path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    SummaryRow {
+        item: state.sop.clone().unwrap_or_default(),
+        notes: notes.join("; "),
+        sensor,
+        site: state.site.clone().unwrap_or_default(),
+        time: state.started.clone().unwrap_or_default(),
+        logs,
+    }
+}
+
+fn esc(value: &str) -> String {
+    value.replace('|', "\\|").replace('\n', " ")
+}
+
+/// Resolve a case path: absolute as-is, otherwise against the repository root.
+fn resolve_file(repo: &Repo, path: &str) -> Result<PathBuf, String> {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        Ok(p.to_path_buf())
+    } else {
+        Ok(repo.resolve(path))
+    }
 }
 
 #[tauri::command]

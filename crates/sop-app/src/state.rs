@@ -41,6 +41,21 @@ impl AppState {
         Ok(Repo::open(self.root()?))
     }
 
+    /// The git repository root that holds the `testplan/` tree: the configured testcase
+    /// repository, or the working copy when no separate one is set.
+    pub fn testcase_repo_root(&self) -> Result<PathBuf, String> {
+        let settings = self.settings()?;
+        match settings.testcase_repo.as_deref() {
+            Some(configured) if !configured.trim().is_empty() => resolve(configured),
+            _ => self.root(),
+        }
+    }
+
+    /// The folder that holds the `testplan/` tree.
+    pub fn testcase_root(&self) -> Result<PathBuf, String> {
+        Ok(self.testcase_repo_root()?.join("testplan"))
+    }
+
     pub fn settings_path(&self) -> &Path {
         &self.settings_path
     }

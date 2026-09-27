@@ -49,6 +49,18 @@
   let noteText = $state("");
   let noteInput = $state<HTMLInputElement | null>(null);
   let capturesBox = $state<HTMLElement | null>(null);
+  // Set when the run has ended, so a prominent confirmation is shown over the finished
+  // run instead of a small line of text the operator may miss.
+  let ended = $state<{ status: string; runId: string } | null>(null);
+
+  // Clear the finished-run confirmation and go back to the start-a-run form.
+  const newRun = (): void => {
+    run = null;
+    ended = null;
+    runId = "";
+    site = "";
+    currentStep = 0;
+  };
 
   const say = (msg: string, bad = false): void => {
     message = msg;
@@ -177,6 +189,22 @@
     noteText = "";
   };
 
+  // Attach a data file or photo to the run. The shell copies it into the run's logs,
+  // hashes it, and records a `logs:` entry in the record, so the experiment and its data
+  // travel together.
+  const attach = async (step: RunStepView | null): Promise<void> => {
+    if (!run) return;
+    const path = await api.pickDataFile();
+    if (!path) return;
+    try {
+      run = await api.runAttach(run.sop, run.runId, step?.id ?? null, path);
+      message = `attached ${path.split(/[\\/]/).pop()}`;
+      isError = false;
+    } catch (e) {
+      say(String(e), true);
+    }
+  };
+
   const end = (status: string): Promise<void> => {
     // A `complete` run must account for every step; ending a run with open steps as
     // complete writes an invalid record that then blocks every content edit. Require
@@ -193,6 +221,7 @@
       if (!run) return;
       try {
         run = await api.runEnd(run.sop, run.runId, status);
+        ended = { status, runId: run.runId };
         message = `ended ${run.runId} (${status})`;
         isError = false;
         onRunUpdate();
@@ -322,6 +351,19 @@
     <p class={isError ? "err" : "muted"}>{message}</p>
   {/if}
 
+  {#if ended}
+    <div class="ended-banner" role="status">
+      <div class="ended-main">
+        <span class="ended-check">&#10003;</span>
+        <div>
+          <strong>Run {ended.status.toUpperCase()}</strong>
+          <span class="ended-id">{ended.runId}</span>
+        </div>
+      </div>
+      <button class="primary" onclick={() => void newRun()}>Start new run</button>
+    </div>
+  {/if}
+
   {#if run && (run.sensor || run.hardware.length || Object.keys(run.conditions).length)}
     <p class="muted run-meta">
       {#if run.sensor}
@@ -350,32 +392,32 @@
       {/if}
       <div class="field-row">
         <div class="field">
-          <label>run id</label>
-          <input placeholder={`${today()}-${slug(site)}-01`} bind:value={runId} />
+          <label for="run-id">run id</label>
+          <input id="run-id" placeholder={`${today()}-${slug(site)}-01`} bind:value={runId} />
           <span class="desc">Auto-suggested from today's date and the site; a suffix avoids a duplicate.</span>
         </div>
-        <div class="field"><label>operator</label><input placeholder="your name" bind:value={operator} /></div>
-        <div class="field"><label>site</label><input placeholder="Renfrew 395" bind:value={site} /></div>
+        <div class="field"><label for="operator">operator</label><input id="operator" placeholder="your name" bind:value={operator} /></div>
+        <div class="field"><label for="site">site</label><input id="site" placeholder="Renfrew 395" bind:value={site} /></div>
       </div>
       {#if isDraft}
         <div class="field">
-          <label>override reason (required to start a draft)</label>
-          <input bind:value={overrideReason} />
+          <label for="override-reason">override reason (required to start a draft)</label>
+          <input id="override-reason" bind:value={overrideReason} />
         </div>
       {/if}
       <h3>Instrument and conditions (optional)</h3>
       <div class="field-row">
-        <div class="field"><label>sensor model</label><input placeholder="GEM GSM-19" bind:value={sensorModel} /></div>
-        <div class="field"><label>serial</label><input placeholder="4451233" bind:value={sensorSerial} /></div>
-        <div class="field"><label>firmware</label><input placeholder="7.0" bind:value={sensorFirmware} /></div>
+        <div class="field"><label for="sensor-model">sensor model</label><input id="sensor-model" placeholder="GEM GSM-19" bind:value={sensorModel} /></div>
+        <div class="field"><label for="sensor-serial">serial</label><input id="sensor-serial" placeholder="4451233" bind:value={sensorSerial} /></div>
+        <div class="field"><label for="sensor-firmware">firmware</label><input id="sensor-firmware" placeholder="7.0" bind:value={sensorFirmware} /></div>
       </div>
       <div class="field">
-        <label>hardware (one per line)</label>
-        <textarea rows="2" placeholder="mag_gcs v0.3.1" bind:value={hardwareText}></textarea>
+        <label for="hardware">hardware (one per line)</label>
+        <textarea id="hardware" rows="2" placeholder="mag_gcs v0.3.1" bind:value={hardwareText}></textarea>
       </div>
       <div class="field">
-        <label>conditions (one <span class="mono">key: value</span> per line)</label>
-        <textarea rows="2" placeholder="weather: clear&#10;temp_c: 12" bind:value={conditionsText}></textarea>
+        <label for="conditions">conditions (one <span class="mono">key: value</span> per line)</label>
+        <textarea id="conditions" rows="2" placeholder="weather: clear&#10;temp_c: 12" bind:value={conditionsText}></textarea>
       </div>
       <button
         class="primary"
@@ -400,16 +442,17 @@
             <li
               data-state={s.status}
               aria-current={run!.steps.indexOf(s) === currentStep}
-              onclick={() => (currentStep = run!.steps.indexOf(s))}
             >
-              <span class="title">
-                <span class="dot {text(s.severity)}"></span>
-                <span class="no">{i + 1}</span>{s.title}
-              </span>
-              <span class="meta">
-                <span class="state {s.status}">{s.status}</span>
-                {#if s.reason}<span class="reason">{s.reason}</span>{/if}
-              </span>
+              <button type="button" onclick={() => (currentStep = run!.steps.indexOf(s))}>
+                <span class="title">
+                  <span class="dot {text(s.severity)}"></span>
+                  <span class="no">{i + 1}</span>{s.title}
+                </span>
+                <span class="meta">
+                  <span class="state {s.status}">{s.status}</span>
+                  {#if s.reason}<span class="reason">{s.reason}</span>{/if}
+                </span>
+              </button>
             </li>
           {/each}
         </ol>
@@ -435,28 +478,30 @@
           <div class="prose">{@html markdown(current.prose)}</div>
 
           {#if current.captures.length}
-            <section class="captures" bind:this={capturesBox} onkeydown={onCaptureKey}>
+            <div class="captures" bind:this={capturesBox}>
               <h3>Captures</h3>
               {#each current.captures as cap (cap.key)}
                 <div class="capture">
-                  <label>{cap.label ?? cap.key}{#if cap.required}<span class="req">*</span>{/if}</label>
+                  <label for={cap.key}>{cap.label ?? cap.key}{#if cap.required}<span class="req">*</span>{/if}</label>
                   <div class="hint mono">{cap.key} &middot; {cap.type}{#if cap.unit} {cap.unit}{/if}</div>
                   <div class="field-row">
                     {#if cap.type === "select" && cap.options?.length}
-                      <select value={cap.value ?? ""} onchange={(e) => void recordCapture(current, cap.key, (e.currentTarget as HTMLSelectElement).value)}>
+                      <select id={cap.key} onkeydown={onCaptureKey} value={cap.value ?? ""} onchange={(e) => void recordCapture(current, cap.key, (e.currentTarget as HTMLSelectElement).value)}>
                         <option value="">(unset)</option>
                         {#each cap.options as option (option)}
                           <option value={option}>{option}</option>
                         {/each}
                       </select>
                     {:else if cap.type === "bool"}
-                      <select value={cap.value ?? ""} onchange={(e) => void recordCapture(current, cap.key, (e.currentTarget as HTMLSelectElement).value)}>
+                      <select id={cap.key} onkeydown={onCaptureKey} value={cap.value ?? ""} onchange={(e) => void recordCapture(current, cap.key, (e.currentTarget as HTMLSelectElement).value)}>
                         <option value="">(unset)</option>
                         <option value="true">true</option>
                         <option value="false">false</option>
                       </select>
                     {:else}
                       <input
+                        id={cap.key}
+                        onkeydown={onCaptureKey}
                         type="text"
                         placeholder={cap.value ?? "enter value"}
                         onchange={(e) => void recordCapture(current, cap.key, (e.currentTarget as HTMLInputElement).value)}
@@ -471,7 +516,7 @@
                   {/if}
                 </div>
               {/each}
-            </section>
+            </div>
           {/if}
 
           {#if current.checklist.length}
@@ -490,13 +535,27 @@
             <button onclick={() => void setStatus(current, "done")}>Mark done</button>
             <button onclick={() => void setStatus(current, "skipped")}>Skip</button>
             <button onclick={() => void setStatus(current, "deviated")}>Deviate</button>
+            <span class="divider-btn"></span>
+            <button onclick={() => void attach(current)}>Attach data / photo</button>
           </div>
           <p class="muted">Skips and deviations require a reason; it is written into the record.</p>
 
+          {#if run.runAttachments.length}
+            <section class="attachments">
+              <h3>Attached data ({run.runAttachments.length})</h3>
+              {#each run.runAttachments as att (att.sha256)}
+                <div class="attachment">
+                  <span class="name">{att.path.split(/[\\/]/).pop()}</span>
+                  <span class="mono muted">{att.size} bytes &middot; sha256 {att.sha256.slice(0, 12)}&hellip;</span>
+                </div>
+              {/each}
+            </section>
+          {/if}
+
           <div class="field">
-            <label>Note for this step</label>
+            <label for="step-note">Note for this step</label>
             <div class="field-row">
-              <input bind:this={noteInput} bind:value={noteText} onkeydown={(e) => { if (e.key === "Enter") void addNote(current); }} />
+              <input id="step-note" bind:this={noteInput} bind:value={noteText} onkeydown={(e) => { if (e.key === "Enter") void addNote(current); }} />
               <button onclick={() => void addNote(current)}>Add note</button>
             </div>
           </div>
@@ -529,4 +588,22 @@
   .step-detail .captures h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
   .task { display: block; padding: 2px 0; }
   .expected { color: var(--warn); font-size: 12px; margin-top: 6px; }
+  .divider-btn { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+  .attachments h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .attachment { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; font-size: 13px; }
+  .attachment .name { font-family: var(--mono); font-size: 12px; }
+  .ended-banner {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    margin: 0 16px 12px; padding: 12px 16px; border-radius: 8px;
+    background: color-mix(in srgb, var(--ok) 16%, transparent);
+    border: 1px solid var(--ok);
+  }
+  .ended-main { display: flex; align-items: center; gap: 12px; }
+  .ended-check {
+    width: 34px; height: 34px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--ok); color: #fff; font-size: 20px; line-height: 1;
+  }
+  .ended-main strong { font-size: 16px; }
+  .ended-id { display: block; font-family: var(--mono); font-size: 13px; color: var(--muted); }
 </style>

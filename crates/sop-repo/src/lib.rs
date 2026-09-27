@@ -8,6 +8,7 @@ pub mod project;
 pub mod report;
 pub mod run;
 pub mod settings;
+pub mod testplan;
 pub mod validate;
 
 use std::fs;
@@ -76,6 +77,8 @@ pub struct Discovery {
     pub project: Option<PathBuf>,
     pub procedures: Vec<PathBuf>,
     pub checklists: Vec<PathBuf>,
+    /// Each directory under `testplan/` is one test plan.
+    pub testplan_dirs: Vec<PathBuf>,
     pub runs: Vec<PathBuf>,
     pub inbox: Vec<PathBuf>,
     pub help: Vec<PathBuf>,
@@ -174,6 +177,17 @@ impl Repo {
         }
         out.log_dirs.sort();
 
+        let testplan_root = self.root.join("testplan");
+        if let Ok(entries) = fs::read_dir(&testplan_root) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    out.testplan_dirs.push(path);
+                }
+            }
+        }
+        out.testplan_dirs.sort();
+
         out
     }
 }
@@ -209,7 +223,7 @@ pub fn normalize(path: &Path) -> PathBuf {
 }
 
 /// `.md` files directly inside `dir`, excluding `README.md`.
-fn markdown_in(dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn markdown_in(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };

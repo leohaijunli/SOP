@@ -62,8 +62,8 @@ let sections = $derived(
       {#each sections as section}
         <li class="empty">{section.title}</li>
         {#each section.pages as page (text(page.help_id))}
-          <li data-help={text(page.help_id)} aria-current={selected && text(page.help_id) === text(selected.help_id)} onclick={() => onHelp(text(page.help_id))}>
-            {text(page.title)}
+          <li data-help={text(page.help_id)} aria-current={selected && text(page.help_id) === text(selected.help_id)}>
+            <button type="button" onclick={() => onHelp(text(page.help_id))}>{text(page.title)}</button>
           </li>
         {/each}
       {/each}
@@ -74,3 +74,6 @@ let sections = $derived(
     {/if}
   {/if}
 </aside>
+<style>
+  li > button { display: block; width: 100%; text-align: left; background: none; border: none; padding: 0; font: inherit; cursor: pointer; }
+</style>

@@ -20,8 +20,8 @@ const WALK_SOP: &str = "checklists/ground-walk-survey.md";
 const CAL_RUN: &str = "runs/mag-sensor-calibration/2026-09-22-bench-cal01.md";
 const WALK_RUN: &str = "runs/ground-walk-survey/2026-09-24-renfrew-walk01.md";
 const TESTLINE: &str = "procedures/test-line.md";
-const HELP: &str = "help/glossary.md";
-const HELP_2: &str = "help/first-run.md";
+const HELP: &str = "help/px4-operations.md";
+const HELP_2: &str = "help/ubuntu-operations.md";
 const PROJECT: &str = "project.md";
 
 /// One case: a name, a way to break the repository, and the message that must appear.
@@ -240,7 +240,7 @@ fn cases() -> Vec<Case> {
         ),
         (
             "help page id that does not match its filename",
-            |root| root.replace_once(HELP, "help_id: glossary", "help_id: Glossary"),
+            |root| root.replace_once(HELP, "help_id: px4-operations", "help_id: px4-Ops"),
             "is not a valid id",
         ),
         (
@@ -279,7 +279,7 @@ fn warning_cases() -> Vec<Warning> {
     vec![
         (
             "two help pages claiming the same panel position",
-            |root| root.replace_once(HELP_2, "order: 25", "order: 10"),
+            |root| root.replace_once(HELP_2, "order: 20", "order: 10"),
             "same 'order'",
         ),
         (

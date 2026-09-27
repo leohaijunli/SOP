@@ -27,6 +27,13 @@ fn main() {
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::manifest_json,
+            commands::test_plans,
+            commands::duplicate_test_case,
+            commands::delete_test_case,
+            commands::import_test_case,
+            commands::create_test_plan,
+            commands::sync_pull,
+            commands::testcase_push,
             commands::status,
             commands::validation_report,
             commands::procedure_choices,
@@ -57,6 +64,7 @@ fn main() {
             commands::run_attach,
             commands::run_export,
             commands::run_export_to,
+            commands::run_summary,
             commands::load_external_md,
             commands::repo_push,
         ])

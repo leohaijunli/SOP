@@ -8,7 +8,6 @@
     view,
     helpOpen,
     onView,
-    onOpenFile,
     onToggleHelp,
   }: {
     title: unknown;
@@ -17,7 +16,6 @@
     view: string;
     helpOpen: boolean;
     onView: (v: string) => void;
-    onOpenFile: () => void;
     onToggleHelp: () => void;
   } = $props();
 </script>
@@ -32,11 +30,11 @@
       <button class:primary={view === "run"} onclick={() => onView("run")}>Run</button>
       <button class:primary={view === "history"} onclick={() => onView("history")}>History</button>
       <button class:primary={view === "browse"} onclick={() => onView("browse")}>Browse</button>
+        <button class:primary={view === "testplans"} onclick={() => onView("testplans")}>Test Plans</button>
       <button class:primary={view === "authoring"} onclick={() => onView("authoring")}>Edit</button>
       <button class:primary={view === "project"} onclick={() => onView("project")}>Project</button>
       <button class:primary={view === "settings"} onclick={() => onView("settings")}>Settings</button>
       <span class="divider-btn"></span>
-      <button title="Load a checklist from any local markdown file" onclick={onOpenFile}>Open file</button>
     </span>
   </div>
   <div class="header-tools">

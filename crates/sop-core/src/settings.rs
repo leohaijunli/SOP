@@ -72,6 +72,11 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
 
+    /// A separate repository that holds the `testplan/` tree. Absent means the working
+    /// copy's own `testplan/`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub testcase_repo: Option<String>,
+
     /// Whether the help panel starts open.
     pub help_open: bool,
 
@@ -89,6 +94,7 @@ impl Default for Settings {
             repository: None,
             remote: DEFAULT_REMOTE.to_owned(),
             branch: None,
+            testcase_repo: None,
             help_open: true,
             recent_repositories: Vec::new(),
             extra: BTreeMap::new(),
@@ -115,6 +121,10 @@ pub const KEYS: &[(&str, &str)] = &[
     (
         "help-open",
         "Whether the help panel starts open: true or false.",
+    ),
+    (
+        "testcase-repo",
+        "Separate repository holding the testplan/ tree. Absent uses the working copy.",
     ),
     (
         "recent-repositories",
@@ -146,6 +156,7 @@ impl Settings {
             "repository" => self.repository.clone(),
             "remote" => Some(self.remote.clone()),
             "branch" => self.branch.clone(),
+            "testcase-repo" => self.testcase_repo.clone(),
             "help-open" => Some(self.help_open.to_string()),
             "recent-repositories" => Some(self.recent_repositories.join(", ")),
             _ => self.extra.get(key).map(|value| value.to_string()),
@@ -179,6 +190,15 @@ impl Settings {
                 }
                 self.branch = Some(value.to_owned());
             }
+            "testcase-repo" => {
+                if value.is_empty() {
+                    return Err(SettingsError::Invalid {
+                        key: key.to_owned(),
+                        message: "must not be empty".to_owned(),
+                    });
+                }
+                self.testcase_repo = Some(value.to_owned());
+            }
             "help-open" => {
                 self.help_open = match value.to_ascii_lowercase().as_str() {
                     "true" | "yes" | "on" | "1" => true,
@@ -207,6 +227,7 @@ impl Settings {
             "repository" => self.repository = None,
             "remote" => self.remote = DEFAULT_REMOTE.to_owned(),
             "branch" => self.branch = None,
+            "testcase-repo" => self.testcase_repo = None,
             "help-open" => self.help_open = true,
             "recent-repositories" => self.recent_repositories.clear(),
             other => {

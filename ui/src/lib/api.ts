@@ -16,9 +16,10 @@ import type {
   RunMetaInput,
   RunView,
   SettingRow,
-  Status,
+Status,
   StepInput,
   StepPatch,
+  TestPlan,
 } from "./types";
 
 const text = (value: unknown): string =>
@@ -120,6 +121,36 @@ export const runEnd = (sop: string, runId: string, status: string): Promise<RunV
 export const runAttach = (sop: string, runId: string, step: string | null, path: string): Promise<RunView> =>
   invoke<RunView>("run_attach", { sop, runId, step, path });
 
+// Pick any file to attach to a run (data, photo, etc.) via the native file picker.
+export const pickDataFile = async (): Promise<string | null> => {
+  const path = await open({ multiple: false });
+  if (!path || Array.isArray(path)) return null;
+  return path;
+};
+
+export const testPlans = (): Promise<TestPlan[]> => invoke<TestPlan[]>("test_plans");
+
+// Pull the working copy (main) and the testcase repo (testcases), fast-forward only.
+export const syncPull = (): Promise<string> => invoke<string>("sync_pull");
+
+// Commit + push the testcase repo after a case/plan change.
+export const testcasePush = (message: string): Promise<string> =>
+  invoke<string>("testcase_push", { message });
+
+export const duplicateTestCase = (path: string): Promise<string> =>
+  invoke<string>("duplicate_test_case", { path });
+
+export const deleteTestCase = (path: string): Promise<void> =>
+  invoke<void>("delete_test_case", { path });
+
+// Import any markdown file into a plan folder as a new test case.
+export const importTestCase = (planPath: string, source: string): Promise<string> =>
+  invoke<string>("import_test_case", { planPath, source });
+
+// Create a new plan folder with a plan.md.
+export const createTestPlan = (name: string, title: string): Promise<string> =>
+  invoke<string>("create_test_plan", { name, title });
+
 // ---- publishing ---------------------------------------------------------------
 
 export const runExport = (sop: string, runId: string, out: string | null): Promise<ExportResult> =>
@@ -134,6 +165,16 @@ export const runExportDialog = async (sop: string, runId: string): Promise<Expor
   });
   if (!path) return null;
   return invoke<ExportResult>("run_export_to", { sop, runId, out: path });
+};
+
+// Export a summary table of every run for a checklist, via the native save dialog.
+export const runSummaryDialog = async (sop: string): Promise<string | null> => {
+  const path = await save({
+    defaultPath: `${sop}-summary.md`,
+    filters: [{ name: "Markdown", extensions: ["md"] }],
+  });
+  if (!path) return null;
+  return invoke<string>("run_summary", { sop, out: path });
 };
 
 // ---- local file loading ------------------------------------------------------

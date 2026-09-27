@@ -183,6 +183,27 @@ pub fn commit_and_push(
     Ok(report)
 }
 
+/// Pull the current branch from a remote, fast-forward only.
+///
+/// Fast-forward keeps history linear; a divergent branch is reported as an error so the
+/// operator can decide how to reconcile it rather than the app silently merging.
+pub fn pull(root: &Path, remote: &str) -> Result<Vec<String>, GitError> {
+    if !state(root, remote).is_repository {
+        return Err(GitError::NotARepository(root.display().to_string()));
+    }
+    let branch = run(root, &["symbolic-ref", "--short", "HEAD"])
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "HEAD".to_owned());
+    let answer = run_capture(root, &["pull", "--ff-only", remote, branch.as_str()])?;
+    let log: Vec<String> = if answer.is_empty() {
+        vec!["already up to date".to_owned()]
+    } else {
+        answer.split('\n').map(str::to_owned).collect()
+    };
+    Ok(log)
+}
+
 /// Run `git` and hand back what it printed, or the command and its complaint.
 ///
 /// Unlike [`run`], a failure is an error rather than a `None`: a publish that fails has

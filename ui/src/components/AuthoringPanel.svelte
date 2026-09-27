@@ -242,17 +242,17 @@
   <details class="fold">
     <summary>Add a step</summary>
     <div class="field">
-      <label>id</label>
-      <input bind:value={draft.id} placeholder="stable id, never reused" />
+      <label for="draft-id">id</label>
+      <input id="draft-id" bind:value={draft.id} placeholder="stable id, never reused" />
     </div>
     <div class="field">
-      <label>title</label>
-      <input bind:value={draft.title} />
+      <label for="draft-title">title</label>
+      <input id="draft-title" bind:value={draft.title} />
     </div>
     <div class="field-row">
       <div class="field">
-        <label>kind</label>
-        <select bind:value={draft.kind}>
+        <label for="draft-kind">kind</label>
+        <select id="draft-kind" bind:value={draft.kind}>
           <option value="check">check</option>
           <option value="measure">measure</option>
           <option value="select">select</option>
@@ -261,8 +261,8 @@
         </select>
       </div>
       <div class="field">
-        <label>severity</label>
-        <select bind:value={draft.severity}>
+        <label for="draft-severity">severity</label>
+        <select id="draft-severity" bind:value={draft.severity}>
           <option value="info">info</option>
           <option value="normal">normal</option>
           <option value="critical">critical</option>
@@ -270,8 +270,8 @@
       </div>
     </div>
     <div class="field">
-      <label>prose (Markdown)</label>
-      <textarea bind:value={draft.prose} rows={5}></textarea>
+      <label for="draft-prose">prose (Markdown)</label>
+      <textarea id="draft-prose" bind:value={draft.prose} rows={5}></textarea>
     </div>
     <button class="primary" onclick={() => void addStep()} disabled={!draft.id.trim()}>Add step</button>
   </details>
@@ -321,13 +321,13 @@
             </p>
 
             <div class="field">
-              <label>title</label>
-              <input value={text(current.title)} onchange={(e) => void patch(current!, "title", (e.currentTarget as HTMLInputElement).value)} />
+              <label for="step-title">title</label>
+              <input id="step-title" value={text(current.title)} onchange={(e) => void patch(current!, "title", (e.currentTarget as HTMLInputElement).value)} />
             </div>
             <div class="field-row">
               <div class="field">
-                <label>kind</label>
-                <select value={text(current.kind)} onchange={(e) => void patch(current!, "kind", (e.currentTarget as HTMLSelectElement).value)}>
+                <label for="step-kind">kind</label>
+                <select id="step-kind" value={text(current.kind)} onchange={(e) => void patch(current!, "kind", (e.currentTarget as HTMLSelectElement).value)}>
                   <option value="check">check</option>
                   <option value="measure">measure</option>
                   <option value="select">select</option>
@@ -336,8 +336,8 @@
                 </select>
               </div>
               <div class="field">
-                <label>severity</label>
-                <select value={text(current.severity)} onchange={(e) => void patch(current!, "severity", (e.currentTarget as HTMLSelectElement).value)}>
+                <label for="step-severity">severity</label>
+                <select id="step-severity" value={text(current.severity)} onchange={(e) => void patch(current!, "severity", (e.currentTarget as HTMLSelectElement).value)}>
                   <option value="info">info</option>
                   <option value="normal">normal</option>
                   <option value="critical">critical</option>
@@ -345,12 +345,12 @@
               </div>
             </div>
             <div class="field">
-              <label>prose (Markdown, including any `- [ ]` items)</label>
-              <textarea rows={10} value={text(current.body)} onchange={(e) => void patch(current!, "prose", (e.currentTarget as HTMLTextAreaElement).value)}></textarea>
+              <label for="step-prose">prose (Markdown, including any `- [ ]` items)</label>
+              <textarea id="step-prose" rows={10} value={text(current.body)} onchange={(e) => void patch(current!, "prose", (e.currentTarget as HTMLTextAreaElement).value)}></textarea>
             </div>
 
             <div class="captures">
-              <label>captures</label>
+              <h3>captures</h3>
               {#each current.captures ?? [] as capture (text(capture.key))}
                 <div class="capture-row">
                   <span class="mono">{text(capture.key)}</span>

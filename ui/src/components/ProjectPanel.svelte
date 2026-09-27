@@ -95,8 +95,9 @@
 
   {#each fields as field (field.key)}
     <div class="field">
-      <label>{field.key}</label>
+      <label for={field.key}>{field.key}</label>
       <input
+        id={field.key}
         type="text"
         value={field.value ?? ""}
         placeholder="(unset)"

@@ -9,18 +9,21 @@
   import AuthoringPanel from "./components/AuthoringPanel.svelte";
   import ExecutionView from "./components/ExecutionView.svelte";
   import HistoryView from "./components/HistoryView.svelte";
+  import TestPlansView from "./components/TestPlansView.svelte";
   import * as api from "./lib/api";
   import type { ChecklistEntry, Manifest } from "./lib/types";
 
-  // Which screen the window is showing. Run is the execution view; the others are
-  // configuration and content editing, reached from the toolbar.
-  type View = "browse" | "run" | "history" | "settings" | "project" | "authoring";
+  // Which screen the window is showing.
+  type View = "browse" | "testplans" | "run" | "history" | "settings" | "project" | "authoring";
 
   let manifest: Manifest | null = $state(null);
   let error: string | null = $state(null);
-  // Checklists the operator loaded from local markdown files via "Open file". They are
-  // not part of the repository, so they are merged back in after every manifest refresh
-  // and would otherwise be lost whenever the view changes.
+  // Sync status: pull/push result shown as a non-intrusive banner.
+  let sync = $state("");
+  let syncBad = $state(false);
+  // Checklists the operator loaded from local markdown files via "Open file" or "Start".
+  // They are not part of the repository, so they are merged back in after every manifest
+  // refresh and would otherwise be lost whenever the view changes.
   let externalChecklists: ChecklistEntry[] = $state([]);
   let view: View = $state("run");
   let helpOpen = $state(true);
@@ -37,23 +40,45 @@
   const counts = (): string => {
     const m = manifest;
     if (!m) return "";
-    return `${m.procedures.length} procedures \u00b7 ${m.checklists.length} checklists \u00b7 ${m.runs.length} runs \u00b7 ${m.help.length} help pages`;
+    const planCount = m.testplans.length;
+    return `${planCount} test plan(s) \u00b7 ${m.runs.length} run(s) \u00b7 ${m.checklists.length} checklist(s) \u00b7 ${m.help.length} help page(s)`;
   };
 
   const openView = (next: string): void => {
     if (
-      next === "browse" || next === "run" || next === "history" ||
-      next === "settings" || next === "project" || next === "authoring"
+      next === "browse" || next === "testplans" || next === "run" ||
+      next === "history" || next === "settings" || next === "project" || next === "authoring"
     ) {
       view = next as View;
     }
     // Refresh the manifest whenever the operator moves to a screen that reads it, so the
-    // counts in the header and the History table match the working copy on disk rather
-    // than a snapshot from when the window opened.
-    if (next === "browse" || next === "run" || next === "history") {
+    // counts in the header and the History table match the working copy on disk.
+    if (next === "browse" || next === "testplans" || next === "run" || next === "history") {
       void refreshRuns();
     }
-    // The authoring / run / history screens act on whatever checklist is current.
+  };
+
+  // Start a test case: load its markdown as the active checklist and open the Run view.
+  const startCase = async (path: string): Promise<void> => {
+    try {
+      const entry = await api.loadExternalMd(path);
+      if (!entry || !manifest) return;
+      externalChecklists = [
+        ...externalChecklists.filter((c) => api.text(c.sop_id) !== api.text(entry.sop_id)),
+        entry,
+      ];
+      manifest = {
+        ...manifest,
+        checklists: [
+          ...manifest.checklists.filter((c) => api.text(c.sop_id) !== api.text(entry.sop_id)),
+          entry,
+        ],
+      };
+      checklist = manifest.checklists.findIndex((c) => api.text(c.sop_id) === api.text(entry.sop_id));
+      view = "run";
+    } catch (e) {
+      console.warn("start case:", e);
+    }
   };
 
   const refresh = async (): Promise<void> => {
@@ -87,43 +112,29 @@
     }
   };
 
-  // After a run starts or ends, or when the operator opens History, the manifest on
-  // disk has changed (a record file appeared, or the run count moved). Re-read it so the
-  // History table always shows what is really in the working copy instead of a stale
-  // snapshot from when the window opened.
   const refreshRuns = async (): Promise<void> => {
     await refresh();
   };
 
-  const openExternal = async (): Promise<void> => {
+  // Pull the working copy and the testcase repo, and report what happened. Called on
+  // start and after edits so all machines stay in step; the result is shown as a banner.
+  const doSync = async (): Promise<void> => {
     try {
-      const entry = await api.openExternalMdDialog();
-      if (!entry || !manifest) return; // cancelled or no file chosen
-      externalChecklists = [
-        ...externalChecklists.filter((c) => api.text(c.sop_id) !== api.text(entry.sop_id)),
-        entry,
-      ];
-      manifest = {
-        ...manifest,
-        checklists: [
-          ...manifest.checklists.filter((c) => api.text(c.sop_id) !== api.text(entry.sop_id)),
-          entry,
-        ],
-      };
-      checklist = manifest.checklists.findIndex((c) => api.text(c.sop_id) === api.text(entry.sop_id));
+      const report = await api.syncPull();
+      sync = report;
+      syncBad = report.toLowerCase().includes("error") || report.includes("diverged");
     } catch (e) {
-      // A cancelled picker or a parse problem is not a fatal error; do not replace the
-      // whole window with the fatal screen for it.
-      console.warn("open file:", e);
+      sync = String(e);
+      syncBad = true;
     }
   };
 
   onMount(() => {
     void refresh();
+    void doSync();
   });
 
-  // Deep links and keyboard shortcuts mirror the preview server, so the desktop app
-  // behaves the same way the browser did: #<sop_id>/<step-id>/<help-id>.
+  // Deep links and keyboard shortcuts mirror the preview server.
   const readHash = (): void => {
     if (!manifest) return;
     const [sopId, stepRef, helpId] = location.hash.replace(/^#/, "").split("/");
@@ -167,8 +178,6 @@
     const steps = manifest?.checklists[checklist]?.steps ?? [];
     if (event.key === "F1") { event.preventDefault(); helpOpen = !helpOpen; }
     else if (event.key === "/") { event.preventDefault(); helpOpen = true; }
-    // `j` / `k` step through the browse list. The run screen owns them when it is open,
-    // so this does not move a list the operator cannot see.
     else if (view !== "browse") { /* the active view handles its own keys */ }
     else if (event.key === "j" && step < steps.length - 1) { step++; }
     else if (event.key === "k" && step > 0) { step--; }
@@ -190,8 +199,14 @@
     projectId={manifest?.project?.project_id ?? null}
     {helpOpen}
     onToggleHelp={() => (helpOpen = !helpOpen)}
-    onOpenFile={() => void openExternal()}
   />
+
+  {#if sync}
+    <div class:syncbad={syncBad} class="syncbar">
+      <span>{sync}</span>
+      <button onclick={() => void doSync()} title="Sync now">Sync</button>
+    </div>
+  {/if}
 
   <main
     class:with-steps={showSteps && view === "browse"}
@@ -213,6 +228,11 @@
       {#if helpOpen}
         <HelpPanel manifest={manifest} {help} {helpQuery} onHelp={(h) => (help = h)} onQuery={(q) => (helpQuery = q)} />
       {/if}
+    {:else if view === "testplans"}
+      <TestPlansView
+        onStart={(p) => void startCase(p)}
+        onChanged={() => void refresh()}
+      />
     {:else if view === "run"}
       <ExecutionView {manifest} {checklist} onRunUpdate={() => void refreshRuns()} />
       {#if helpOpen}
@@ -229,3 +249,12 @@
     {/if}
   </main>
 {/if}
+<style>
+  .syncbar {
+    display: flex; align-items: center; gap: 8px; padding: 4px 16px;
+    background: var(--quote); border-bottom: 1px solid var(--line);
+    font-size: 12px; color: var(--muted);
+  }
+  .syncbar.syncbad { color: var(--critical); }
+  .syncbar button { font-size: 12px; margin-left: auto; }
+</style>

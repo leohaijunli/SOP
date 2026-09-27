@@ -79,6 +79,24 @@
     }
   };
 
+  // Export a summary table of every run for this checklist: test item, notes, sensor,
+  // site, time, and log file names.
+  const exportSummary = async (): Promise<void> => {
+    busy = "summary";
+    try {
+      const path = await api.runSummaryDialog(sop);
+      if (!path) {
+        say("export cancelled");
+        return;
+      }
+      say(`wrote summary ${path}`);
+    } catch (e) {
+      say(String(e), true);
+    } finally {
+      busy = "";
+    }
+  };
+
   // Publish the whole working copy: the record, the logs, and every content edit that
   // has not been committed yet. The commit message is the operator's; blank takes the
   // shell's default.
@@ -102,6 +120,9 @@
     <h1 style="margin:0">History</h1>
     <span class="muted mono">{sop}</span>
     <span class="spacer"></span>
+    <button disabled={busy !== ""} onclick={() => void exportSummary()}>
+      {busy === "summary" ? "Exporting…" : "Export summary"}
+    </button>
     <button disabled={busy !== ""} onclick={() => void pushRepo()}>
       {busy === "push" ? "Pushing…" : "Push repo"}
     </button>

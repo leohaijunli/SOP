@@ -64,6 +64,7 @@ export interface Manifest {
   project: ProjectEntry | null;
   procedures: ProcedureEntry[];
   checklists: ChecklistEntry[];
+  testplans: TestPlan[];
   runs: RunEntry[];
   help: HelpEntry[];
   help_sections: HelpSection[];
@@ -124,6 +125,22 @@ export interface ChecklistEntry {
   step_count: number;
   unresolved_includes: string[];
   steps: StepEntry[];
+}
+
+export interface TestCase {
+  id: string;
+  title: unknown;
+  path: string;
+  step_count: number;
+  order: number;
+}
+
+export interface TestPlan {
+  id: string;
+  title: unknown;
+  path: string;
+  order: number;
+  cases: TestCase[];
 }
 
 export interface RunEntry {
