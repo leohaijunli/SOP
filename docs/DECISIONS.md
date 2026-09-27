@@ -133,6 +133,9 @@ contradict D9 for no benefit.
 Deletion is gated on parity: the Rust validator must pass on the existing content and on
 the negative test cases before the Python one is removed.
 
+Executed 2026-09-26: `sop validate` reports 0 errors and 0 warnings on the content, the
+Rust negative suite covers the cases `tools/selftest.py` did, and the files are deleted.
+
 ## D12 - Svelte 5 + Vite for the frontend, not SvelteKit, not React
 
 Decision: plain Svelte 5 with Vite and TypeScript.
@@ -239,3 +242,169 @@ Two consequences accepted:
 Dismissal condition: if operators are forever editing `project.md` by hand because the
 command does not cover a field they need, the answer is to add the field to `FIELDS`, not
 to move the file into settings.
+
+## D15 - A run record is read against its own revision, never the current checklist
+
+Decision: the step ids a run record cites are checked against the `snapshot.md` frozen
+when the run started, not against the checklist as it stands now. A record that has no
+snapshot - which is only true of records written before runs became self-contained
+directories - is checked against the current checklist and any difference is a warning,
+not an error.
+
+Reasons:
+
+- `SPEC.md` section 8 already says a run record must never be interpreted against a
+  different revision of its checklist. The validator was resolving the working copy
+  instead, so the rule held on paper and not in the tool.
+- The consequence was not subtle. Removing an include marker orphaned every record that
+  had cited a step from that procedure, the edit was undone, and the operator was told
+  their change "broke something else in the repository". The one action the editor exists
+  for - changing an SOP in the light of a run - was the one it refused.
+- The alternative, keeping step ids permanently undeletable, was rejected in
+  `SPEC.md` section 4 anyway: it cannot be enforced for a step whose whole procedure is
+  removed from a checklist, and a rule that cannot be enforced is a rule that gets
+  worked around.
+- History is evidence. A record may be out of date with respect to the current SOP and
+  still be exactly right about what happened, so drift is worth reporting and is not a
+  reason to reject a repository or to refuse an edit.
+
+Cost: two severities for one finding, distinguished by whether the record has a snapshot,
+and a stale record can persist without anyone being forced to migrate it. That is
+accepted: the warning is visible in every `sop validate`, and forcing a migration would
+mean inventing the revision a legacy record was written against.
+
+Dismissal condition: if records without snapshots become common rather than a one-off
+migration artifact, migrate them and delete the advisory path, rather than letting two
+severities for the same rule become permanent.
+
+## D16 - The record is the exportable document, and deleting one is a dry run by default
+
+Decision: `sop run export <sop> --format markdown --run <id>` prints the same document
+`sop run end` commits - front matter, then one section per step holding its instructions,
+its checkbox items as the operator left them, and what was recorded against it. Deleting
+a run removes only the three paths a run can occupy (the record, the run directory, the
+log directory), and without `--yes` it only lists them.
+
+Reasons:
+
+- The record has to be readable on its own. A session is reviewed months later, often by
+  somebody who does not have the repository checked out, and a document that cites step
+  ids the reader cannot resolve is not an experiment record.
+- Rendering the checklist items was a real defect, not a nicety: the record printed the
+  template's `- [ ]` for every item, so a run where everything was ticked was
+  indistinguishable from one where nothing was. A record that does not say what was
+  checked is not evidence of anything.
+- Deleting is the one operation the "a record is evidence, never edited" rule cannot
+  cover by refusing, because the first thing anybody records is a typo. Making it narrow
+  and two-step keeps the rule's intent - a record never changes - while leaving a way to
+  remove a run that should never have existed.
+- `--out` and stdout both exist because the two uses differ: a pipeline wants the bytes,
+  a person wants a file. The summary goes to standard error so the data stream stays pure.
+
+Cost: a fourth export path to keep working, and a delete command that a careful operator
+must confirm with `--yes`. Accepted, because the alternative - no export and no delete,
+with `rm` and hand-copied Markdown as the workaround - is exactly what was happening.
+
+Dismissal condition: if exporting to a file is what people actually do and printing to
+standard output is never used, drop stdout and require `--out`.
+
+## D17 - The app may publish, but `git` does the publishing
+
+Decision: the History screen carries two actions. **Export record** writes one run's
+record to `exports/<sop_id>-<run_id>.md` inside the working copy. **Push repo** runs
+`git add -A`, commits with a message the operator supplies (blank takes a generated
+default), and pushes `HEAD` to the configured remote. The app holds no credential, and
+every `git` invocation it makes for this runs with `GIT_TERMINAL_PROMPT=0`.
+
+Reasons:
+
+- Until now the last step of every session was a hand-typed `git add` / `git commit` /
+  `git push`, and the failure mode of forgetting it is silent: the run looks complete on
+  the laptop and does not exist anywhere else. `SPEC.md` section 9 step 4 already says
+  the app commits the record and the logs together, so the app was always meant to do
+  this; only the button was missing.
+- The push names `HEAD` rather than a configured upstream, so a repository that has never
+  been pushed works, and it cannot accidentally push the wrong branch.
+- `GIT_TERMINAL_PROMPT=0` is what makes "the app holds no credential" enforceable rather
+  than a promise. Without a terminal, `git` cannot prompt, so a missing credential becomes
+  an error the window can show instead of a process hanging with no window to type into.
+  D14's reasoning applies unchanged: an application that cannot store a credential cannot
+  leak one.
+- A commit that succeeds and a push that fails leaves the commit in place. That is the
+  right way round - the work is local, recoverable, and can be pushed again - and the
+  report the window shows says which half happened.
+- `exports/` is ignored by `git` because the record is already committed under `runs/`.
+  An export is a copy for handing to somebody, and committing a second copy of a record
+  would create two documents that can disagree.
+- Exporting falls back to the record file when a run has no directory of its own, which
+  `SPEC.md` section 8 says to expect from records written before runs were self-contained.
+  Refusing to export exactly the records that are hardest to re-derive would invert the
+  purpose of the command.
+
+Cost: the app now reaches the network, through `git`, on one button. That is a real
+change in what the binary does - it was previously readable as never touching the
+network - so the module documentation, this record, and `help/commands.md` all say it.
+Accepted, because the alternative is the silent failure of an un-pushed session.
+
+## D18 - A chapter is a step only with its block, and the validator says so
+
+Decision: a `##` chapter becomes a step only when a `yaml step` block gives it an `id`.
+A chapter without one is prose, and `sop validate` names the chapter and its line rather
+than reporting only that the file defines no steps. `SPEC.md` sections 6 and 13 now say
+this outright; section 6 previously called the block "optional metadata", which read as
+though a heading alone were enough.
+
+Reasons:
+
+- Deriving an `id` from the heading was the alternative, and it is ruled out by section 4:
+  a step id is part of the data contract and a heading is display text. Renaming a
+  chapter would silently change the id every later run record cites, which is precisely
+  the failure the permanence rule exists to prevent.
+- The cost of the block is three lines. The cost of the confusion was real: a document of
+  chapters and checklists written without blocks validated as "no steps defined", with no
+  hint about which chapter the tool had ignored or what to add.
+- Naming the chapter turns a rule into an instruction. The message says what is missing
+  and where, which is the difference between a validator that blocks and a validator that
+  teaches.
+
+Cost: one more error a hand-written procedure can trip, and an author who wants a `##`
+section of pure prose inside a checklist has to accept it being reported as an error
+rather than being inferred. The current content has no such section; if one is ever
+wanted, the escape is a step whose `kind` is `note`.
+
+## D19 - Instrument, conditions, and a result with no outcome
+
+Decision: a run record gains three optional front-matter blocks - `sensor` (a `model` /
+`serial` / `firmware` mapping), `hardware` (a list), and `conditions` (a free-form
+mapping). The operator enters them in the app's start panel, they are optional fields on
+the `RunStarted` event, and the recording reads them back from the event log. The record
+restates them in its body as well as its front matter. In a `yaml result` block, `status`
+may now be omitted: the step happened and its data is recorded, but the operator gave no
+outcome for it. A `complete` run may not contain such a result.
+
+Reasons:
+
+- The record exists to answer "what happened", and the checklist cannot answer which
+  instrument, which firmware, or what the weather was. Without those, two runs at the same
+  site are indistinguishable when they are read a year later, which is the comparison the
+  whole repository is for. Section 8 already showed `sensor`, `hardware`, and `conditions`
+  in its example; nothing wrote them, so the example was documenting a wish.
+- Restating them in the body is deliberate duplication. Front matter is machine-readable
+  and easy to scroll past; the exported record is what a person reads, and it should carry
+  the facts they need without a YAML reader.
+- The fields are additive to the event log: they default when absent, so a log written
+  before today replays unchanged, and a log written today still replays in a build that
+  does not know the fields. That is why this does not bump the schema (`SPEC-COMPAT.md`).
+- Omitting `status` is the honest encoding of a state the format had no way to express.
+  One option was to refuse to end a run that had captures on an open step; that would have
+  made the operator invent a `done` they do not mean, which is worse than silence. The
+  other was to accept `open` as a status value, which would have put four values in a
+  three-value vocabulary. An absent key costs one line of prose and is unambiguous.
+- Forbidding the absent status on a `complete` run keeps the two levels of the format
+  consistent: `complete` already means every step has a result, and a result with no
+  outcome is not a result. The check is `citation.report`, so a record with no snapshot
+  warns rather than fails, like the coverage rule it sits beside.
+
+Cost: three more optional keys and one new invariant to remember, and a record can now be
+"valid but unanswered", which a reader has to notice. Accepted, because the alternative is
+silently dropping the measurements an operator did record - the failure this change fixes.

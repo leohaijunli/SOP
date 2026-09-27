@@ -5,7 +5,8 @@
 //! and that an edit which breaks *another* file is put back.
 
 use sop_core::authoring::{ItemRef, Move, StepChanges, StepDraft};
-use sop_repo::{authoring, manifest, validate};
+use sop_repo::authoring::EditError;
+use sop_repo::{authoring, manifest, run, validate};
 
 mod common;
 use common::Scratch;
@@ -17,6 +18,7 @@ fn json_str(value: Option<&serde_json::Value>) -> Option<&str> {
 
 const WALK: &str = "checklists/ground-walk-survey.md";
 const WALK_RUN: &str = "runs/ground-walk-survey/2026-09-24-renfrew-walk01.md";
+const HEADING: &str = "procedures/heading-error.md";
 
 fn draft(id: &str, title: &str) -> StepDraft {
     StepDraft {
@@ -82,21 +84,20 @@ fn a_new_step_reaches_the_manifest() {
 fn an_edit_that_breaks_another_file_is_undone() {
     let scratch = Scratch::new("authoring-undone");
     let repo = scratch.repo();
-    let before = scratch.read(WALK);
-    assert!(
-        scratch.read(WALK_RUN).contains("step: walk-line-plan"),
-        "fixture drifted: the run record no longer cites this step"
-    );
-
-    let error = authoring::remove_step(&repo, WALK, "walk-line-plan").unwrap_err();
+    let before = scratch.read(HEADING);
+    // `heading-error` is included by `mag-sensor-calibration` alongside `power-on`, so a
+    // step id borrowed from `power-on` collides across files. The procedure on its own is
+    // fine and the run records are unaffected, so only the full pass can see it.
+    let error = authoring::add_step(&repo, HEADING, &draft("poweron-clock", "Borrowed id"), None)
+        .unwrap_err();
     let message = error.to_string();
     assert!(message.contains("undone"), "{message}");
     assert!(
-        message.contains("walk-line-plan"),
+        message.contains("poweron-clock"),
         "the message must name what broke: {message}"
     );
     assert_eq!(
-        scratch.read(WALK),
+        scratch.read(HEADING),
         before,
         "the file must be exactly as it was"
     );
@@ -144,7 +145,6 @@ fn only_content_is_editable() {
         "help/commands.md",
         "SPEC.md",
         "procedures/../project.md",
-        "../outside.md",
         "checklists/../../etc/passwd",
     ] {
         let error = authoring::editable(&repo, relative).unwrap_err();
@@ -157,6 +157,9 @@ fn only_content_is_editable() {
     for relative in [
         "procedures/walk-line.md",
         "checklists/ground-walk-survey.md",
+        // An external markdown file anywhere on disk is editable once loaded via "Open
+        // file"; that is the point of decoupling from the repository folders.
+        "../outside.md",
     ] {
         assert!(authoring::editable(&repo, relative).is_ok(), "{relative}");
     }
@@ -227,6 +230,74 @@ fn an_include_can_be_added_to_a_checklist() {
     );
     let (failed, report) = scratch.validate();
     assert!(!failed, "{report}");
+}
+
+#[test]
+fn a_step_from_an_include_is_edited_in_its_procedure_not_in_the_checklist() {
+    let scratch = Scratch::new("authoring-included-step");
+    let repo = scratch.repo();
+    let changes = StepChanges {
+        prose: Some("Rewritten in the procedure.".to_owned()),
+        ..StepChanges::default()
+    };
+
+    // `poweron-supply` is defined in `procedures/power-on.md` and reaches the checklist
+    // only through an include marker, so the checklist has no text for it to rewrite.
+    // The editor writes to the file that defines the step; this is why the panel has to
+    // send the step's own source rather than the checklist it happens to be open on.
+    let error = authoring::update_step(&repo, WALK, "poweron-supply", &changes).unwrap_err();
+    assert!(
+        matches!(error, EditError::Authoring(_)) && error.to_string().contains("poweron-supply"),
+        "{error:?}"
+    );
+
+    authoring::update_step(&repo, "procedures/power-on.md", "poweron-supply", &changes).unwrap();
+    assert!(
+        scratch
+            .read("procedures/power-on.md")
+            .contains("Rewritten in the procedure.")
+    );
+
+    let (failed, report) = scratch.validate();
+    assert!(!failed, "the edit must stand:\n{report}");
+}
+
+#[test]
+fn removing_an_include_a_recorded_run_used_is_allowed() {
+    let scratch = Scratch::new("authoring-include-recorded");
+    let repo = scratch.repo();
+    // Freeze the checklist the way `run start` does. That snapshot is the revision the
+    // committed record is read against, so a later edit to the checklist must neither
+    // invalidate the record nor be undone because of it.
+    run::start(
+        &repo,
+        "ground-walk-survey",
+        "2026-09-24-renfrew-walk01",
+        "leo",
+        "Renfrew 395",
+        Some("automated test"),
+    )
+    .unwrap();
+
+    authoring::remove_include(&repo, WALK, "procedures/base-station.md").unwrap();
+
+    let (failed, report) = scratch.validate();
+    assert!(!failed, "the edit must stand:\n{report}");
+    assert!(report.ends_with("0 error(s), 0 warning(s)\n"), "{report}");
+}
+
+#[test]
+fn removing_an_include_a_run_without_a_snapshot_used_warns_instead_of_failing() {
+    let scratch = Scratch::new("authoring-include-legacy");
+    let repo = scratch.repo();
+    // The committed record has no run directory, so there is no recorded revision to
+    // check it against. Drift against the current checklist is worth saying out loud,
+    // but it cannot be a reason to refuse an edit to the checklist.
+    authoring::remove_include(&repo, WALK, "procedures/base-station.md").unwrap();
+
+    let (failed, report) = scratch.validate();
+    assert!(!failed, "history must not block a content edit:\n{report}");
+    assert!(report.contains("no snapshot"), "{report}");
 }
 
 #[test]

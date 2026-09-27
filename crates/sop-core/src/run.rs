@@ -44,6 +44,28 @@ pub enum RunError {
     BadRunStatus(String, String),
 }
 
+/// The instrument a run was recorded with.
+///
+/// All three parts are optional so an operator can record a serial without a model, and
+/// so a field left blank is absent rather than an empty string in the record. Serial and
+/// firmware are strings because a serial is an identifier, not a number: it may carry a
+/// leading zero, and a YAML reader that turned `0001234` into an integer would corrupt it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SensorIdentity {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub model: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub serial: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub firmware: String,
+}
+
+impl SensorIdentity {
+    pub fn is_empty(&self) -> bool {
+        self.model.is_empty() && self.serial.is_empty() && self.firmware.is_empty()
+    }
+}
+
 /// One line of the run's event log. The `type` discriminates the variant.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "PascalCase")]
@@ -56,6 +78,17 @@ pub enum RunEvent {
         snapshot_sha256: String,
         operator: String,
         site: String,
+        /// The instrument, when the operator recorded one. Absent in logs written
+        /// before this field existed, which is why every reader treats it as optional.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sensor: Option<SensorIdentity>,
+        /// Software and equipment used, free text, one item each.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        hardware: Vec<String>,
+        /// Environment at the start of the run: weather, temperature, and anything
+        /// else the checklist asks for. Free-form so a new dimension needs no schema.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        conditions: BTreeMap<String, String>,
     },
     StepOpened {
         at: String,
@@ -171,6 +204,9 @@ pub struct RunState {
     pub started: Option<String>,
     pub ended: Option<String>,
     pub run_status: Option<String>,
+    pub sensor: Option<SensorIdentity>,
+    pub hardware: Vec<String>,
+    pub conditions: BTreeMap<String, String>,
     pub steps: BTreeMap<String, StepState>,
     pub run_notes: Vec<String>,
     pub run_attachments: Vec<Attachment>,
@@ -207,6 +243,9 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
             snapshot_sha256,
             operator,
             site,
+            sensor,
+            hardware,
+            conditions,
         } = event
         else {
             return Err(RunError::MustStartWithRunStarted);
@@ -218,6 +257,9 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
         state.snapshot_sha256 = Some(snapshot_sha256.clone());
         state.operator = Some(operator.clone());
         state.site = Some(site.clone());
+        state.sensor = sensor.clone();
+        state.hardware = hardware.clone();
+        state.conditions = conditions.clone();
         return Ok(());
     }
 
@@ -361,6 +403,85 @@ fn yaml_scalar(value: &str) -> String {
     }
 }
 
+/// Set one checkbox item's marker, leaving the bullet, the indent, and the text alone.
+///
+/// `note` items can contain a `[` of their own, so only the marker after the bullet is
+/// touched. [`checkbox_state`](crate::check::checkbox_state) has already established that
+/// the line has one.
+fn set_checkbox_marker(line: &str, checked: bool) -> String {
+    let Some(bracket) = line.find('[') else {
+        return line.to_owned();
+    };
+    let mut out = String::with_capacity(line.len());
+    out.push_str(&line[..bracket + 1]);
+    out.push(if checked { 'x' } else { ' ' });
+    out.push_str(&line[bracket + 2..]);
+    out
+}
+
+/// The step body with each checkbox marker set from the run's recorded state.
+///
+/// A step with more items than the record has state for leaves the extra ones unchecked,
+/// which is what an item that was never touched should read as.
+pub fn body_with_checkbox_state(body: &str, checked: &[bool]) -> String {
+    let mut index = 0;
+    let lines: Vec<String> = body
+        .lines()
+        .map(|line| {
+            if crate::check::checkbox_state(line).is_none() {
+                return line.to_owned();
+            }
+            let state = checked.get(index).copied().unwrap_or(false);
+            index += 1;
+            set_checkbox_marker(line, state)
+        })
+        .collect();
+    lines.join("\n")
+}
+
+/// The text of every checkbox item in a step body, in order, without its marker.
+///
+/// The record keeps each item's text next to its marker; the execution view needs the
+/// same text on its own, so the operator ticks the words they read rather than a number.
+/// The count agrees with [`body_with_checkbox_state`], which walks the same lines.
+pub fn checklist_items(body: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in body.lines() {
+        if crate::check::checkbox_state(line).is_none() {
+            continue;
+        }
+        let Some(bracket) = line.find(']') else {
+            continue;
+        };
+        out.push(line[bracket + 1..].trim().to_owned());
+    }
+    out
+}
+
+/// Every checkbox item in a step body paired with what the run recorded against it.
+///
+/// The item text comes from the body frozen at run start; the ticks come from the event
+/// log. An item the log has no answer for is unchecked, which is what an item nobody
+/// touched should read as, so the two lengths need not agree.
+pub fn checklist_state(body: &str, checked: &[bool]) -> Vec<(String, bool)> {
+    checklist_items(body)
+        .into_iter()
+        .enumerate()
+        .map(|(index, text)| (text, checked.get(index).copied().unwrap_or(false)))
+        .collect()
+}
+
+/// The step body with its checkbox lines removed.
+///
+/// The execution view renders those items itself, from [`checklist_items`], so leaving
+/// them in the prose would show every item twice: once as words and once as a tick box.
+pub fn body_without_checklist(body: &str) -> String {
+    body.lines()
+        .filter(|line| crate::check::checkbox_state(line).is_none())
+        .collect::<Vec<&str>>()
+        .join("\n")
+}
+
 /// Render the human reviewable `record.md` for a run.
 ///
 /// `steps` is the checklist as frozen at run start (id, title, prose, and how many
@@ -380,44 +501,89 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
     if let (Some(version), Some(commit)) = (state.sop_version.as_deref(), state.sop_commit.as_deref()) {
         out.push_str(&format!("sop_version: {version}\nsop_commit: {commit}\n"));
     }
+    // The head is a restatement of the front matter for a reader who has only the
+    // record, so the instrument and the conditions are repeated here too. They are the
+    // facts a later re-analysis needs to compare two runs, and front matter is easy to
+    // scroll past.
+    if let Some(sensor) = &state.sensor
+        && !sensor.is_empty()
+    {
+        let mut parts = Vec::new();
+        if !sensor.model.is_empty() {
+            parts.push(sensor.model.clone());
+        }
+        if !sensor.serial.is_empty() {
+            parts.push(format!("serial {}", sensor.serial));
+        }
+        if !sensor.firmware.is_empty() {
+            parts.push(format!("firmware {}", sensor.firmware));
+        }
+        out.push_str(&format!("sensor: {}\n", parts.join(", ")));
+    }
+    if !state.hardware.is_empty() {
+        out.push_str(&format!("hardware: {}\n", state.hardware.join(", ")));
+    }
+    if !state.conditions.is_empty() {
+        let pairs: Vec<String> = state
+            .conditions
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect();
+        out.push_str(&format!("conditions: {}\n", pairs.join(", ")));
+    }
     out.push('\n');
 
     for step in steps {
         let step_state = state.steps.get(&step.id);
         out.push_str(&format!("## {}\n\n", step.title));
         if !step.body.trim().is_empty() {
-            out.push_str(step.body.trim_end());
+            // The body is the checklist template, so its items were written `- [ ]`.
+            // The record has to say what the operator actually left them as, which is
+            // the whole reason the item text and its marker are kept together.
+            let checked: &[bool] = step_state.map_or(&[], |state| state.checkboxes.as_slice());
+            out.push_str(body_with_checkbox_state(&step.body, checked).trim_end());
             out.push_str("\n\n");
         }
         let Some(state) = step_state else {
             out.push_str("_(not reached)_\n\n");
             continue;
         };
-        if state.status == StepStatus::Open {
-            out.push_str("_(not completed)_\n\n");
-            continue;
-        }
-        out.push_str("```yaml result\n");
-        out.push_str(&format!("step: {}\n", step.id));
-        out.push_str(&format!("status: {}\n", state.status.as_str()));
-        if let Some(reason) = &state.reason {
-            out.push_str(&format!("reason: {}\n", yaml_scalar(reason)));
-        }
-        if !state.captures.is_empty() {
-            out.push_str("captures:\n");
-            for (key, value) in &state.captures {
-                let rendered = match (&value.unit, value.value.parse::<f64>()) {
-                    (Some(unit), _) => {
-                        format!("{} {}", yaml_scalar(&value.value), yaml_scalar(unit))
-                    }
-                    (None, Ok(_)) | (None, Err(_)) => yaml_scalar(&value.value),
-                };
-                out.push_str(&format!("  {key}: {rendered}\n"));
+        // A step left open still keeps its notes and attachments below: they are the
+        // part of a record that nobody can reconstruct later, so being unfinished is not
+        // a reason to drop them. A result block is emitted whenever it has something to
+        // say - an outcome, a reason, or captures - and omitting `status` means the step
+        // happened but the operator recorded no outcome for it. That is different from
+        // `done`, which is a judgement. A block with nothing to say is left out.
+        let has_result = state.status != StepStatus::Open
+            || state.reason.is_some()
+            || !state.captures.is_empty();
+        if has_result {
+            out.push_str("```yaml result\n");
+            out.push_str(&format!("step: {}\n", step.id));
+            if state.status != StepStatus::Open {
+                out.push_str(&format!("status: {}\n", state.status.as_str()));
             }
+            if let Some(reason) = &state.reason {
+                out.push_str(&format!("reason: {}\n", yaml_scalar(reason)));
+            }
+            if !state.captures.is_empty() {
+                out.push_str("captures:\n");
+                for (key, value) in &state.captures {
+                    let rendered = match (&value.unit, value.value.parse::<f64>()) {
+                        (Some(unit), _) => {
+                            format!("{} {}", yaml_scalar(&value.value), yaml_scalar(unit))
+                        }
+                        (None, Ok(_)) | (None, Err(_)) => yaml_scalar(&value.value),
+                    };
+                    out.push_str(&format!("  {key}: {rendered}\n"));
+                }
+            }
+            out.push_str("```\n\n");
         }
-        out.push_str("```\n\n");
+        let mut tail = false;
         for note in &state.notes {
             out.push_str(&format!("> note: {note}\n"));
+            tail = true;
         }
         for attachment in &state.attachments {
             out.push_str(&format!(
@@ -426,8 +592,11 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
                 sha256 = &attachment.sha256[..attachment.sha256.len().min(12)],
                 size = attachment.size
             ));
+            tail = true;
         }
-        if !state.checkboxes.is_empty() {
+        // Notes and attachments end without a blank line of their own, so one is added
+        // here. Without it the next `##` would sit directly under the last note.
+        if tail {
             out.push('\n');
         }
     }
@@ -437,6 +606,7 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
         for note in &state.run_notes {
             out.push_str(&format!("- {note}\n"));
         }
+        out.push('\n');
     }
     if !state.run_attachments.is_empty() {
         out.push_str("## Run attachments\n\n");
@@ -447,6 +617,7 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
                 sha256 = &attachment.sha256[..attachment.sha256.len().min(12)]
             ));
         }
+        out.push('\n');
     }
 
     if let Some(status) = &state.run_status {
@@ -469,6 +640,9 @@ mod tests {
             snapshot_sha256: "deadbeef".to_owned(),
             operator: "leo".to_owned(),
             site: "Renfrew 395".to_owned(),
+            sensor: None,
+            hardware: Vec::new(),
+            conditions: BTreeMap::new(),
         }
     }
 
@@ -571,6 +745,156 @@ mod tests {
         assert_eq!(
             apply(&mut state, &toggle),
             Err(RunError::CheckboxOutOfRange { index: 2, len: 0 })
+        );
+    }
+
+    #[test]
+    fn a_records_checkbox_items_carry_what_the_operator_left_them_as() {
+        let body = "Read this.\n\n- [ ] first item\n- [ ] second item\n* [X] third item\n\nDone.";
+        let rendered = body_with_checkbox_state(body, &[true, false]);
+        assert_eq!(
+            rendered,
+            "Read this.\n\n- [x] first item\n- [ ] second item\n* [ ] third item\n\nDone."
+        );
+    }
+
+    #[test]
+    fn a_checkbox_the_record_has_no_state_for_reads_as_unchecked() {
+        let body = "- [ ] one\n- [x] two";
+        assert_eq!(
+            body_with_checkbox_state(body, &[true]),
+            "- [x] one\n- [ ] two"
+        );
+    }
+
+    #[test]
+    fn a_step_left_open_keeps_its_notes_even_though_it_has_no_result() {
+        let mut state = RunState::default();
+        apply(&mut state, &started()).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::NoteAdded {
+                at: "t".into(),
+                step: Some("s".into()),
+                text: "the stand rocked once".into(),
+            },
+        )
+        .unwrap();
+        let steps = vec![RecordStep {
+            id: "s".into(),
+            title: "Warm-up baseline".into(),
+            body: "Prose.".into(),
+            checkbox_count: 0,
+        }];
+
+        let rendered = render_record(&state, &steps);
+
+        // An open step with nothing recorded gets no result block at all: the absence of
+        // an outcome is itself the record, and a placeholder would be one more thing to
+        // read past.
+        assert!(!rendered.contains("yaml result"), "{rendered}");
+        assert!(
+            rendered.contains("> note: the stand rocked once"),
+            "a note the operator typed must survive an unfinished step: {rendered}"
+        );
+    }
+
+    #[test]
+    fn an_open_step_with_captures_renders_them_without_a_status() {
+        let mut state = RunState::default();
+        apply(&mut state, &started()).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::CaptureRecorded {
+                at: "t".into(),
+                step: "s".into(),
+                key: "sigma_nt".into(),
+                value: "0.08".into(),
+                unit: Some("nT".into()),
+            },
+        )
+        .unwrap();
+        let steps = vec![RecordStep {
+            id: "s".into(),
+            title: "Static noise".into(),
+            body: String::new(),
+            checkbox_count: 0,
+        }];
+
+        let rendered = render_record(&state, &steps);
+
+        // The data exists, so it is kept; the operator gave no outcome, so there is no
+        // status line. That is the difference between `_` and `done`.
+        assert!(rendered.contains("```yaml result"), "{rendered}");
+        assert!(rendered.contains("step: s"), "{rendered}");
+        assert!(rendered.contains("sigma_nt: \"0.08\" nT"), "{rendered}");
+        assert!(!rendered.contains("status:"), "no outcome means no status line: {rendered}");
+    }
+
+    #[test]
+    fn a_note_between_steps_leaves_exactly_one_blank_line() {
+        let mut state = RunState::default();
+        apply(&mut state, &started()).unwrap();
+        apply(&mut state, &RunEvent::StepOpened { at: "t".into(), step: "a".into() }).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::NoteAdded { at: "t".into(), step: Some("a".into()), text: "note".into() },
+        )
+        .unwrap();
+        apply(&mut state, &RunEvent::StepOpened { at: "t".into(), step: "b".into() }).unwrap();
+        let steps = vec![
+            RecordStep { id: "a".into(), title: "A".into(), body: String::new(), checkbox_count: 0 },
+            RecordStep { id: "b".into(), title: "B".into(), body: String::new(), checkbox_count: 0 },
+        ];
+
+        let rendered = render_record(&state, &steps);
+
+        assert!(rendered.contains("> note: note\n\n## B"), "one blank line before the next step: {rendered}");
+        assert!(!rendered.contains("\n\n\n"), "no doubled blank lines: {rendered}");
+    }
+
+    #[test]
+    fn checklist_state_pairs_each_item_with_its_tick() {
+        let body = "- [ ] first\n- [ ] second\n- [ ] third";
+        assert_eq!(
+            checklist_state(body, &[true, false]),
+            vec![
+                ("first".to_owned(), true),
+                ("second".to_owned(), false),
+                ("third".to_owned(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn body_without_checklist_keeps_the_prose_and_drops_the_items() {
+        let body = "Read this.\n\n- [ ] first item\n- [x] second item\n\nThen this.";
+        assert_eq!(body_without_checklist(body), "Read this.\n\n\nThen this.");
+    }
+
+    #[test]
+    fn checklist_items_carry_the_text_and_drop_the_marker() {
+        let body =
+            "Read this.\n\n- [ ] first item\n- [x] second item\n* [ ] third [[link]]\n\nDone.";
+        assert_eq!(
+            checklist_items(body),
+            vec!["first item", "second item", "third [[link]]"]
+        );
+    }
+
+    #[test]
+    fn a_body_without_items_has_no_checklist_items() {
+        assert!(checklist_items("Just prose.\n\nAnd a plain list:\n- one").is_empty());
+    }
+
+    #[test]
+    fn only_the_marker_a_bullet_owns_is_rewritten() {
+        // A checkbox item may contain brackets of its own; the item text has to survive.
+        let body = "- [ ] record the value of `a[0]` and [x] in the field";
+        let rendered = body_with_checkbox_state(body, &[true]);
+        assert_eq!(
+            rendered,
+            "- [x] record the value of `a[0]` and [x] in the field"
         );
     }
 }

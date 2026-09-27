@@ -13,7 +13,7 @@ of it is needed to interpret the measurement later: results taken at 5 C are not
 directly comparable with results taken at 30 C, and a reference comparison is only as
 good as the reference.
 
-## Location and scene
+## Location
 
 ```yaml step
 id: cond-location
@@ -60,13 +60,12 @@ captures:
     required: false
 ```
 
-Temperature drives sensor electronics drift. Wind matters more than it appears to in
+Temperature sensor electronics drift. Wind matters more than it appears to in
 a walking survey: a staff that moves in the wind modulates the reading, and the
 resulting oscillation looks like instrument noise.
 
 - [ ] Temperature recorded
 - [ ] Wind recorded, since it affects how steadily the sensor can be held
-
 ## Reference instrument
 
 ```yaml step

@@ -11,8 +11,10 @@
 //!    an edit that is wrong is refused with a message about the file the operator was
 //!    editing.
 //! 3. A full repository pass runs afterwards, and the edit is undone if it fails. Editing
-//!    one file can break another: renaming a step id in a procedure orphans every run
-//!    record that cites it, and the file being edited is the one that cannot see that.
+//!    one file can break another: a step id added to a procedure collides with an id an
+//!    already-included procedure defines, and the file being edited is the one that
+//!    cannot see that. Run records are deliberately not in this category - a record is
+//!    read against its own snapshot, so changing the checklist does not invalidate it.
 
 use std::path::PathBuf;
 
@@ -47,15 +49,23 @@ pub enum EditError {
 ///
 /// The prefix is checked on the resolved path rather than on what was typed, because
 /// `procedures/../project.md` starts with the right directory name and does not end up
-/// in it.
+/// in it. Run records are evidence and are never edited by hand; everything else that
+/// is markdown - including files loaded via "Open file" from anywhere on disk - can be
+/// edited.
 pub fn editable(repo: &Repo, relative: &str) -> Result<PathBuf, EditError> {
     let trimmed = relative.trim_start_matches("./");
     let path = repo.resolve(trimmed);
-    let editable = ["procedures", "checklists"].iter().any(|directory| {
-        let directory = repo.root().join(directory);
-        path != directory && path.starts_with(directory)
-    });
-    if !editable || path.extension().is_none_or(|extension| extension != "md") {
+    if path.extension().is_none_or(|extension| extension != "md") {
+        return Err(EditError::NotEditable(relative.to_owned()));
+    }
+    let rel = repo.relpath(&path);
+    // Run records are evidence; help pages and repository-root documents are edited by
+    // hand rather than through the step editor. Everything else that is markdown -
+    // checklists, procedures, and external files loaded via "Open file" - is editable.
+    let forbidden = rel.starts_with("runs/")
+        || rel.starts_with("help/")
+        || !rel.contains('/');
+    if forbidden {
         return Err(EditError::NotEditable(relative.to_owned()));
     }
     Ok(path)

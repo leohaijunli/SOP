@@ -5,14 +5,17 @@
 //! whether an edit is allowed; it only carries the answer back, including the report
 //! when the answer is no.
 
+use std::path::PathBuf;
+
 use sop_core::authoring::{ItemRef, Move};
 use sop_core::RunEvent;
 use sop_repo::{Repo, authoring, git, manifest, project, run, validate};
 use tauri::State;
 
 use crate::api::{
-    CaptureInput, ContentCounts, GitInfo, ProjectField, ProjectView, RunAttachmentView,
-    RunCaptureView, RunStepView, RunView, SettingRow, Status, StepInput, StepPatch,
+    CaptureInput, ChecklistItemView, ContentCounts, GitInfo, ProjectField, ProjectView,
+    RunAttachmentView, RunCaptureView, RunMetaInput, RunStepView, RunView, SensorView, SettingRow,
+    Status, StepInput, StepPatch,
 };
 use crate::state::AppState;
 
@@ -98,18 +101,97 @@ pub fn settings_path(state: State<'_, AppState>) -> Reply<String> {
 
 #[tauri::command]
 pub fn settings_set(key: String, value: String, state: State<'_, AppState>) -> Reply<Vec<SettingRow>> {
-    let mut settings = state.settings()?;
-    settings.set(&key, &value).map_err(text)?;
-    state.save(&settings)?;
+    state.set_setting(&key, &value)?;
     rows(&state)
 }
 
 #[tauri::command]
 pub fn settings_unset(key: String, state: State<'_, AppState>) -> Reply<Vec<SettingRow>> {
-    let mut settings = state.settings()?;
-    settings.unset(&key).map_err(text)?;
-    state.save(&settings)?;
+    state.unset_setting(&key)?;
     rows(&state)
+}
+
+#[tauri::command]
+pub fn settings_repo_path(state: State<'_, AppState>) -> Reply<String> {
+    Ok(state.settings_repo_path()?.display().to_string())
+}
+
+/// The combined Project + Settings view, as a single JSON document.
+///
+/// This is what the Project and Settings pages load on open; the operator can then edit
+/// either page and press Confirm, which writes the same JSON back to `configure.json`
+/// and applies the values to `project.md` and the settings files.
+#[tauri::command]
+pub fn config_load(state: State<'_, AppState>) -> Reply<String> {
+    let repo = state.repo()?;
+    let config_path = repo.resolve("configure.json");
+    if config_path.is_file() {
+        return std::fs::read_to_string(&config_path)
+            .map_err(|error| format!("{}: {error}", config_path.display()));
+    }
+    // No config file yet: build a default from the current project.md and settings.
+    let proj_path = repo.resolve(sop_core::vocab::PROJECT_FILE);
+    let mut project_map = serde_json::Map::new();
+    if let Ok(loaded) = repo.load(&proj_path) {
+        for (key, _desc) in project::FIELDS {
+            if let Some(value) = loaded.doc.front.str(key).flatten() {
+                project_map.insert(key.to_string(), serde_json::Value::String(value.to_owned()));
+            }
+        }
+    }
+    let settings = state.settings()?;
+    let mut settings_map = serde_json::Map::new();
+    for (key, _desc) in sop_core::settings::KEYS {
+        if let Some(value) = settings.get(key) {
+            settings_map.insert(key.to_string(), serde_json::Value::String(value));
+        }
+    }
+    let config = serde_json::json!({ "project": project_map, "settings": settings_map });
+    Ok(serde_json::to_string_pretty(&config).unwrap_or_else(|_| "{}".to_owned()))
+}
+
+/// Write the Project + Settings JSON back to `configure.json` and apply its values.
+///
+/// The Confirm button on the Project and Settings pages sends the whole edited document;
+/// this applies the project fields and settings so the rest of the app sees them, then
+/// stores the document for the next launch to load.
+#[tauri::command]
+pub fn config_save(json: String, state: State<'_, AppState>) -> Reply<String> {
+    let repo = state.repo()?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json).map_err(|error| format!("config is not valid JSON: {error}"))?;
+
+    // Write the config file first so it always lands, even if applying a field fails.
+    let config_path = repo.resolve("configure.json");
+    std::fs::write(&config_path, serde_json::to_string_pretty(&parsed).unwrap_or_else(|_| "{}".to_owned()))
+        .map_err(|error| format!("{}: {error}", config_path.display()))?;
+
+    if let Some(project_obj) = parsed.get("project").and_then(|value| value.as_object()) {
+        for (key, value) in project_obj {
+            let value = value.as_str().unwrap_or_default();
+            // Required project fields cannot be set to empty; leave a blank box alone so
+            // the save does not fail on the first unedited field.
+            if value.trim().is_empty() {
+                continue;
+            }
+            project::set(&repo, key, value).map_err(text)?;
+        }
+    }
+
+    if let Some(settings_obj) = parsed.get("settings").and_then(|value| value.as_object()) {
+        for (key, value) in settings_obj {
+            // `recent-repositories` is maintained by the app itself and cannot be set by
+            // hand; applying it would fail the whole save.
+            if key == "recent-repositories" {
+                continue;
+            }
+            if let Some(value) = value.as_str() {
+                state.set_setting(key, value)?;
+            }
+        }
+    }
+
+    Ok(config_path.display().to_string())
 }
 
 #[tauri::command]
@@ -258,11 +340,34 @@ pub fn run_start(
     operator: String,
     site: String,
     r#override: Option<String>,
+    meta: Option<RunMetaInput>,
     state: State<'_, AppState>,
 ) -> Reply<RunView> {
     let repo = state.repo()?;
-    let loaded = run::start(&repo, &sop, &run_id, &operator, &site, r#override.as_deref())
-        .map_err(text)?;
+    let meta = meta.unwrap_or_default();
+    let sensor = sop_core::run::SensorIdentity {
+        model: meta.sensor_model.unwrap_or_default().trim().to_owned(),
+        serial: meta.sensor_serial.unwrap_or_default().trim().to_owned(),
+        firmware: meta.sensor_firmware.unwrap_or_default().trim().to_owned(),
+    };
+    let meta = run::RunMeta {
+        sensor: (!sensor.is_empty()).then_some(sensor),
+        hardware: meta
+            .hardware
+            .into_iter()
+            .map(|item| item.trim().to_owned())
+            .filter(|item| !item.is_empty())
+            .collect(),
+        conditions: meta
+            .conditions
+            .into_iter()
+            .map(|(key, value)| (key.trim().to_owned(), value.trim().to_owned()))
+            .filter(|(key, value)| !key.is_empty() && !value.is_empty())
+            .collect(),
+    };
+    let loaded =
+        run::start_with_meta(&repo, &sop, &run_id, &operator, &site, r#override.as_deref(), &meta)
+            .map_err(text)?;
     Ok(build_run_view(&loaded, &run_id))
 }
 
@@ -307,6 +412,12 @@ pub fn run_attach(
     Ok(build_run_view(&loaded, &run_id))
 }
 
+/// `Some(text)` for a field with content, `None` for a blank one, so the view leaves a
+/// label out rather than rendering an empty value.
+fn non_empty(value: &str) -> Option<String> {
+    (!value.trim().is_empty()).then(|| value.to_owned())
+}
+
 fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
     use sop_core::run::StepStatus;
     let state = &loaded.state;
@@ -336,15 +447,22 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
                 }
             })
             .collect();
+        // The frozen body carries the item text; the run state carries only the ticks.
+        // Pairing them is what lets the operator tick the words they read.
+        let ticks = step_state.map(|s| s.checkboxes.as_slice()).unwrap_or(&[]);
+        let checklist = sop_core::run::checklist_state(&def.prose, ticks)
+            .into_iter()
+            .map(|(text, checked)| ChecklistItemView { text, checked })
+            .collect();
         steps.push(RunStepView {
             id: def.id.clone(),
             title: def.title.clone(),
-            prose: def.prose.clone(),
+            prose: sop_core::run::body_without_checklist(&def.prose),
             severity: def.severity.clone(),
             kind: def.kind.clone(),
             status: status.as_str().to_owned(),
             reason: step_state.and_then(|s| s.reason.clone()),
-            checkboxes: step_state.map(|s| s.checkboxes.clone()).unwrap_or_default(),
+            checklist,
             captures,
             notes: step_state.map(|s| s.notes.clone()).unwrap_or_default(),
         });
@@ -361,6 +479,13 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
         sop_version: state.sop_version.clone(),
         sop_commit: state.sop_commit.clone(),
         deviations_count: state.deviations(),
+        sensor: state.sensor.as_ref().map(|sensor| SensorView {
+            model: non_empty(&sensor.model),
+            serial: non_empty(&sensor.serial),
+            firmware: non_empty(&sensor.firmware),
+        }),
+        hardware: state.hardware.clone(),
+        conditions: state.conditions.clone(),
         steps,
         run_notes: state.run_notes.clone(),
         run_attachments: state
@@ -374,6 +499,207 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
             .collect(),
         record_path: loaded.record_path.display().to_string(),
     }
+}
+
+// --------------------------------------------------------------- publishing
+
+/// One run's record, as the document `run end` commits.
+///
+/// The text is returned as well as written, so the window can show what the file says
+/// without reading it back through a second command.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportResult {
+    pub path: String,
+    pub bytes: usize,
+    pub text: String,
+}
+
+/// Write the record for one run.
+///
+/// With no destination the document lands in `exports/<sop_id>-<run_id>.md` inside the
+/// working copy. `exports/` is not one of the directories discovery reads, so an export
+/// never changes what the content means.
+#[tauri::command]
+pub fn run_export(
+    sop: String,
+    run_id: String,
+    out: Option<String>,
+    state: State<'_, AppState>,
+) -> Reply<ExportResult> {
+    let repo = state.repo()?;
+    // Both ids end up in a path, so both are checked as ids before anything is written.
+    if !sop_core::vocab::is_valid_id(&sop) {
+        return Err(format!("'{sop}' is not a checklist id"));
+    }
+    if !sop_core::vocab::is_valid_id(&run_id) {
+        return Err(format!("'{run_id}' is not a run id"));
+    }
+    let text = run::record_document(&repo, &sop, &run_id).map_err(text)?;
+
+    let path = match out.as_deref().map(str::trim).filter(|out| !out.is_empty()) {
+        Some(out) => repo.resolve(out),
+        None => repo.resolve(&format!("exports/{sop}-{run_id}.md")),
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("{}: {error}", parent.display()))?;
+    }
+    std::fs::write(&path, text.as_bytes())
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+
+    Ok(ExportResult {
+        path: path.display().to_string(),
+        bytes: text.len(),
+        text,
+    })
+}
+
+/// Export a run record to a specific path.
+///
+/// The frontend opens the native save dialog (through `tauri-plugin-dialog`, which runs
+/// it on the correct thread) and passes the chosen path here. A command thread must not
+/// open a native dialog itself, which is why the dialog never lives in this file.
+#[tauri::command]
+pub fn run_export_to(
+    sop: String,
+    run_id: String,
+    out: String,
+    state: State<'_, AppState>,
+) -> Reply<ExportResult> {
+    let repo = state.repo()?;
+    if !sop_core::vocab::is_valid_id(&sop) {
+        return Err(format!("'{sop}' is not a checklist id"));
+    }
+    if !sop_core::vocab::is_valid_id(&run_id) {
+        return Err(format!("'{run_id}' is not a run id"));
+    }
+    let text = run::record_document(&repo, &sop, &run_id).map_err(text)?;
+
+    let path = PathBuf::from(&out);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("{}: {error}", parent.display()))?;
+    }
+    std::fs::write(&path, text.as_bytes())
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+
+    Ok(ExportResult {
+        path: path.display().to_string(),
+        bytes: text.len(),
+        text,
+    })
+}
+
+/// Load an external local markdown file and return it as a checklist entry.
+///
+/// The frontend opens the native file picker (via `tauri-plugin-dialog`) and passes the
+/// chosen path here. The file can live anywhere: no `checklists/` or `procedures/`
+/// folder is required, and a plain markdown file is parsed for `##`-heading steps.
+#[tauri::command]
+pub fn load_external_md(path: String, state: State<'_, AppState>) -> Reply<Option<String>> {
+    let _ = state;
+    let path = PathBuf::from(&path);
+    let text_content = std::fs::read_to_string(&path)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+
+    let doc = sop_core::Document::parse_standalone(&text_content)
+        .map_err(|error| error.to_string())?;
+
+    let filename = path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+
+    let sop_id = doc
+        .front
+        .str("sop_id")
+        .flatten()
+        .map(str::to_owned)
+        .unwrap_or_else(|| filename.clone());
+
+    let title = doc
+        .front
+        .str("title")
+        .flatten()
+        .map(str::to_owned)
+        .unwrap_or_else(|| filename.clone());
+
+    let version = doc.front.str("version").flatten().map(str::to_owned);
+    let status = doc.front.str("status").flatten().map(str::to_owned);
+    let applies_to = doc.front.string_list("applies_to");
+    let equipment = doc.front.string_list("equipment");
+
+    let steps: Vec<serde_json::Value> = doc
+        .steps
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "title": s.title,
+                "kind": s.key.as_ref().map(|k| k.as_str()),
+                "severity": s.severity.as_deref().unwrap_or("normal"),
+                "deprecated": s.deprecated,
+                "captures": s.captures.iter().map(|c| manifest::json_safe(&sop_core::Value::Mapping(c.raw.clone()))).collect::<Vec<_>>(),
+                "body": s.prose,
+                "source": s.source,
+            })
+        })
+        .collect();
+
+    let entry = serde_json::json!({
+        "sop_id": sop_id,
+        "title": title,
+        "version": version,
+        "updated": doc.front.str("updated").flatten(),
+        "status": status,
+        "applies_to": applies_to,
+        "equipment": equipment,
+        "path": path.display().to_string(),
+        "step_count": steps.len(),
+        "unresolved_includes": [],
+        "steps": steps,
+    });
+
+    Ok(Some(entry.to_string()))
+}
+
+/// Publish the working copy: `git add -A`, commit, push.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushResult {
+    pub branch: Option<String>,
+    pub remote: String,
+    pub changed: usize,
+    pub commit: Option<String>,
+    pub up_to_date: bool,
+    pub log: Vec<String>,
+}
+
+/// Stage everything, commit it when there is anything to commit, and push.
+///
+/// The app names the commit and the remote; `git` does the rest, with the operator's
+/// identity and the operator's credentials. See `sop_repo::git`.
+#[tauri::command]
+pub fn repo_push(message: String, state: State<'_, AppState>) -> Reply<PushResult> {
+    let repo = state.repo()?;
+    let settings = state.settings()?;
+    let message = message.trim();
+    let message = if message.is_empty() {
+        format!("field-sop: record {} run(s)", repo.discover().runs.len())
+    } else {
+        message.to_owned()
+    };
+    let report = git::commit_and_push(repo.root(), &settings.remote, &message).map_err(text)?;
+    Ok(PushResult {
+        branch: report.branch,
+        remote: report.remote,
+        changed: report.changed,
+        commit: report.commit,
+        up_to_date: report.up_to_date,
+        log: report.log,
+    })
 }
 
 // ------------------------------------------------------------------ helpers
@@ -390,6 +716,7 @@ fn rows(state: &AppState) -> Reply<Vec<SettingRow>> {
             key: (*key).to_owned(),
             value: settings.get(key),
             description: (*description).to_owned(),
+            in_repository: sop_core::settings::is_repo_key(key),
         })
         .collect())
 }

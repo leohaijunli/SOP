@@ -165,3 +165,86 @@ fn an_ssh_login_name_is_not_a_credential() {
         assert!(!git::has_credentials(url), "{url} is not a credential");
     }
 }
+
+#[test]
+fn git_settings_are_kept_in_the_working_copy_and_travel_with_it() {
+    let scratch = Scratch::new("repo-scope");
+    fs::create_dir_all(&scratch.root).unwrap();
+    let mut settings = Settings::default();
+
+    // What `sop settings set remote upstream` does: write the repository's file.
+    settings.set("remote", "upstream").unwrap();
+    settings.set("branch", "field").unwrap();
+    settings::save_repo(&scratch.root, &settings).unwrap();
+
+    let text = fs::read_to_string(settings::repo_path(&scratch.root)).unwrap();
+    assert!(text.contains("\"remote\": \"upstream\""), "{text}");
+    assert!(text.contains("\"branch\": \"field\""), "{text}");
+    assert!(
+        !text.contains("repository"),
+        "a repository must never carry the machine's path: {text}"
+    );
+
+    // A second machine with its own settings picks the repository's values up.
+    let mut other_machine = Settings::default();
+    other_machine.set("repository", "/home/somebody/else").unwrap();
+    settings::apply_repo(&scratch.root, &mut other_machine).unwrap();
+    assert_eq!(other_machine.remote, "upstream");
+    assert_eq!(other_machine.branch.as_deref(), Some("field"));
+    assert_eq!(
+        other_machine.repository.as_deref(),
+        Some("/home/somebody/else"),
+        "the repository says nothing about where the machine keeps its copy"
+    );
+}
+
+#[test]
+fn a_repository_that_declares_nothing_inherits_the_machine() {
+    let scratch = Scratch::new("repo-absent");
+    fs::create_dir_all(&scratch.root).unwrap();
+    let mut settings = Settings::default();
+    settings.set("remote", "origin").unwrap();
+    settings.set("branch", "main").unwrap();
+
+    // No `.field-sop/settings.json` at all: not an error, and nothing is overwritten.
+    settings::apply_repo(&scratch.root, &mut settings).unwrap();
+    assert_eq!(settings.remote, "origin");
+    assert_eq!(settings.branch.as_deref(), Some("main"));
+    assert!(!settings::repo_path(&scratch.root).exists());
+}
+
+#[test]
+fn clearing_a_branch_in_the_repository_beats_the_machine() {
+    let scratch = Scratch::new("repo-clear");
+    fs::create_dir_all(&scratch.root).unwrap();
+    let mut settings = Settings::default();
+    settings.set("branch", "main").unwrap();
+    settings.unset("branch").unwrap();
+    settings::save_repo(&scratch.root, &settings).unwrap();
+    assert!(
+        fs::read_to_string(settings::repo_path(&scratch.root))
+            .unwrap()
+            .contains("\"branch\": null"),
+        "an unset branch is written as null so clearing it is a visible diff"
+    );
+
+    let mut machine = Settings::default();
+    machine.set("branch", "some-other-branch").unwrap();
+    settings::apply_repo(&scratch.root, &mut machine).unwrap();
+    assert_eq!(
+        machine.branch, None,
+        "the repository's null clears the machine's branch"
+    );
+}
+
+#[test]
+fn a_repository_file_that_is_not_an_object_is_reported() {
+    let scratch = Scratch::new("repo-bad");
+    let path = settings::repo_path(&scratch.root);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "[1, 2, 3]\n").unwrap();
+
+    let mut settings = Settings::default();
+    let error = settings::apply_repo(&scratch.root, &mut settings).unwrap_err().to_string();
+    assert!(error.contains("settings.json"), "{error}");
+}

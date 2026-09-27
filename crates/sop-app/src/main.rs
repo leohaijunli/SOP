@@ -23,6 +23,7 @@ fn main() {
     println!("field-sop: working copy {}", state.root().unwrap_or_default().display());
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::manifest_json,
@@ -33,6 +34,9 @@ fn main() {
             commands::settings_path,
             commands::settings_set,
             commands::settings_unset,
+            commands::settings_repo_path,
+            commands::config_load,
+            commands::config_save,
             commands::open_repository,
             commands::remote_url,
             commands::remote_set,
@@ -51,6 +55,10 @@ fn main() {
             commands::run_state,
             commands::run_end,
             commands::run_attach,
+            commands::run_export,
+            commands::run_export_to,
+            commands::load_external_md,
+            commands::repo_push,
         ])
         .run(tauri::generate_context!())
         .expect("the window could not start");

@@ -1,8 +1,7 @@
 //! Validating a whole repository against `SPEC.md` section 13.
 //!
-//! This is the orchestration half of `tools/validate.py`: it decides which rules apply
-//! to which file, and which rules need the filesystem. The rules themselves live in
-//! `sop_core::check` where they only need one document.
+//! It decides which rules apply to which file, and which rules need the filesystem. The
+//! rules themselves live in `sop_core::check` where they only need one document.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -268,6 +267,7 @@ fn check_procedure(repo: &Repo, loaded: &Loaded, report: &mut Report) {
     report.extend(path, check::front_matter(doc, "procedure"));
     report.extend(path, check::id_matches_filename(doc, "procedure_id", &stem));
     report.extend(path, check::steps(doc, true));
+    report.extend(path, check::headings_without_steps(doc));
 
     if !doc.includes.is_empty() {
         report.error(path, "a procedure must not contain include markers", None);
@@ -300,6 +300,7 @@ fn check_checklist(repo: &Repo, loaded: &Loaded, report: &mut Report) {
     }
 
     report.extend(path, check::steps(doc, false));
+    report.extend(path, check::headings_without_steps(doc));
     report.extend(path, check::duplicate_ids(&resolved.steps));
 
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
@@ -363,6 +364,13 @@ fn check_run(
         ),
     }
 
+    // A record is read against the revision it was recorded against, which is the
+    // snapshot frozen when it started (`SPEC.md` section 8 - checkbox identity, and step
+    // ids with it, are defined by that revision). Resolving against the working copy
+    // instead would mean that every later edit to the checklist retroactively broke every
+    // run that used it, and the editor would refuse to make the edit at all.
+    let snapshot_steps = sop.and_then(|name| repo.run_snapshot_step_ids(name, &stem));
+
     let expected_place = format!("runs/{}", sop.unwrap_or("None"));
     let actual_place = loaded
         .relpath
@@ -376,11 +384,25 @@ fn check_run(
         );
     }
 
-    if let Some(ids) = &checklist_steps {
-        report.extend(path, check::run_results(doc, sop.unwrap_or(""), ids));
-        report.extend(path, check::complete_run_coverage(doc, ids));
+    // With no snapshot there is no recorded revision, so the best available answer is the
+    // current checklist and it is advisory only: the record is evidence, and an SOP edit
+    // is allowed to leave it behind. A record whose checklist does not resolve at all has
+    // already been reported, and its citations are then checked against nothing.
+    let citation = match snapshot_steps {
+        Some(_) => check::Citation::Strict,
+        None => check::Citation::Advisory,
+    };
+    if let Some(ids) = snapshot_steps.as_ref().or(checklist_steps.as_ref()) {
+        report.extend(
+            path,
+            check::run_results(doc, sop.unwrap_or(""), ids, citation),
+        );
+        report.extend(path, check::complete_run_coverage(doc, ids, citation));
     } else {
-        report.extend(path, check::run_results(doc, sop.unwrap_or(""), &[]));
+        report.extend(
+            path,
+            check::run_results(doc, sop.unwrap_or(""), &[], check::Citation::Strict),
+        );
     }
 
     if doc.results.is_empty() {

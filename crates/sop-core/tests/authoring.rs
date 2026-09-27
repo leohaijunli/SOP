@@ -394,6 +394,30 @@ fn an_include_marker_can_be_added_and_removed() {
 }
 
 #[test]
+fn removing_the_last_entry_leaves_exactly_one_trailing_newline() {
+    // `add_include` appends at the end, so removing that include removes the last entry
+    // in the file. Its leading blank line has to go with it: `check` rejects a file that
+    // ends with more than one newline, and the app undoes an edit that would not
+    // validate, so getting this wrong turns "uncheck the box" into a red warning.
+    let text = authoring::add_include(SAMPLE, "procedures/beta.md", None).unwrap();
+    let text = authoring::remove_include(&text, "procedures/beta.md").unwrap();
+    assert_eq!(text, SAMPLE, "add then remove must be a round trip");
+}
+
+#[test]
+fn removing_an_entry_between_neighbours_keeps_the_separator() {
+    // The alpha include sits between the intro prose and the first heading, so removing
+    // it must leave exactly one blank line on each side, not zero and not two.
+    let text = authoring::remove_include(SAMPLE, "procedures/alpha.md").unwrap();
+    assert_eq!(text.matches("<!-- include").count(), 0);
+    assert!(
+        !text.contains("\n\n\n"),
+        "left a double blank line: {text:?}"
+    );
+    assert!(text.contains("Intro prose.\n\n## First"), "{text}");
+}
+
+#[test]
 fn including_the_same_procedure_twice_is_refused() {
     let error = authoring::add_include(SAMPLE, "procedures/alpha.md", None).unwrap_err();
     assert!(error.to_string().contains("already included"), "{error}");

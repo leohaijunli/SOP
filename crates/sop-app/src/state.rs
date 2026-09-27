@@ -45,12 +45,53 @@ impl AppState {
         &self.settings_path
     }
 
+    /// Where the working copy keeps its own settings, which travel with the repository.
+    pub fn settings_repo_path(&self) -> Result<PathBuf, String> {
+        Ok(settings::repo_path(&self.root()?))
+    }
+
+    /// The machine's settings with the repository's own overlaid on top.
     pub fn settings(&self) -> Result<Settings, String> {
-        settings::load(&self.settings_path).map_err(|error| error.to_string())
+        let mut settings =
+            settings::load(&self.settings_path).map_err(|error| error.to_string())?;
+        settings::apply_repo(&self.root()?, &mut settings).map_err(|error| error.to_string())?;
+        Ok(settings)
     }
 
     pub fn save(&self, settings: &Settings) -> Result<(), String> {
         settings::save(&self.settings_path, settings).map_err(|error| error.to_string())
+    }
+
+    /// Change one setting, in the file that owns it.
+    ///
+    /// `remote` and `branch` describe the repository, not the laptop, so they are written
+    /// into the working copy where a clone on another machine picks them up. Everything
+    /// else is machine-local and stays out of the repository.
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        if sop_core::settings::is_repo_key(key) {
+            let root = self.root()?;
+            let mut settings = self.settings()?;
+            settings.set(key, value).map_err(|error| error.to_string())?;
+            return settings::save_repo(&root, &settings).map_err(|error| error.to_string());
+        }
+        let mut settings =
+            settings::load(&self.settings_path).map_err(|error| error.to_string())?;
+        settings.set(key, value).map_err(|error| error.to_string())?;
+        self.save(&settings)
+    }
+
+    /// Return one setting to its default, in the file that owns it.
+    pub fn unset_setting(&self, key: &str) -> Result<(), String> {
+        if sop_core::settings::is_repo_key(key) {
+            let root = self.root()?;
+            let mut settings = self.settings()?;
+            settings.unset(key).map_err(|error| error.to_string())?;
+            return settings::save_repo(&root, &settings).map_err(|error| error.to_string());
+        }
+        let mut settings =
+            settings::load(&self.settings_path).map_err(|error| error.to_string())?;
+        settings.unset(key).map_err(|error| error.to_string())?;
+        self.save(&settings)
     }
 
     /// Open another working copy, and remember it for next time.
@@ -102,8 +143,13 @@ fn resolve(path: &str) -> Result<PathBuf, String> {
 }
 
 /// The content the app needs to find before it will record anything.
+///
+/// Checklists and procedures are no longer required: the app loads them from local
+/// markdown files via "Open file". A working copy just needs to be a writable directory
+/// that can hold the run records and logs the app writes.
 fn looks_like_repository(root: &Path) -> bool {
     root.join(sop_core::vocab::PROJECT_FILE).is_file()
-        || root.join("procedures").is_dir()
-        || root.join("checklists").is_dir()
+        || root.join("runs").is_dir()
+        || root.join("logs").is_dir()
+        || root.join("help").is_dir()
 }

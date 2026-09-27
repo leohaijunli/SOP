@@ -246,6 +246,35 @@ fn an_include_marker_inside_a_fence_is_not_an_include() {
     assert!(doc.includes.is_empty());
 }
 
+#[test]
+fn an_include_marker_inside_a_step_span_is_not_part_of_its_prose() {
+    // A checklist writes the marker after the step it follows and before the next
+    // heading, so it lies inside that step's span. It is an instruction to the resolver,
+    // not prose, and it must not travel into the snapshot, the screen, or the record.
+    let doc = parse(&procedure(
+        "## A\n\n```yaml step\nid: a\nkind: check\n```\n\ntext before\n\n\
+         <!-- include: procedures/b.md -->\n\n\
+         ## B\n\n```yaml step\nid: b\nkind: check\n```\n\ntext after\n",
+    ));
+    let a = doc
+        .steps
+        .iter()
+        .find(|step| step.id.as_deref() == Some("a"))
+        .unwrap();
+    let b = doc
+        .steps
+        .iter()
+        .find(|step| step.id.as_deref() == Some("b"))
+        .unwrap();
+    assert_eq!(a.prose, "text before");
+    assert_eq!(b.prose, "text after");
+    assert_eq!(
+        doc.includes.len(),
+        1,
+        "the marker is still collected for resolution"
+    );
+}
+
 // --------------------------------------------------------------------- links
 
 #[test]

@@ -505,3 +505,264 @@ sop run export <sop> --format csv
 run 记录文件 `runs/<sop>/<run>.md` 是带 front-matter 的合法 run 文件（run_id、sop、
 sop_version、sop_commit、started/ended、status、deviations_count），可被 `validate`、
 `manifest`、桌面应用 History 视图读取，随记录一起提交进 git。
+---
+
+## 八、教程：一份 md 文档 → app 里自动出现的 steps 和记录
+
+目标：你只写 Markdown，app 自动把它变成可执行的步骤、勾选项和实验记录。
+
+### 1. 全部机制只有三条规则
+
+| 你写的东西 | app 当成什么 |
+|---|---|
+| 文件放在 `procedures/` | 可复用的步骤组，供 checklist 用 include 引用 |
+| 文件放在 `checklists/` | 一次实验的清单，就是 app 里可选的那个 SOP |
+| `## 章节` | **一个 step**（它下面的 `yaml step` 块给出这个 step 的身份） |
+| `### 子章节` | 留在所属 step 的正文里，不会变成新 step |
+| ```yaml step``` 块 | 这一步的 `id` / `kind` / `severity` / `captures` |
+| `- [ ]` 行 | 勾选项；文字就是操作员在 app 里看到并勾的那句 |
+| `<!-- include: procedures/x.md -->` | 在这一行的位置展开 x 的步骤 |
+
+**顺序 = 书写顺序**：`##` 出现的先后就是执行顺序，include 标记在哪一行，被展开的块就落在哪一行。没有 `order` 字段，也不需要。
+
+**每个 `##` 章节都必须有 `yaml step` 块**，哪怕只有两行。没有块 = 那一章只是散文，`sop validate` 会点名报错。原因见 §4 的 id 说明。
+
+### 2. 完整示例：一份 procedure
+
+`procedures/zero-drift-check.md`：
+
+````markdown
+---
+kind: procedure
+procedure_id: zero-drift-check
+title: Zero Drift Check
+version: 1
+updated: 2026-09-26
+applies_to: [ground-survey]
+tags: [calibration]
+---
+
+A magnetometer that drifts through the day turns a real gradient into a slow ramp.
+
+## Warm-up baseline
+
+```yaml step
+id: drift-baseline
+kind: measure
+severity: critical
+captures:
+  - key: baseline_nt
+    label: Baseline total field
+    type: number
+    unit: nT
+    required: true
+  - key: settle_min
+    label: Minutes since power-on
+    type: integer
+    required: true
+```
+
+### Before you start
+
+Power the sensor and leave it alone for at least twenty minutes.
+
+- [ ] Sensor powered for at least 20 minutes
+- [ ] Operator and stand checked for ferrous items
+- [ ] Instrument not moved since power-on
+
+## Re-check after the first line
+
+```yaml step
+id: drift-recheck
+kind: measure
+severity: normal
+```
+
+Repeat the reading at the same spot. A difference larger than 5 nT means the sensor is
+drifting and the line has to be repeated.
+````
+
+注意 `### Before you start` 是子章节：它和后面的 `- [ ]` 都属于 `drift-baseline` 这一步，
+不会各自变成 step。
+
+### 3. 完整示例：一份 checklist
+
+`checklists/drift-survey.md`：
+
+````markdown
+---
+kind: checklist
+sop_id: drift-survey
+title: Drift Check Survey
+version: 1
+updated: 2026-09-26
+status: draft
+applies_to: [ground-survey]
+equipment:
+  - Total-field magnetometer
+  - Non-magnetic stand
+---
+
+A short session that runs the drift check, walks one line, and closes out.
+
+## Session setup
+
+```yaml step
+id: drift-setup
+kind: check
+severity: normal
+```
+
+Write down where this is. The baseline only means something next to a location.
+
+- [ ] Site and date recorded
+- [ ] Base station logging
+
+<!-- include: procedures/zero-drift-check.md -->
+
+## Session close-out
+
+```yaml step
+id: drift-closeout
+kind: note
+```
+
+Note anything that would change how a reader interprets the baseline.
+````
+
+`status: draft` 表示还没有用于正式数据；运行它要在 app 里给一个 override 原因（这点设计是故意的）。
+
+### 4. app 自动生成的结果
+
+```bash
+sop validate      # 0 error(s), 0 warning(s)
+sop index         # 重建 dist/manifest.json，app 每次打开现场重新生成，其实不必手动跑
+```
+
+`drift-survey` 这份清单被解析成 4 个 step，顺序就是章节顺序：
+
+| # | id | 标题 | kind | severity | 来自 |
+|---|---|---|---|---|---|
+| 1 | `drift-setup` | Session setup | check | normal | `checklists/drift-survey.md` |
+| 2 | `drift-baseline` | Warm-up baseline | measure | critical | `procedures/zero-drift-check.md` |
+| 3 | `drift-recheck` | Re-check after the first line | measure | normal | `procedures/zero-drift-check.md` |
+| 4 | `drift-closeout` | Session close-out | note | normal | `checklists/drift-survey.md` |
+
+这就是 "id 用于内部引用" 的实现：记录里只写 id，app 用它把 step 和记录对上。
+
+app 里对应三处：
+
+- **Browse**：左边是这 4 步，右边是标题、正文（含子章节）、captures、`- [ ]` 条目。
+- **Run**：左边 step 列表带状态颜色（open/done/skipped/deviated）；右边是 badges、
+  正文、Captures 输入框、**Checklist 勾选框（显示你写的那句文字，不是 "Item 1"）**、
+  Mark done / Skip / Deviate、**Note for this step**。
+- **Edit**：一次编辑一个 step（左列表右表单）；写回的是定义该 step 的那个文件。
+
+### 5. 每步的 note 去哪了
+
+**Note for this step** 写进记录，作为 `> note:` 行；勾选状态写进 `- [x]`；结果写进
+```yaml result``` 块。真实输出（`runs/drift-survey/2026-09-26-drift-02.md`）：
+
+````markdown
+## Warm-up baseline
+
+### Before you start
+
+Power the sensor and leave it alone for at least twenty minutes.
+
+- [x] Sensor powered for at least 20 minutes
+- [ ] Operator and stand checked for ferrous items
+- [ ] Instrument not moved since power-on
+
+_(not completed)_
+
+> note: wind picked up, the stand rocked once
+
+## Re-check after the first line
+
+Repeat the reading at the same spot. A difference larger than 5 nT means the sensor is
+drifting and the line has to be repeated.
+
+```yaml result
+step: drift-recheck
+status: done
+```
+````
+
+**给每一步一个结果**（Mark done / Skip / Deviate）仍然是推荐做法：`complete` 的记录要
+求每一步都有结果，缺结果会校验失败。但**没有结果也不再等于丢数据**：只要这一步填过
+capture，记录里就会出现一个 `yaml result` 块，带数据、不带 `status` 行——表示"做了、
+有数据、没下结论"。备注和附件同样保留。没有结果、也没有任何数据的 step 才不会写块。
+
+### 6. 常见报错
+
+| 报错 | 原因 | 改法 |
+|---|---|---|
+| `chapter 'X' has no yaml step block` | 那一章没有块，所以不是 step | 加 ```yaml step``` 块，最少写 `id` 和 `kind` |
+| `step 'id' must be a string` | 写了 `id: 7`，YAML 把裸数字读成整数 | 写成 `id: "7"` |
+| `step id '1' ... collides with ...` | 数字 id 在 include 时必然撞车 | 见下一节 |
+| `duplicate step id 'x'` | 同一个文件里 id 重复 | 换一个 id |
+| `pre-checked item '- [x]' in a template` | 模板里预勾选了 | 模板一律写 `- [ ]` |
+
+### 7. 关于 id：为什么不能用 1、2、3
+
+`id: "1"` 语法上是合法的，但**在 include 会立刻撞车**：id 的唯一性是在整个清单解析
+之后判定的，而每个 checklist 都有自己的本地步骤、每个 procedure 又会从 1 重新开始。
+实测：
+
+```
+error: line 16: step id '1' from procedures/zero-drift-check.md collides with
+checklists/drift-survey.md; included procedures must not share step ids
+```
+
+还有第二个代价：如果 id 是"按位置递增"，在中间插入一章就得重排后面的编号；而 id 是
+**记录的引用键**，一改就断——历史记录本身不会失效（它读的是自己的 snapshot），但
+`sop run deviations` 这类跨 run 的统计会把同一个 step 拆成两个桶。
+
+推荐写法：**procedure 缩写 + 序号**。短、唯一、插章节也不用重排：
+
+```yaml
+id: zdc-1     # zero-drift-check 第 1 步
+```
+
+## 九、运行记录里还有什么：sensor / hardware / conditions
+
+Start run 面板里除了 run id / operator / site，还能填三项**可选**信息，它们会写进记录
+（front matter + 正文开头各一份）：
+
+```yaml
+sensor:
+  model: GEM GSM-19
+  serial: "4451233"
+  firmware: "7.0"
+hardware:
+  - mag_gcs v0.3.1
+  - tripod
+conditions:
+  weather: clear
+  temp_c: 12
+```
+
+- 三项都可以留空；留空就不写对应的块。
+- `serial`、`temp_c` 这类看起来像数字的值会被加引号，否则 YAML 会把它们读成整数，
+  序列号里的前导零就没了。手写在文件里的裸数字也照样合法。
+- `hardware` 一行一项；`conditions` 一行一个 `key: value`。新增维度（比如 `humidity`）
+  不用改代码。
+- 为什么要重复一遍：front matter 给机器读，正文开头给"只打开导出文件的人"读，两个 run
+  放一起对比时一眼能分清是同一台仪器还是换过固件。
+
+### 键盘操作（Run 视图）
+
+| 键 | 作用 |
+|---|---|
+| `F1` | 显示 / 隐藏帮助面板 |
+| `j` / `k` | 下一步 / 上一步 |
+| `space` | 当前步标记 `done` |
+| `s` | 标记 `skipped`（会问原因） |
+| `d` | 标记 `deviated`（会问原因） |
+| `n` | 跳到当前步的备注输入框 |
+| `ctrl` + `enter` | 结束 run（`complete`） |
+| `/` | 打开帮助面板 |
+
+在输入框里时，`ctrl` + `enter` 依然有效；其它单键快捷键会被输入框吃掉，这是故意的——
+光标在输入框里时敲 `s` 应该是在写字，不是在跳过步骤。

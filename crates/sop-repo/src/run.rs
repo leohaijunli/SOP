@@ -15,9 +15,11 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
-use sop_core::run::{render_record, RunEvent, RunState, RecordStep, StepState};
+use sop_core::run::{render_record, RunEvent, RunState, RecordStep, SensorIdentity, StepState};
 use sop_core::Document;
 use thiserror::Error;
+
+use std::collections::BTreeMap;
 
 use crate::atomic;
 use crate::git;
@@ -43,6 +45,8 @@ pub enum RunError {
     RunExists(String, String),
     #[error("the run '{1}' for checklist '{0}' does not exist")]
     NoRun(String, String),
+    #[error("'{0}' is not a well-formed run id, so it does not name a run")]
+    BadRunId(String),
     #[error("snapshot.md for run '{1}' could not be parsed: {0}")]
     BadSnapshot(String, String),
     #[error("event {line} in the run log is not a well-formed event")]
@@ -63,6 +67,27 @@ pub struct LoadedRun {
     pub record_path: PathBuf,
     /// The human record file `runs/<sop_id>/<run_id>.md`, written on end.
     pub record_file: PathBuf,
+}
+
+/// The facts about the instrument and the conditions that are not in the checklist.
+///
+/// Everything here is optional. A run started without them gets the same record as
+/// before this existed, minus the empty blocks; the fields are additive in the event
+/// log, so a log written by an older build still replays (`SPEC-COMPAT.md`).
+#[derive(Debug, Clone, Default)]
+pub struct RunMeta {
+    pub sensor: Option<SensorIdentity>,
+    pub hardware: Vec<String>,
+    pub conditions: BTreeMap<String, String>,
+}
+
+impl RunMeta {
+    /// True when there is nothing worth writing, so a caller can skip empty blocks.
+    pub fn is_empty(&self) -> bool {
+        self.sensor.as_ref().is_none_or(SensorIdentity::is_empty)
+            && self.hardware.is_empty()
+            && self.conditions.is_empty()
+    }
 }
 
 /// A step as it was at run start: definitions and prose, independent of the run state.
@@ -87,8 +112,20 @@ pub struct CaptureDef {
     pub expected: Option<serde_json::Value>,
 }
 
+fn clean_sop_id(sop_id: &str) -> String {
+    let path = Path::new(sop_id);
+    if path.is_file() {
+        path.file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| sop_id.to_owned())
+    } else {
+        sop_id.to_owned()
+    }
+}
+
 fn run_dir(repo: &Repo, sop_id: &str, run_id: &str) -> PathBuf {
-    repo.resolve(&format!("runs/{sop_id}/{run_id}"))
+    let clean = clean_sop_id(sop_id);
+    repo.resolve(&format!("runs/{clean}/{run_id}"))
 }
 
 /// Freeze a resolved checklist into `snapshot.md` text and the step shapes for replay.
@@ -211,7 +248,8 @@ pub fn load(repo: &Repo, sop_id: &str, run_id: &str) -> Result<LoadedRun, RunErr
     let events_path = dir.join("events.jsonl");
     let snapshot_path = dir.join("snapshot.md");
     let record_path = dir.join("record.md");
-    let record_file = repo.resolve(&format!("runs/{sop_id}/{run_id}.md"));
+    let clean = clean_sop_id(sop_id);
+    let record_file = repo.resolve(&format!("runs/{clean}/{run_id}.md"));
     if !dir.is_dir() {
         return Err(RunError::NoRun(sop_id.to_owned(), run_id.to_owned()));
     }
@@ -283,7 +321,24 @@ pub fn start(
     site: &str,
     override_reason: Option<&str>,
 ) -> Result<LoadedRun, RunError> {
-    let checklist_path = repo.resolve(&format!("checklists/{sop_id}.md"));
+    start_with_meta(repo, sop_id, run_id, operator, site, override_reason, &RunMeta::default())
+}
+
+/// [`start`] with the instrument and conditions the operator recorded up front.
+pub fn start_with_meta(
+    repo: &Repo,
+    sop_id: &str,
+    run_id: &str,
+    operator: &str,
+    site: &str,
+    override_reason: Option<&str>,
+    meta: &RunMeta,
+) -> Result<LoadedRun, RunError> {
+    let checklist_path = if Path::new(sop_id).is_file() {
+        PathBuf::from(sop_id)
+    } else {
+        repo.resolve(&format!("checklists/{sop_id}.md"))
+    };
     if !checklist_path.is_file() {
         return Err(RunError::NoChecklist(sop_id.to_owned()));
     }
@@ -294,9 +349,20 @@ pub fn start(
         return Err(RunError::Draft(sop_id.to_owned()));
     }
 
-    let dir = run_dir(repo, sop_id, run_id);
+    // The recorded `sop` is the checklist's id, not the path it was loaded from. An
+    // external file loaded via "Open file" names the checklist in its front matter; the
+    // run directory and record use that id so History and later run commands can find it.
+    let display_sop = loaded
+        .doc
+        .front
+        .str("sop_id")
+        .flatten()
+        .map(str::to_owned)
+        .unwrap_or_else(|| clean_sop_id(sop_id));
+
+    let dir = run_dir(repo, &display_sop, run_id);
     if dir.is_dir() {
-        return Err(RunError::RunExists(run_id.to_owned(), sop_id.to_owned()));
+        return Err(RunError::RunExists(run_id.to_owned(), display_sop.clone()));
     }
 
     let (snapshot_text, _record_steps) = snapshot_of(&resolved.steps);
@@ -320,12 +386,17 @@ pub fn start(
 
     let mut events = vec![RunEvent::RunStarted {
         at: now(),
-        sop: sop_id.to_owned(),
+        sop: display_sop.clone(),
         sop_version: sop_version.to_owned(),
         sop_commit,
         snapshot_sha256,
         operator: operator.to_owned(),
         site: site.to_owned(),
+        // Only carry a sensor block that has something in it; an all-blank entry is
+        // noise in the log and would render an empty `sensor:` block in the record.
+        sensor: meta.sensor.clone().filter(|sensor| !sensor.is_empty()),
+        hardware: meta.hardware.clone(),
+        conditions: meta.conditions.clone(),
     }];
     if let Some(reason) = override_reason {
         events.push(RunEvent::NoteAdded {
@@ -338,6 +409,22 @@ pub fn start(
 
     let loaded_run = load(repo, sop_id, run_id)?;
     write_record(&loaded_run)?;
+    // Publish the run file as soon as the run starts, not only at `end`, so a run in
+    // progress is already visible to discovery and to the History view. An in-progress
+    // record carries no `status`, so none of the `complete`-only rules apply to it.
+    //
+    // A committed record that already exists is left alone: it is a legacy record for
+    // this run_id written before runs had a directory, and it is the authoritative file
+    // until `end` re-commits the finished run.
+    let clean = clean_sop_id(sop_id);
+    let record_file = repo.resolve(&format!("runs/{clean}/{run_id}.md"));
+    if !record_file.exists() {
+        let text = run_record_text(&loaded_run.state, &loaded_run.steps, run_id);
+        atomic::write(&record_file, &text).map_err(|error| RunError::Io {
+            path: record_file,
+            source: error.source,
+        })?;
+    }
     Ok(loaded_run)
 }
 
@@ -418,7 +505,7 @@ pub fn attach(
 /// The front matter for the run record file, so the record is a valid `runs/...` file.
 fn run_file_front(state: &RunState, run_id: &str) -> String {
     let mut out = String::from("---\nkind: run\n");
-    out.push_str(&format!("run_id: {run_id}\n"));
+    out.push_str(&format!("run_id: {}\n", scalar(run_id)));
     if let Some(value) = &state.sop { out.push_str(&format!("sop: {value}\n")); }
     if let Some(value) = &state.sop_version { out.push_str(&format!("sop_version: {value}\n")); }
     if let Some(value) = &state.sop_commit { out.push_str(&format!("sop_commit: {value}\n")); }
@@ -427,9 +514,44 @@ fn run_file_front(state: &RunState, run_id: &str) -> String {
     if let Some(value) = &state.started { out.push_str(&format!("started: {value}\n")); }
     if let Some(value) = &state.ended { out.push_str(&format!("ended: {value}\n")); }
     if let Some(value) = &state.run_status { out.push_str(&format!("status: {value}\n")); }
+    if let Some(sensor) = &state.sensor
+        && !sensor.is_empty()
+    {
+        out.push_str("sensor:\n");
+        if !sensor.model.is_empty() {
+            out.push_str(&format!("  model: {}\n", scalar(&sensor.model)));
+        }
+        if !sensor.serial.is_empty() {
+            out.push_str(&format!("  serial: {}\n", scalar(&sensor.serial)));
+        }
+        if !sensor.firmware.is_empty() {
+            out.push_str(&format!("  firmware: {}\n", scalar(&sensor.firmware)));
+        }
+    }
+    if !state.hardware.is_empty() {
+        out.push_str("hardware:\n");
+        for item in &state.hardware {
+            out.push_str(&format!("  - {}\n", scalar(item)));
+        }
+    }
+    if !state.conditions.is_empty() {
+        out.push_str("conditions:\n");
+        for (key, value) in &state.conditions {
+            out.push_str(&format!("  {key}: {}\n", scalar(value)));
+        }
+    }
     out.push_str(&format!("deviations_count: {}\n", state.deviations()));
     out.push_str("---\n\n");
     out
+}
+
+/// A front-matter scalar: quoted when a bare word would read as something else.
+///
+/// `sensor.serial` and `conditions.temp_c` are the reason this exists. A serial written
+/// bare as `4451233` is an integer to every YAML reader, and a `str()` read of it then
+/// returns nothing, silently losing the identifier.
+fn scalar(value: &str) -> String {
+    sop_core::front::format_scalar(value)
 }
 
 /// The run record file: front matter plus the rendered record. This is the file the
@@ -453,4 +575,81 @@ pub fn end(repo: &Repo, sop_id: &str, run_id: &str, status: &str) -> Result<Load
         source: error.source,
     })?;
     Ok(loaded)
+}
+
+/// The record document for a run, exactly as [`end`] commits it.
+///
+/// This is the single self-contained experiment record: front matter, then one section
+/// per step carrying its instructions, its checkbox items as the operator left them, and
+/// what was recorded against it. `end` writes it to the repository; export prints it.
+pub fn record_text(repo: &Repo, sop_id: &str, run_id: &str) -> Result<String, RunError> {
+    let loaded = load(repo, sop_id, run_id)?;
+    Ok(run_record_text(&loaded.state, &loaded.steps, run_id))
+}
+
+/// The experiment record for a run, from wherever it can still be read.
+///
+/// A run the app recorded has its own directory, and the record is re-rendered from the
+/// event log so it carries the checkbox state the operator left it in. A record written
+/// before runs carried a directory of their own, or written by hand, has only the file -
+/// and that file *is* the record, so it is returned as it stands.
+pub fn record_document(repo: &Repo, sop_id: &str, run_id: &str) -> Result<String, RunError> {
+    match record_text(repo, sop_id, run_id) {
+        Ok(text) => Ok(text),
+        Err(RunError::NoRun(..)) => {
+            let path = repo.resolve(&format!("runs/{sop_id}/{run_id}.md"));
+            if !path.is_file() {
+                return Err(RunError::NoRun(sop_id.to_owned(), run_id.to_owned()));
+            }
+            repo.read_text(&path).map_err(RunError::Repo)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// The three places a run's material can live.
+fn run_paths(repo: &Repo, sop_id: &str, run_id: &str) -> [PathBuf; 3] {
+    [
+        repo.resolve(&format!("runs/{sop_id}/{run_id}.md")),
+        run_dir(repo, sop_id, run_id),
+        repo.resolve(&format!("logs/{run_id}")),
+    ]
+}
+
+/// The paths that actually exist for a run, in the order they would be removed.
+///
+/// This is what a dry run shows the operator, and `delete` removes exactly this list.
+pub fn existing_paths(repo: &Repo, sop_id: &str, run_id: &str) -> Vec<PathBuf> {
+    run_paths(repo, sop_id, run_id)
+        .into_iter()
+        .filter(|path| path.exists())
+        .collect()
+}
+
+/// Remove a run: its committed record, its run directory, and any log directory.
+///
+/// A record is evidence, so this is deliberately narrow. It removes the three paths a run
+/// can occupy and nothing else. It refuses an id that is not well-formed - which is also
+/// what keeps `..` out of the paths it builds - and refuses a run that is not there.
+/// Asking the operator first is the caller's job; [`existing_paths`] is what to show them.
+pub fn delete(repo: &Repo, sop_id: &str, run_id: &str) -> Result<Vec<PathBuf>, RunError> {
+    if !sop_core::vocab::is_valid_id(run_id) {
+        return Err(RunError::BadRunId(run_id.to_owned()));
+    }
+    let present = existing_paths(repo, sop_id, run_id);
+    if present.is_empty() {
+        return Err(RunError::NoRun(sop_id.to_owned(), run_id.to_owned()));
+    }
+    for path in &present {
+        let result = if path.is_dir() {
+            fs::remove_dir_all(path)
+        } else {
+            fs::remove_file(path)
+        };
+        result.map_err(|source| RunError::Io {
+            path: path.clone(),
+            source,
+        })?;
+    }
+    Ok(present)
 }

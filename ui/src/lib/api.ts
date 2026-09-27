@@ -3,12 +3,17 @@
 // decides whether it is allowed. Callers stay on the renderer side and never assume.
 
 import { invoke } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   CaptureInput,
+  ChecklistEntry,
+  ExportResult,
   Manifest,
   ProcedureChoice,
   ProjectView,
+  PushResult,
   RunEventInput,
+  RunMetaInput,
   RunView,
   SettingRow,
   Status,
@@ -35,6 +40,15 @@ export const procedureChoices = (file: string | null): Promise<ProcedureChoice[]
 export const settingsRows = (): Promise<SettingRow[]> => invoke<SettingRow[]>("settings_rows");
 
 export const settingsPath = (): Promise<string> => invoke<string>("settings_path");
+
+export const settingsRepoPath = (): Promise<string> => invoke<string>("settings_repo_path");
+
+// ---- config (project + settings, one JSON document) -------------------------
+
+export const configLoad = (): Promise<string> => invoke<string>("config_load");
+
+export const configSave = (json: string): Promise<string> =>
+  invoke<string>("config_save", { json });
 
 export const settingsSet = (key: string, value: string): Promise<SettingRow[]> =>
   invoke<SettingRow[]>("settings_set", { key, value });
@@ -89,9 +103,10 @@ export const runStart = (
   runId: string,
   operator: string,
   site: string,
-  overrideReason: string | null
+  overrideReason: string | null,
+  meta: RunMetaInput
 ): Promise<RunView> =>
-  invoke<RunView>("run_start", { sop, runId, operator, site, override: overrideReason });
+  invoke<RunView>("run_start", { sop, runId, operator, site, override: overrideReason, meta });
 
 export const runRecord = (sop: string, runId: string, event: RunEventInput): Promise<RunView> =>
   invoke<RunView>("run_record", { sop, runId, event });
@@ -104,6 +119,44 @@ export const runEnd = (sop: string, runId: string, status: string): Promise<RunV
 
 export const runAttach = (sop: string, runId: string, step: string | null, path: string): Promise<RunView> =>
   invoke<RunView>("run_attach", { sop, runId, step, path });
+
+// ---- publishing ---------------------------------------------------------------
+
+export const runExport = (sop: string, runId: string, out: string | null): Promise<ExportResult> =>
+  invoke<ExportResult>("run_export", { sop, runId, out });
+
+// Open the native save dialog (via tauri-plugin-dialog, which runs it on the correct
+// thread) and hand the chosen path to the shell. Returns null when the operator cancels.
+export const runExportDialog = async (sop: string, runId: string): Promise<ExportResult | null> => {
+  const path = await save({
+    defaultPath: `${sop}-${runId}.md`,
+    filters: [{ name: "Markdown", extensions: ["md"] }],
+  });
+  if (!path) return null;
+  return invoke<ExportResult>("run_export_to", { sop, runId, out: path });
+};
+
+// ---- local file loading ------------------------------------------------------
+
+// Parse a markdown file already chosen by the user (used to re-read an edited file).
+export const loadExternalMd = (path: string): Promise<ChecklistEntry | null> =>
+  invoke<string | null>("load_external_md", { path }).then((text) =>
+    text ? JSON.parse(text) : null
+  );
+
+// Open the native file picker, then ask the shell to parse the chosen markdown file.
+export const openExternalMdDialog = async (): Promise<ChecklistEntry | null> => {
+  const path = await open({
+    multiple: false,
+    filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
+  });
+  if (!path || Array.isArray(path)) return null;
+  const text = await invoke<string | null>("load_external_md", { path });
+  return text ? JSON.parse(text) : null;
+};
+
+export const repoPush = (message: string): Promise<PushResult> =>
+  invoke<PushResult>("repo_push", { message });
 
 // ---- helpers ----------------------------------------------------------------
 

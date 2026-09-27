@@ -102,3 +102,5 @@ Additive changes need none of this. They need only a line in the changelog below
 | 1 | 2026-09-24 | Baseline. Content schema, capture types including `attach`, `expected` on captures, checkbox semantics, one-run-one-directory storage. |
 | 1 | 2026-09-25 | Additive: `help/*.md` as a fourth file kind for in-app documentation. An older reader does not look in `help/`, so nothing is misread. |
 | 1 | 2026-09-25 | Additive: `project.md` as the repository's identity. A reader that does not know the file ignores it, and `sop project` only ever rewrites one front-matter key, so unknown keys survive an edit. |
+| 1 | 2026-09-26 | Additive: optional `sensor`, `hardware`, and `conditions` on a run record, and the matching optional fields on `RunStarted`. A reader that predates them warns about an unknown front-matter key and replays a log with unknown event fields untouched, and the record only gains keys a reader may ignore. |
+| 1 | 2026-09-26 | Additive: a `yaml result` block may omit `status`, recording that a step happened with no outcome. The vocabulary is unchanged, and a reader that requires the key fails on the file openly rather than misreading it as `done`. |

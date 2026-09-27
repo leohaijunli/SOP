@@ -1,11 +1,11 @@
 //! Command line interface for a field-sop content repository.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use sop_core::{Settings, Value};
-use sop_repo::{Repo, git, manifest, project, report::display_path, settings, validate};
+use sop_repo::{Repo, git, manifest, project, report::display_path, run, settings, validate};
 
 mod preview;
 
@@ -79,6 +79,10 @@ enum Command {
     Settings {
         #[command(subcommand)]
         action: Option<SettingsAction>,
+        /// Repository root. The git settings live in the working copy, so this decides
+        /// which one is read and written.
+        #[arg(long, value_name = "PATH")]
+        repo: Option<PathBuf>,
     },
     /// Execute a run: start it, record events, recover it, attach logs.
     Run {
@@ -173,19 +177,38 @@ enum RunAction {
         /// The checklist's sop_id.
         sop: String,
     },
-    /// Export a checklist's run data as CSV for the processing pipelines.
+    /// Export run data: CSV for the processing pipelines, Markdown for the record.
     Export {
         /// The checklist's sop_id.
         sop: String,
         /// Output format.
         #[arg(long, value_enum, default_value_t = ExportFormat::Csv)]
         format: ExportFormat,
+        /// The run to export as Markdown. Required by `--format markdown`.
+        #[arg(long, value_name = "RUN_ID")]
+        run: Option<String>,
+        /// Write to this file instead of standard output.
+        #[arg(long, value_name = "PATH")]
+        out: Option<PathBuf>,
+    },
+    /// Delete a run: its record, its directory, and its log directory.
+    Delete {
+        /// The checklist's sop_id.
+        sop: String,
+        /// The run's id.
+        run_id: String,
+        /// Remove it. Without this the command only lists what it would remove.
+        #[arg(long)]
+        yes: bool,
     },
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
 enum ExportFormat {
+    /// One row per captured value, across every run of the checklist.
     Csv,
+    /// One self-contained record document for a single run.
+    Markdown,
 }
 
 #[derive(Debug, Subcommand)]
@@ -231,7 +254,7 @@ fn main() -> ExitCode {
         Command::Status { repo } => run_status(repo),
         Command::Remote { url, name, repo } => run_remote(repo, name, url),
         Command::Project { action, repo } => run_project(repo, action),
-        Command::Settings { action } => run_settings(action),
+        Command::Settings { action, repo } => run_settings(repo, action),
         Command::Run { action, repo } => run_run(repo, action),
     }
 }
@@ -278,6 +301,24 @@ fn load_settings() -> (PathBuf, Settings) {
             eprintln!("continuing with defaults; fix the file or run `sop settings path`");
             (path, Settings::default())
         }
+    }
+}
+
+/// Write a setting to the file that owns it.
+///
+/// The git settings describe the repository, so they are written into the working copy
+/// where they travel with it. The rest are this machine's, and `save` writes the machine
+/// file only - never a copy of the repository's values, so the two files stay distinct.
+fn save_setting(
+    machine_path: &Path,
+    root: &Path,
+    key: &str,
+    settings: &Settings,
+) -> Result<(), settings::SettingsError> {
+    if sop_core::settings::is_repo_key(key) {
+        settings::save_repo(root, settings)
+    } else {
+        settings::save(machine_path, settings)
     }
 }
 
@@ -443,17 +484,33 @@ fn run_remote(repo: Option<PathBuf>, name: Option<String>, url: Option<String>) 
     }
 }
 
-fn run_settings(action: Option<SettingsAction>) -> ExitCode {
-    let (path, mut settings) = load_settings();
+fn run_settings(repo: Option<PathBuf>, action: Option<SettingsAction>) -> ExitCode {
+    let (path, machine) = load_settings();
+    let repo = repository_for(repo, &machine);
+    let repo_path = settings::repo_path(repo.root());
+    let mut settings = machine;
+    if let Err(error) = settings::apply_repo(repo.root(), &mut settings) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
 
     let Some(action) = action else {
         println!("settings   {}", path.display());
         if !path.exists() {
             println!("           no file yet; these are the defaults");
         }
+        println!("repository {}", repo_path.display());
+        if !repo_path.exists() {
+            println!("           no file yet; the machine's values apply");
+        }
         for (key, description) in sop_core::settings::KEYS {
             let value = settings.get(key).unwrap_or_else(|| "(unset)".to_owned());
-            println!("  {key:<20} {value:<28} {description}");
+            let scope = if sop_core::settings::is_repo_key(key) {
+                "repo"
+            } else {
+                "machine"
+            };
+            println!("  {key:<20} {value:<28} [{scope}] {description}");
         }
         println!(
             "\nThe remote URL is kept by git, in the repository's own configuration, so that no \
@@ -472,7 +529,7 @@ fn run_settings(action: Option<SettingsAction>) -> ExitCode {
                 eprintln!("{error}");
                 return ExitCode::FAILURE;
             }
-            match settings::save(&path, &settings) {
+            match save_setting(&path, repo.root(), &key, &settings) {
                 Ok(()) => {
                     println!("{} = {}", key, settings.get(&key).unwrap_or_default());
                     ExitCode::SUCCESS
@@ -488,7 +545,7 @@ fn run_settings(action: Option<SettingsAction>) -> ExitCode {
                 eprintln!("{error}");
                 return ExitCode::FAILURE;
             }
-            match settings::save(&path, &settings) {
+            match save_setting(&path, repo.root(), &key, &settings) {
                 Ok(()) => {
                     println!(
                         "{key} = {}",
@@ -618,7 +675,6 @@ fn run_index(repo: Option<PathBuf>, out: Option<PathBuf>) -> ExitCode {
 
 
 fn run_run(repo: Option<PathBuf>, action: RunAction) -> ExitCode {
-    use sop_repo::run;
     let (_, settings) = load_settings();
     let repo = repository_for(repo, &settings);
 
@@ -670,8 +726,13 @@ fn run_run(repo: Option<PathBuf>, action: RunAction) -> ExitCode {
         }
         RunAction::Deviations { sop } => run_deviations(&repo, &sop)
             .map(|count| println!("{count} deviation(s) across {sop}")),
-        RunAction::Export { sop, format } => run_export(&repo, &sop, &format)
-            .map(|rows| println!("exported {rows} row(s) across {sop}")),
+        RunAction::Export {
+            sop,
+            format,
+            run,
+            out,
+        } => run_export(&repo, &sop, &format, run.as_deref(), out.as_deref()),
+        RunAction::Delete { sop, run_id, yes } => run_delete(&repo, &sop, &run_id, yes),
     };
 
     match result {
@@ -767,47 +828,110 @@ fn run_deviations(repo: &Repo, sop: &str) -> Result<usize, String> {
     Ok(count)
 }
 
-fn run_export(repo: &Repo, sop: &str, format: &ExportFormat) -> Result<usize, String> {
-    let prefix = format!("runs/{sop}/");
-    let mut rows = 0;
-    match format {
+/// Export run data to standard output, or to a file when `--out` names one.
+///
+/// The payload goes to standard output and the summary to standard error, so
+/// `sop run export ... > captures.csv` produces a file that is only the data.
+fn run_export(
+    repo: &Repo,
+    sop: &str,
+    format: &ExportFormat,
+    run: Option<&str>,
+    out: Option<&Path>,
+) -> Result<(), String> {
+    let (text, what) = match format {
         ExportFormat::Csv => {
-            let mut out = String::from("run_id,step,key,value\n");
-            for path in repo.discover().runs {
-                let rel = repo.relpath(&path);
-                if !rel.starts_with(&prefix) {
-                    continue;
-                }
-                let loaded = repo.load(&path).map_err(|error| error.to_string())?;
-                let run_id = loaded
-                    .doc
-                    .front
-                    .str("run_id")
-                    .flatten()
-                    .unwrap_or(&rel);
-                for result in &loaded.doc.results {
-                    let step = result.step.as_deref().unwrap_or("?");
-                    for (key, value) in &result.captures {
-                        let key = key.as_str().unwrap_or("?");
-                        let rendered = match value {
-                            sop_core::Value::String(text) => text.clone(),
-                            other => serde_json::to_string(other)
-                                .map(|text| {
-                                    let text = text.trim_matches('"').to_owned();
-                                    if text == "null" { String::new() } else { text }
-                                })
-                                .unwrap_or_default(),
-                        };
-                        out.push_str(&format!(
-                            "{run_id},{step},{key},\"{}\"\n",
-                            rendered.replace('"', "\"\"")
-                        ));
-                        rows += 1;
-                    }
-                }
+            let (text, rows) = export_captures_csv(repo, sop)?;
+            (text, format!("{rows} capture row(s) across {sop}"))
+        }
+        ExportFormat::Markdown => {
+            let Some(run_id) = run else {
+                return Err(
+                    "--format markdown needs --run <run_id>: one document is one experiment record"
+                        .to_owned(),
+                );
+            };
+            let text = run::record_document(repo, sop, run_id).map_err(|error| error.to_string())?;
+            (text, format!("the record for {run_id}"))
+        }
+    };
+
+    match out {
+        Some(path) => {
+            std::fs::write(path, text).map_err(|error| format!("{}: {error}", path.display()))?;
+            eprintln!("wrote {what} to {}", path.display());
+        }
+        None => print!("{text}"),
+    }
+    Ok(())
+}
+
+/// Every captured value across a checklist's runs, as CSV.
+fn export_captures_csv(repo: &Repo, sop: &str) -> Result<(String, usize), String> {
+    let prefix = format!("runs/{sop}/");
+    let mut out = String::from("run_id,step,key,value\n");
+    let mut rows = 0;
+    for path in repo.discover().runs {
+        let rel = repo.relpath(&path);
+        if !rel.starts_with(&prefix) {
+            continue;
+        }
+        let loaded = repo.load(&path).map_err(|error| error.to_string())?;
+        let run_id = loaded
+            .doc
+            .front
+            .str("run_id")
+            .flatten()
+            .unwrap_or(&rel);
+        for result in &loaded.doc.results {
+            let step = result.step.as_deref().unwrap_or("?");
+            for (key, value) in &result.captures {
+                let key = key.as_str().unwrap_or("?");
+                let rendered = match value {
+                    sop_core::Value::String(text) => text.clone(),
+                    other => serde_json::to_string(other)
+                        .map(|text| {
+                            let text = text.trim_matches('"').to_owned();
+                            if text == "null" { String::new() } else { text }
+                        })
+                        .unwrap_or_default(),
+                };
+                out.push_str(&format!(
+                    "{run_id},{step},{key},\"{}\"\n",
+                    rendered.replace('"', "\"\"")
+                ));
+                rows += 1;
             }
-            print!("{out}");
         }
     }
-    Ok(rows)
+    Ok((out, rows))
+}
+
+/// Delete a run, or - without `--yes` - only say what would be deleted.
+///
+/// A record is evidence and deleting one is irreversible outside git, so the default is
+/// a dry run: the operator sees the exact paths, then repeats the command with `--yes`.
+fn run_delete(repo: &Repo, sop: &str, run_id: &str, yes: bool) -> Result<(), String> {
+    if !sop_core::vocab::is_valid_id(run_id) {
+        return Err(format!("'{run_id}' is not a well-formed run id"));
+    }
+    let present = run::existing_paths(repo, sop, run_id);
+    if present.is_empty() {
+        return Err(format!("no run '{run_id}' for checklist '{sop}'"));
+    }
+    let listed = present
+        .iter()
+        .map(|path| format!("  {}", repo.relpath(path)))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if !yes {
+        eprintln!("would remove:\n{listed}");
+        eprintln!("re-run with --yes to delete run '{run_id}' for good");
+        return Ok(());
+    }
+    let removed = run::delete(repo, sop, run_id).map_err(|error| error.to_string())?;
+    eprintln!("deleted {} path(s):", removed.len());
+    eprintln!("{listed}");
+    Ok(())
 }

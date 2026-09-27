@@ -22,6 +22,23 @@ use thiserror::Error;
 /// The remote name used when settings do not say otherwise.
 pub const DEFAULT_REMOTE: &str = "origin";
 
+/// Settings that describe the repository rather than the machine.
+///
+/// These travel with the working copy in `.field-sop/settings.json`, so a clone on a
+/// second laptop already knows which remote and branch to use - which is the whole point
+/// of keeping them: an operator should not have to be told them, or remember them, on a
+/// machine they have just set up.
+///
+/// Everything else is machine-local. An absolute working-copy path is wrong on every
+/// machine but one, and the list of recently opened copies is a record of this laptop's
+/// history, not the repository's.
+pub const REPO_KEYS: &[&str] = &["remote", "branch"];
+
+/// Whether `key` belongs to the repository rather than to this machine.
+pub fn is_repo_key(key: &str) -> bool {
+    REPO_KEYS.contains(&key)
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SettingsError {
     #[error("'{0}' is not a setting; run `sop settings` to list them")]
@@ -87,11 +104,13 @@ pub const KEYS: &[(&str, &str)] = &[
     ),
     (
         "remote",
-        "Name of the git remote to use, for example origin. Not a URL.",
+        "Name of the git remote to use, for example origin. Not a URL. Kept in the \
+         repository, so a clone on another machine already has it.",
     ),
     (
         "branch",
-        "Branch runs are recorded on. Absent means the current branch.",
+        "Branch runs are recorded on. Absent means the current branch. Kept in the \
+         repository, so a clone on another machine already has it.",
     ),
     (
         "help-open",
@@ -202,6 +221,58 @@ impl Settings {
         self.recent_repositories.retain(|known| known != repository);
         self.recent_repositories.insert(0, repository.to_owned());
         self.recent_repositories.truncate(10);
+    }
+
+    /// The repository-scoped settings as JSON, for `.field-sop/settings.json`.
+    ///
+    /// `branch` is written even when it is unset, as `null`, so that clearing a branch in
+    /// the window is a change `git diff` shows rather than a key that silently vanishes.
+    pub fn repo_json(&self) -> String {
+        let mut map = serde_json::Map::new();
+        map.insert("remote".to_owned(), Json::String(self.remote.clone()));
+        map.insert(
+            "branch".to_owned(),
+            match &self.branch {
+                Some(branch) => Json::String(branch.clone()),
+                None => Json::Null,
+            },
+        );
+        let mut out =
+            serde_json::to_string_pretty(&Json::Object(map)).unwrap_or_else(|_| "{}".to_owned());
+        out.push('\n');
+        out
+    }
+
+    /// Apply a repository's own settings over this machine's.
+    ///
+    /// Only the keys the repository declares are touched, so the file is a set of
+    /// overrides rather than a second complete copy. `"branch": null` clears the
+    /// machine's branch, which is how a repository says "whatever the checkout is on".
+    pub fn apply_repo_json(&mut self, text: &str) -> Result<(), SettingsError> {
+        if text.trim().is_empty() {
+            return Ok(());
+        }
+        let value: Json =
+            serde_json::from_str(text).map_err(|error| SettingsError::Json(error.to_string()))?;
+        let Some(map) = value.as_object() else {
+            return Err(SettingsError::Json(
+                "the repository settings must be a JSON object".to_owned(),
+            ));
+        };
+        if let Some(remote) = map.get("remote").and_then(Json::as_str)
+            && check_remote_name(remote).is_ok()
+        {
+            self.remote = remote.to_owned();
+        }
+        if let Some(branch) = map.get("branch") {
+            match branch.as_str() {
+                Some(name) if !name.is_empty() => self.branch = Some(name.to_owned()),
+                Some(_) => {}
+                None if branch.is_null() => self.branch = None,
+                None => {}
+            }
+        }
+        Ok(())
     }
 }
 

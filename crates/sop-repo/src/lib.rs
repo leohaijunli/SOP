@@ -266,12 +266,21 @@ pub fn resolve_checklist(repo: &Repo, checklist: &Loaded) -> ResolvedChecklist {
                 steps.push(step);
             }
             Item::Include(line, target) => {
-                let path = repo.resolve(&target);
+                let path = if repo.resolve(&target).is_file() {
+                    repo.resolve(&target)
+                } else {
+                    let parent = Path::new(&checklist.path)
+                        .parent()
+                        .unwrap_or_else(|| Path::new(&checklist.path));
+                    parent.join(&target)
+                };
                 if !path.is_file() {
                     problems.push((line, format!("include target does not exist: {target}")));
                     continue;
                 }
-                if !path.starts_with(&procedures_root) {
+                if path.starts_with(&procedures_root) || !checklist.path.starts_with(repo.root()) {
+                    // Allowed
+                } else {
                     problems.push((line, format!("include target is not a procedure: {target}")));
                     continue;
                 }
@@ -310,6 +319,30 @@ impl Repo {
         Some(
             resolved
                 .steps
+                .iter()
+                .filter_map(|step| step.id.clone())
+                .collect(),
+        )
+    }
+
+    /// Step ids of the checklist revision a run was recorded against, read from the
+    /// snapshot frozen when it started.
+    ///
+    /// This is the set a record must be interpreted against (`SPEC.md` section 8): a
+    /// checklist is allowed to change after a run, and the record must stay valid when
+    /// it does. `None` means the run has no snapshot, which is only true of records
+    /// written before runs became self-contained directories.
+    pub fn run_snapshot_step_ids(&self, sop_id: &str, run_id: &str) -> Option<Vec<String>> {
+        let path = self
+            .root
+            .join("runs")
+            .join(sop_id)
+            .join(run_id)
+            .join("snapshot.md");
+        let text = self.read_text(&path).ok()?;
+        let doc = Document::parse(&text).ok()?;
+        Some(
+            doc.steps
                 .iter()
                 .filter_map(|step| step.id.clone())
                 .collect(),

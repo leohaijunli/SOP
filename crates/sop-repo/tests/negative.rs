@@ -4,8 +4,7 @@
 //! validation fails with a recognisable message. A clean copy must still pass, so the
 //! suite cannot pass by rejecting everything.
 //!
-//! This is the Rust port of `tools/selftest.py`, which is the reference until the
-//! Python tooling is removed.
+//! It replaced the transitional `tools/selftest.py`, which is now removed.
 
 use std::fs;
 
@@ -28,6 +27,38 @@ const PROJECT: &str = "project.md";
 /// One case: a name, a way to break the repository, and the message that must appear.
 type Case = (&'static str, fn(&Scratch), &'static str);
 
+/// Give a flat run record the snapshot it would have had if it had been started with
+/// `sop run start`: the checklist resolved as it is now, one step block per id.
+///
+/// A record is read against the revision frozen at start, so a case that wants to test
+/// "this record cites a step that does not exist" has to give the record a revision of
+/// its own first. Without one the check is advisory by design.
+fn freeze_run_snapshot(root: &Scratch, record: &str) {
+    let path = std::path::Path::new(record);
+    let sop = path
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let run = path.file_stem().unwrap().to_str().unwrap();
+    let ids = root
+        .repo()
+        .checklist_step_ids(sop)
+        .unwrap_or_else(|| panic!("fixture drifted: '{sop}' does not resolve"));
+
+    let mut text = String::from("---\nkind: snapshot\n---\n\n");
+    for id in ids {
+        text.push_str(&format!(
+            "## {id}\n\n```yaml step\nid: {id}\nkind: check\nseverity: normal\n```\n\n"
+        ));
+    }
+    let dir = root.path(&format!("runs/{sop}/{run}"));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("snapshot.md"), text).unwrap();
+}
+
 fn cases() -> Vec<Case> {
     vec![
         (
@@ -36,9 +67,19 @@ fn cases() -> Vec<Case> {
             "missing required key 'version'",
         ),
         (
+            "a chapter with no yaml step block",
+            |root| root.append(PROC, "\n## A chapter that is not a step\n\nJust prose.\n"),
+            "has no `yaml step` block",
+        ),
+        (
             "duplicate step id",
             |root| root.replace_once(PROC, "id: poweron-clock", "id: poweron-supply"),
             "duplicate step id 'poweron-supply'",
+        ),
+        (
+            "an all-digit step id written without quotes",
+            |root| root.replace_once(PROC, "id: poweron-clock", "id: 7"),
+            "'id' must be a string",
         ),
         (
             "invalid step id",
@@ -136,8 +177,11 @@ fn cases() -> Vec<Case> {
             "has no 'reason'",
         ),
         (
-            "result cites an unknown step",
-            |root| root.replace_once(CAL_RUN, "step: noise-verdict", "step: noise-summary"),
+            "result cites a step outside its snapshot",
+            |root| {
+                freeze_run_snapshot(root, CAL_RUN);
+                root.replace_once(CAL_RUN, "step: noise-verdict", "step: noise-summary");
+            },
             "not in checklist",
         ),
         (
@@ -148,6 +192,7 @@ fn cases() -> Vec<Case> {
         (
             "complete run missing a result",
             |root| {
+                freeze_run_snapshot(root, CAL_RUN);
                 let text = root.read(CAL_RUN);
                 let block = "## hygiene-person\n\n```yaml result\nstep: hygiene-person\nstatus: done\n```\n\n";
                 assert!(
@@ -185,7 +230,7 @@ fn cases() -> Vec<Case> {
         ),
         (
             "help page missing a section",
-            |root| root.replace_once(HELP, "section: Reference\n", ""),
+            |root| root.replace_once(HELP, "section: PX4 Operations\n", ""),
             "missing required key 'section'",
         ),
         (
@@ -234,7 +279,7 @@ fn warning_cases() -> Vec<Warning> {
     vec![
         (
             "two help pages claiming the same panel position",
-            |root| root.replace_once(HELP_2, "order: 20", "order: 10"),
+            |root| root.replace_once(HELP_2, "order: 25", "order: 10"),
             "same 'order'",
         ),
         (

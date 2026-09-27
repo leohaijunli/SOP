@@ -144,12 +144,16 @@ fn remove_range(lines: &mut Vec<String>, range: Range<usize>) {
     }
     let start = range.start;
     lines.drain(range);
-    if start > 0
-        && start < lines.len()
-        && lines[start - 1].trim().is_empty()
-        && lines[start].trim().is_empty()
-    {
+    if start == 0 || !lines[start - 1].trim().is_empty() {
+        return;
+    }
+    if start < lines.len() && lines[start].trim().is_empty() {
+        // The entry sat between two blanks, so one of them stays as the separator.
         lines.remove(start);
+    } else if start == lines.len() {
+        // The entry was the last one, which turns its leading separator into a trailing
+        // blank line. The format allows only one newline at the end of a file.
+        lines.remove(start - 1);
     }
 }
 

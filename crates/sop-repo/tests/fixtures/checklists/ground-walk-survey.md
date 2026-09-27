@@ -153,3 +153,5 @@ error that looks like a gradient, so this is checked before every line.
 
 - [ ] Bubble centred
 - [ ] Height recorded against the line
+
+<!-- include: procedures/absolute-value-check.md -->

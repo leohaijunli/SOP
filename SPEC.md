@@ -2,8 +2,8 @@
 
 Version 1 - 2026-09-24
 
-This document is authoritative. `tools/validate.py` implements the checks described
-here; when the two disagree, this document is wrong and should be fixed.
+This document is authoritative. The Rust code in `crates/` implements the checks
+described here; when the two disagree, this document is wrong and should be fixed.
 
 ## 1. Scope
 
@@ -63,11 +63,21 @@ what the tooling does when it meets a file from the future.
 - Must match `^[a-z0-9][a-z0-9-]*$`.
 - Must be unique within the file that defines them.
 - After resolving include markers, all step ids in a checklist must be unique.
-- Ids are permanent. Renaming an id breaks every run record that cites it. To retire
-  a step, set `deprecated: true` and stop using it.
+- Ids are permanent in the sense that they are never reused for a different step. To
+  retire a step, set `deprecated: true` and stop using it rather than deleting it where
+  the content allows. Renaming an id does not invalidate the run records that cite it -
+  a record is read against its own snapshot - but it does break the thread for a reader
+  comparing two revisions of a checklist, which is what the permanence is protecting.
 
 Step ids are referenced by run records, so they are part of the data contract, not a
 display detail.
+
+Recommended form: the abbreviation of the procedure that defines the step, then a short
+suffix unique within that procedure. `abs-reference` (from `absolute-value-check`),
+`cond-location` (from `conditions-log`), and `zdc-1` are all in this shape. Uniqueness is
+checked *after* include resolution, so a bare number is the one form to avoid: two
+procedures that both start at `1` collide the moment a checklist includes both. When an id
+is all digits, quote it (`id: "7"`), because YAML otherwise reads it as an integer.
 
 ## 5. Procedures (`procedures/*.md`)
 
@@ -108,7 +118,11 @@ change how a step is executed or evaluated. Fixing a typo does not require a bum
 
 ## 6. Steps
 
-A step is a `##` heading followed by optional structured metadata and then prose.
+A step is a `##` heading, then a `yaml step` block that gives it its `id`, then the prose
+the operator reads. The block is what makes a chapter a step: the `id` is cited by run
+records and cannot be derived from the heading, because a heading is display text and
+gets reworded (section 4). A `##` chapter with no block is prose, and `sop validate`
+names it.
 
 The `yaml step` block:
 
@@ -331,8 +345,12 @@ accepted but UTC is preferred, because it must line up with instrument logs.
 `sop_commit` is the git commit it was read from. Both are required for the record to
 be reviewable later - without them, nobody can tell which revision produced the data.
 
-Each executed step gets one `yaml result` block. `step` must match an id that exists
-in the referenced checklist after include markers are resolved.
+Each executed step gets one `yaml result` block. `step` must match an id of the checklist
+*revision the run was recorded against* - the `snapshot.md` frozen when it started - not
+of whatever the checklist says today. A checklist is allowed to change after a run, and
+the record has to stay valid when it does. A record written before runs became
+self-contained directories has no snapshot, so it is checked against the current
+checklist and any difference is reported as a warning rather than an error.
 
 A result whose `status` is `skipped` or `deviated` requires a `reason` string. Both
 are equally useful signals:
@@ -342,6 +360,19 @@ are equally useful signals:
   of the whole system, because it is the raw material for improving the procedures.
 
 `deviations_count` counts `deviated` results only, not `skipped` ones.
+
+`status` may be omitted from a result block. That means the step happened and its data is
+recorded, but the operator gave no outcome for it. It is not the same as `done`, which is
+a judgement that the step met its acceptance criteria, and a `complete` run may not
+contain one: a run whose steps have no outcome is not complete. A step with neither an
+outcome nor any data is left out of the record rather than written as a placeholder.
+
+`sensor`, `hardware`, and `conditions` are optional front matter that records what the
+checklist cannot know. `sensor` is a mapping of `model`, `serial`, and `firmware`;
+`hardware` is a list of software and equipment; `conditions` is a free-form mapping such
+as `weather` and `temp_c`. Values are text, and a hand-written number or boolean is
+accepted. They are what lets two runs at the same site be told apart later, so the record
+also restates them in its body for a reader who never opens the front matter.
 
 ## 9. Log attachments
 
@@ -462,6 +493,8 @@ one read and no extra file access:
 
 - front matter parses, and required keys per kind are present;
 - ids are well-formed, and unique within a file and after include resolution;
+- every `##` chapter of a procedure or checklist carries a `yaml step` block, so a
+  chapter that was meant to be a step is never silently passed over;
 - include markers resolve to existing procedures, with no duplicate inclusion;
 - `applies_to` values come from the controlled vocabulary;
 - capture `expected` is only declared on `number`, `integer`, `select`, or `bool`;
@@ -469,9 +502,14 @@ one read and no extra file access:
 - no `- [x]` pre-checked items appear in a procedure or checklist;
 - a declared `schema` is not newer than the tooling supports;
 - relative Markdown links resolve to files or anchors that exist;
-- run records reference an existing checklist, and their `step` ids exist in it;
-- `skipped` and `deviated` results both carry a `reason`;
-- for `complete` runs, every resolved step has a result and none is `skipped`;
+- run records reference an existing checklist, and their `step` ids exist in the revision
+  they were recorded against (their `snapshot.md`); a record with no snapshot is checked
+  against the current checklist and any difference is a warning;
+- `skipped` and `deviated` results both carry a `reason`; a result may omit `status`, but
+  an unknown value is an error rather than being read as silence;
+- for `complete` runs, every step of the recorded revision has a result, every result
+  carries a `status`, and none is `skipped`; the coverage half of this is a warning for a
+  record with no snapshot;
 - `run_id` matches the filename, and `deviations_count` matches reality;
 - `logs[].path` exists and its `sha256`/`size` match the file on disk;
 - help pages carry the required keys, a valid `help_id` matching the filename, and a

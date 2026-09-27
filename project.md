@@ -1,10 +1,10 @@
 ---
 kind: project
-project_id: uvic-geomag-survey
-title: Geomagnetic Survey Field Work
+project_id: p
+title: T
 institution: University of Victoria
 lead: leo
-updated: 2026-09-25
+updated: 2026-09-26
 summary: Sensor calibration, ground walk surveys, interference and navigation tests, and UAV-mounted survey work.
 applies_to: [calibration, ground-survey, interference, navigation, uav-survey]
 tags: [campaign]

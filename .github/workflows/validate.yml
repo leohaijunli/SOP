@@ -77,24 +77,3 @@ jobs:
           path: |
             target/release/bundle/deb/*.deb
             target/release/bundle/appimage/*.AppImage
-
-  # Transitional, and deleted with tools/ once the Rust CLI has been trusted in the field
-  # for a while. It is kept in CI so that a divergence between the two implementations
-  # fails the build instead of passing silently. See docs/DECISIONS.md D11.
-  python-cross-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: python3 -m pip install --disable-pip-version-check --quiet pyyaml
-
-      - name: Validate content
-        run: python3 tools/validate.py
-
-      - name: Validator negative tests
-        run: python3 tools/selftest.py

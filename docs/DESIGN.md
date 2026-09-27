@@ -312,10 +312,11 @@ correctness, only for usability.
 
 ## 9. Migration from the Python tooling
 
-`tools/soplib.py`, `tools/validate.py`, and `tools/build_index.py` are **transitional**.
-They keep content validated until the Rust CLI reaches parity at P1/P3, and they are the
-reference behaviour the Rust port is tested against. They are deleted once parity is
-proven, so that only one implementation of the format exists.
+`tools/soplib.py`, `tools/validate.py`, and `tools/build_index.py` were **transitional**.
+They kept content validated until the Rust CLI reached parity at P1/P3, and they were the
+reference behaviour the Rust port was tested against. They have been deleted now that
+parity is proven, so that only one implementation of the format exists. The history is
+in git and the decision is `docs/DECISIONS.md` D11.
 
 ## 10. What we deliberately do differently from procnote
 

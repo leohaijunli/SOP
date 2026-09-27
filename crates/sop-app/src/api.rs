@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use sop_core::authoring::{CaptureDraft, ExpectedDraft, StepChanges, StepDraft};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,6 +49,8 @@ pub struct SettingRow {
     pub key: String,
     pub value: Option<String>,
     pub description: String,
+    /// True when this key is kept in the working copy rather than on this machine.
+    pub in_repository: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -102,10 +105,42 @@ pub struct RunView {
     pub sop_version: Option<String>,
     pub sop_commit: Option<String>,
     pub deviations_count: usize,
+    pub sensor: Option<SensorView>,
+    pub hardware: Vec<String>,
+    pub conditions: BTreeMap<String, String>,
     pub steps: Vec<RunStepView>,
     pub run_notes: Vec<String>,
     pub run_attachments: Vec<RunAttachmentView>,
     pub record_path: String,
+}
+
+/// The instrument as the start panel entered it and the view displays it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SensorView {
+    pub model: Option<String>,
+    pub serial: Option<String>,
+    pub firmware: Option<String>,
+}
+
+/// What the start panel sends along with the run's identity.
+///
+/// Everything is optional, so a run can start with none of it and the record simply has
+/// no instrument block. `conditions` is a map so a checklist can add a dimension without
+/// a change here; the panel edits it as `key: value` lines.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunMetaInput {
+    #[serde(default)]
+    pub sensor_model: Option<String>,
+    #[serde(default)]
+    pub sensor_serial: Option<String>,
+    #[serde(default)]
+    pub sensor_firmware: Option<String>,
+    #[serde(default)]
+    pub hardware: Vec<String>,
+    #[serde(default)]
+    pub conditions: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -118,9 +153,18 @@ pub struct RunStepView {
     pub kind: Option<String>,
     pub status: String,
     pub reason: Option<String>,
-    pub checkboxes: Vec<bool>,
+    /// The step's checkbox items as frozen at run start, each with its tick state.
+    pub checklist: Vec<ChecklistItemView>,
     pub captures: Vec<RunCaptureView>,
     pub notes: Vec<String>,
+}
+
+/// One checkbox item: the text the template wrote, and what the operator left it as.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChecklistItemView {
+    pub text: String,
+    pub checked: bool,
 }
 
 #[derive(Debug, Serialize)]

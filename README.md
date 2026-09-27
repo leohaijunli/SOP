@@ -14,9 +14,10 @@ app are all first-class users.
 
 What works today: `sop validate`, `sop index`, `sop preview`, `sop status`,
 `sop project`, `sop remote`, `sop settings`, and `sop run start|record|recover|attach|end`
-(plus `sop run deviations` and `sop run export --format csv`). The desktop app
-(`field-sop`) renders Run / History / Browse / Edit / Project / Settings views and is
-packaged as a `.deb` and AppImage on tag (`.github/workflows/validate.yml`).
+(plus `sop run deviations`, `sop run export`, and `sop run delete`). The desktop app
+(`field-sop`) renders Run / History / Browse / Edit / Project / Settings views, exports a
+run's record, and publishes the working copy with a push, and is packaged as a `.deb` and
+AppImage on tag (`.github/workflows/validate.yml`).
 
 ## Why this exists
 
@@ -42,7 +43,6 @@ project.md        The repository's identity: which campaign this is, and who lea
 templates/        Starting points for authoring new files by hand.
 logs/             Raw instrument logs, one directory per run.
 crates/           The Rust domain, repository access, and `sop` CLI.
-tools/            Transitional Python validator and manifest builder (being deleted).
 docs/             Design, features, scenarios, decisions, log policy.
 SPEC.md           The authoritative format specification. Read this first.
 ```
@@ -60,7 +60,6 @@ self-contained directory; see `docs/DESIGN.md` section 5.
 | `docs/SCENARIOS.md` | Six typical situations the tool is built for |
 | `docs/DECISIONS.md` | Decisions that are expensive to revisit |
 | `docs/LOGS.md` | Attachment naming, hashing, and size policy |
-| `docs/PARITY.md` | What the Rust port matches in the Python tooling, and what differs |
 | `help/*.md` | Documentation for people using the tool, shown in the app's help panel |
 
 ## Current content
@@ -101,6 +100,14 @@ when it is left out, and the current directory after that.
 | `sop run end <sop> <id> <status>` | End the run and write the record file. |
 | `sop run deviations <sop>` | Roll up every deviation across the checklist's runs. |
 | `sop run export <sop> --format csv` | Export run captures as CSV for the processing pipelines. |
+| `sop run export <sop> --format markdown --run <id> [--out PATH]` | Export one run as a self-contained record document. |
+| `sop run delete <sop> <id> [--yes]` | List what a run occupies; with `--yes`, remove it. |
+
+The app's History screen has the two publishing actions: **Export record** writes one
+run's record to `exports/<sop_id>-<run_id>.md` (ignored by `git`; the record itself is
+committed under `runs/`), and **Push repo** runs `git add -A`, commits with the message
+you give it, and pushes to the configured remote. The app holds no credential and runs
+`git` with `GIT_TERMINAL_PROMPT=0`. See `docs/DECISIONS.md` D17.
 
 ```bash
 ./target/release/sop index
@@ -124,10 +131,9 @@ Run the tooling's own tests, which include a negative case for every rule:
 cargo test
 ```
 
-The Python tools under `tools/` are **transitional**. They kept content validated while
-the Rust implementation was written, and they are the reference behaviour the port was
-tested against. `sop validate` and `sop index` now produce the same results, so the
-Python tooling is being removed; see `docs/DECISIONS.md` D11.
+The Rust implementation is the only implementation of the format. The transitional
+Python validator and manifest builder were removed once `sop validate` and `sop index`
+reached parity with them; see `docs/DECISIONS.md` D11.
 
 All of it runs in CI on every push and pull request
 (`.github/workflows/validate.yml`).

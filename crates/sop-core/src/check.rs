@@ -1,9 +1,8 @@
 //! Validation rules from `SPEC.md` section 13 that need only one document.
 //!
-//! This is a port of the reference implementation in `tools/validate.py`, which is the
-//! executable definition of the rules until the port is proven. Cross-file rules (does
-//! this include resolve, does this run cite a real checklist, do these hashes match)
-//! belong to `sop-repo`, which can read the filesystem.
+//! This is the implementation of those rules; there is no second one to port from
+//! anymore. Cross-file rules (does this include resolve, does this run cite a real
+//! checklist, do these hashes match) belong to `sop-repo`, which can read the filesystem.
 
 use crate::diagnostic::Diagnostics;
 use crate::document::Document;
@@ -68,8 +67,7 @@ fn kind_name(value: Option<&serde_norway::Value>) -> String {
 /// Front matter checks for a procedure or a checklist.
 ///
 /// Run records deliberately skip these: they are generated, not authored, and their
-/// required keys are listed separately by [`run_front_matter`]. This matches
-/// `tools/validate.py`.
+/// required keys are listed separately by [`run_front_matter`].
 pub fn front_matter(doc: &Document, kind: &str) -> Diagnostics {
     let mut out = Diagnostics::new();
     let front = &doc.front;
@@ -197,6 +195,45 @@ pub fn run_front_matter(doc: &Document) -> Diagnostics {
             Some(1),
         ),
         None => {}
+    }
+
+    // `sensor`, `hardware`, and `conditions` are the run's instrument and environment.
+    // They are optional - a run recorded without them is still a valid record - but when
+    // they are present their shape is checked, so a mistyped key does not silently
+    // disappear from the record that a later analysis reads.
+    if let Some(value) = front.get("sensor") {
+        match value.as_mapping() {
+            Some(map) => {
+                for (key, item) in map {
+                    if key.as_str().is_none() || item.is_mapping() || item.is_sequence() {
+                        out.error("every 'sensor' key and value must be text", Some(1));
+                        break;
+                    }
+                }
+            }
+            None => out.error("'sensor' must be a mapping like 'model: ...'", Some(1)),
+        }
+    }
+    if front.get("hardware").is_some() && !front.string_list_is_well_formed("hardware") {
+        out.error("'hardware' must be a list of text items", Some(1));
+    }
+    if let Some(value) = front.get("conditions") {
+        match value.as_mapping() {
+            Some(map) => {
+                for (key, item) in map {
+                    // A scalar value is fine even when YAML reads it as a number, so
+                    // `temp_c: 12` is accepted; only a nested block is wrong.
+                    if key.as_str().is_none() || item.is_mapping() || item.is_sequence() {
+                        out.error("every 'conditions' key and value must be text", Some(1));
+                        break;
+                    }
+                }
+            }
+            None => out.error(
+                "'conditions' must be a mapping like 'weather: clear'",
+                Some(1),
+            ),
+        }
     }
 
     out
@@ -348,11 +385,41 @@ pub fn project_front_matter(doc: &Document) -> Diagnostics {
     out
 }
 
+/// `##` chapters that are not steps, because no `yaml step` block follows them.
+///
+/// A step is a heading *and* a block: the block carries the `id` a run record cites,
+/// which is why the id cannot be derived from the heading text. A heading without one
+/// is a chapter of prose, and saying so here is the difference between "no steps
+/// defined" and knowing which chapter the tool ignored.
+pub fn headings_without_steps(doc: &Document) -> Diagnostics {
+    let mut out = Diagnostics::new();
+    for heading in doc.step_headings() {
+        if doc
+            .steps
+            .iter()
+            .any(|step| step.title_line == Some(heading.line))
+        {
+            continue;
+        }
+        out.error(
+            format!(
+                "chapter '{}' has no `yaml step` block, so it is not a step; add one with an `id`",
+                heading.title
+            ),
+            Some(heading.line),
+        );
+    }
+    out
+}
+
 /// Step checks for procedures and checklists.
 pub fn steps(doc: &Document, require_steps: bool) -> Diagnostics {
     let mut out = Diagnostics::new();
     if doc.steps.is_empty() && require_steps {
-        out.error("no steps defined", None);
+        out.error(
+            "no steps defined: a step is a `##` chapter with a `yaml step` block under it",
+            None,
+        );
     }
 
     let mut seen: Vec<&str> = Vec::new();
@@ -363,6 +430,13 @@ pub fn steps(doc: &Document, require_steps: bool) -> Diagnostics {
             .map_or("<missing id>".to_owned(), |id| format!("'{id}'"));
 
         match step.id.as_deref() {
+            // `id: 7` is what this mistake looks like: YAML reads a bare number as an
+            // integer, so the id never arrives as a string. Saying "no id" would be
+            // true and useless, so name the shape the fix has to take.
+            None if step.declares("id") => out.error(
+                "step 'id' must be a string; write an all-digit id in quotes (`id: \"7\"`)",
+                Some(step.line),
+            ),
             None => out.error("step has no 'id'", Some(step.line)),
             Some(id) if !is_valid_id(id) => {
                 out.error(format!("step id '{id}' is not a valid id"), Some(step.line));
@@ -630,8 +704,44 @@ pub fn duplicate_ids(steps: &[Step]) -> Diagnostics {
     out
 }
 
+/// Whether the step ids a record is checked against are its own revision or not.
+///
+/// The distinction matters for exactly two findings: a citation the step set does not
+/// contain, and a `complete` run whose step set it does not cover. Both compare the
+/// record against a revision, so they are errors only when that revision is the one the
+/// record was written against. A record with no snapshot can only be compared against
+/// the current checklist, which is a hint and not a verdict: the record may be right for
+/// its own revision, and an edit to the SOP must not be refused because of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Citation {
+    /// The step set is the revision the record was written against.
+    Strict,
+    /// The step set is the current checklist, because the record has no snapshot.
+    Advisory,
+}
+
+impl Citation {
+    /// Report a finding that compares the record against this step set.
+    fn report(self, out: &mut Diagnostics, message: String, line: Option<usize>) {
+        match self {
+            Citation::Strict => out.error(message, line),
+            Citation::Advisory => out.warning(
+                format!(
+                    "{message} (the run has no snapshot, so this was checked against the current checklist)"
+                ),
+                line,
+            ),
+        }
+    }
+}
+
 /// Run results, once the cited checklist's step ids are known.
-pub fn run_results(doc: &Document, sop: &str, checklist_step_ids: &[String]) -> Diagnostics {
+pub fn run_results(
+    doc: &Document,
+    sop: &str,
+    checklist_step_ids: &[String],
+    citation: Citation,
+) -> Diagnostics {
     let mut out = Diagnostics::new();
     let mut seen: Vec<&str> = Vec::new();
     let mut deviations = 0usize;
@@ -644,7 +754,8 @@ pub fn run_results(doc: &Document, sop: &str, checklist_step_ids: &[String]) -> 
 
         match result.step.as_deref() {
             None => out.error("result has no 'step'", Some(result.line)),
-            Some(id) if !checklist_step_ids.iter().any(|known| known == id) => out.error(
+            Some(id) if !checklist_step_ids.iter().any(|known| known == id) => citation.report(
+                &mut out,
                 format!("result references step '{id}', which is not in checklist '{sop}'"),
                 Some(result.line),
             ),
@@ -656,7 +767,10 @@ pub fn run_results(doc: &Document, sop: &str, checklist_step_ids: &[String]) -> 
         }
 
         match result.status.as_deref() {
-            None => out.error(format!("result {name} has no 'status'"), Some(result.line)),
+            // No status is a valid answer: the step happened and the operator recorded
+            // data for it but gave no outcome. An unknown string is still an error,
+            // because it is a typo rather than a deliberate silence.
+            None => {}
             Some(status) if !RESULT_STATUS.contains(&status) => out.error(
                 format!(
                     "result {name}: status '{status}' must be one of {}",
@@ -705,7 +819,11 @@ pub fn run_results(doc: &Document, sop: &str, checklist_step_ids: &[String]) -> 
 }
 
 /// A `complete` run must account for every step and skip none.
-pub fn complete_run_coverage(doc: &Document, checklist_step_ids: &[String]) -> Diagnostics {
+pub fn complete_run_coverage(
+    doc: &Document,
+    checklist_step_ids: &[String],
+    citation: Citation,
+) -> Diagnostics {
     let mut out = Diagnostics::new();
     if doc.front.str("status").flatten() != Some("complete") {
         return out;
@@ -717,24 +835,31 @@ pub fn complete_run_coverage(doc: &Document, checklist_step_ids: &[String]) -> D
         .collect();
     for id in checklist_step_ids {
         if !recorded.contains(&id.as_str()) {
-            out.error(
+            citation.report(
+                &mut out,
                 format!("run is 'complete' but step '{id}' has no result"),
                 Some(1),
             );
         }
     }
     for result in &doc.results {
-        if result.status.as_deref() == Some("skipped") {
-            out.error(
-                format!(
-                    "run is 'complete' but step {} was skipped",
-                    result
-                        .step
-                        .as_deref()
-                        .map_or("<missing>".to_owned(), |s| format!("'{s}'"))
-                ),
+        let name = result
+            .step
+            .as_deref()
+            .map_or("<missing>".to_owned(), |s| format!("'{s}'"));
+        match result.status.as_deref() {
+            // A `complete` run cannot contain a step with no outcome: if the data exists
+            // but the operator never said whether it was good, the run is not complete.
+            None => citation.report(
+                &mut out,
+                format!("run is 'complete' but step {name} records no outcome"),
                 Some(result.line),
-            );
+            ),
+            Some("skipped") => out.error(
+                format!("run is 'complete' but step {name} was skipped"),
+                Some(result.line),
+            ),
+            _ => {}
         }
     }
     out

@@ -16,9 +16,14 @@ use sop_repo::{Repo, validate};
 /// Top-level entries never copied into a scratch repository.
 const SKIP: &[&str] = &[".git", "dist", "target", "__pycache__", ".venv"];
 
+/// Where the shared test content lives.
+///
+/// The runtime repository no longer ships demo checklists and procedures - the app loads
+/// them from local files via "Open file" - so the tests copy a dedicated fixture tree
+/// rather than the repo root, and the demo content is kept only under `tests/fixtures/`.
 pub fn source_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
+        .join("tests/fixtures")
         .canonicalize()
         .unwrap()
 }

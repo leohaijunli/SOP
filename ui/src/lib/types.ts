@@ -35,6 +35,8 @@ export interface SettingRow {
   key: string;
   value: string | null;
   description: string;
+  /// Kept in the working copy rather than on this machine.
+  inRepository: boolean;
 }
 
 export interface ProjectField {
@@ -200,10 +202,28 @@ export interface RunView {
   sopVersion: string | null;
   sopCommit: string | null;
   deviationsCount: number;
+  sensor: SensorView | null;
+  hardware: string[];
+  conditions: Record<string, string>;
   steps: RunStepView[];
   runNotes: string[];
   runAttachments: RunAttachmentView[];
   recordPath: string;
+}
+
+export interface SensorView {
+  model: string | null;
+  serial: string | null;
+  firmware: string | null;
+}
+
+/// What the start panel sends with the run's identity. Every part is optional.
+export interface RunMetaInput {
+  sensorModel: string | null;
+  sensorSerial: string | null;
+  sensorFirmware: string | null;
+  hardware: string[];
+  conditions: Record<string, string>;
 }
 
 export interface RunStepView {
@@ -214,9 +234,14 @@ export interface RunStepView {
   kind: string | null;
   status: string;
   reason: string | null;
-  checkboxes: boolean[];
+  checklist: ChecklistItemView[];
   captures: RunCaptureView[];
   notes: string[];
+}
+
+export interface ChecklistItemView {
+  text: string;
+  checked: boolean;
 }
 
 export interface RunCaptureView {
@@ -254,6 +279,23 @@ export type RunEventInput =
     }
   | { type: "StepStatusChanged"; at: string; step: string; status: string; reason: string | null }
   | { type: "RunEnded"; at: string; status: string };
+
+// ---- publishing the working copy --------------------------------------------
+
+export interface ExportResult {
+  path: string;
+  bytes: number;
+  text: string;
+}
+
+export interface PushResult {
+  branch: string | null;
+  remote: string;
+  changed: number;
+  commit: string | null;
+  upToDate: boolean;
+  log: string[];
+}
 
 export interface StepPatch {
   title?: string | null;

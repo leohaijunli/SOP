@@ -4,3 +4,13 @@ __pycache__/
 .venv/
 dist/manifest.json
 /target
+node_modules/
+
+# Machine-local settings written by the desktop app.
+.field-sop/
+
+# Project + settings written by the Confirm button on the Project/Settings pages.
+configure.json
+
+# Records the app exports on demand. The record itself is committed under runs/.
+exports/

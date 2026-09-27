@@ -10,7 +10,7 @@
   import ExecutionView from "./components/ExecutionView.svelte";
   import HistoryView from "./components/HistoryView.svelte";
   import * as api from "./lib/api";
-  import type { Manifest } from "./lib/types";
+  import type { ChecklistEntry, Manifest } from "./lib/types";
 
   // Which screen the window is showing. Run is the execution view; the others are
   // configuration and content editing, reached from the toolbar.
@@ -18,9 +18,14 @@
 
   let manifest: Manifest | null = $state(null);
   let error: string | null = $state(null);
+  // Checklists the operator loaded from local markdown files via "Open file". They are
+  // not part of the repository, so they are merged back in after every manifest refresh
+  // and would otherwise be lost whenever the view changes.
+  let externalChecklists: ChecklistEntry[] = $state([]);
   let view: View = $state("run");
   let helpOpen = $state(true);
-  let showSteps = $state(true);
+  // Steps are always enabled on the Browse view; there is no toggle for them.
+  const showSteps = true;
 
   // Which checklist and step are selected, as indexes into the (sorted) manifest.
   let checklist = $state(0);
@@ -42,15 +47,74 @@
     ) {
       view = next as View;
     }
+    // Refresh the manifest whenever the operator moves to a screen that reads it, so the
+    // counts in the header and the History table match the working copy on disk rather
+    // than a snapshot from when the window opened.
+    if (next === "browse" || next === "run" || next === "history") {
+      void refreshRuns();
+    }
     // The authoring / run / history screens act on whatever checklist is current.
   };
 
   const refresh = async (): Promise<void> => {
     try {
-      manifest = await api.manifest();
+      const base = await api.manifest();
+      // Re-read external files from disk so edits written to them by the Authoring page
+      // show up in Browse/Run; otherwise the in-memory copy stays stale.
+      const reloaded: ChecklistEntry[] = [];
+      for (const entry of externalChecklists) {
+        try {
+          const fresh = await api.loadExternalMd(entry.path);
+          if (fresh) reloaded.push(fresh);
+          else reloaded.push(entry);
+        } catch {
+          reloaded.push(entry);
+        }
+      }
+      externalChecklists = reloaded;
+      manifest = {
+        ...base,
+        checklists: [
+          ...base.checklists.filter(
+            (c) => !externalChecklists.some((e) => api.text(e.sop_id) === api.text(c.sop_id))
+          ),
+          ...externalChecklists,
+        ],
+      };
       error = null;
     } catch (e) {
       error = String(e);
+    }
+  };
+
+  // After a run starts or ends, or when the operator opens History, the manifest on
+  // disk has changed (a record file appeared, or the run count moved). Re-read it so the
+  // History table always shows what is really in the working copy instead of a stale
+  // snapshot from when the window opened.
+  const refreshRuns = async (): Promise<void> => {
+    await refresh();
+  };
+
+  const openExternal = async (): Promise<void> => {
+    try {
+      const entry = await api.openExternalMdDialog();
+      if (!entry || !manifest) return; // cancelled or no file chosen
+      externalChecklists = [
+        ...externalChecklists.filter((c) => api.text(c.sop_id) !== api.text(entry.sop_id)),
+        entry,
+      ];
+      manifest = {
+        ...manifest,
+        checklists: [
+          ...manifest.checklists.filter((c) => api.text(c.sop_id) !== api.text(entry.sop_id)),
+          entry,
+        ],
+      };
+      checklist = manifest.checklists.findIndex((c) => api.text(c.sop_id) === api.text(entry.sop_id));
+    } catch (e) {
+      // A cancelled picker or a parse problem is not a fatal error; do not replace the
+      // whole window with the fatal screen for it.
+      console.warn("open file:", e);
     }
   };
 
@@ -103,6 +167,9 @@
     const steps = manifest?.checklists[checklist]?.steps ?? [];
     if (event.key === "F1") { event.preventDefault(); helpOpen = !helpOpen; }
     else if (event.key === "/") { event.preventDefault(); helpOpen = true; }
+    // `j` / `k` step through the browse list. The run screen owns them when it is open,
+    // so this does not move a list the operator cannot see.
+    else if (view !== "browse") { /* the active view handles its own keys */ }
     else if (event.key === "j" && step < steps.length - 1) { step++; }
     else if (event.key === "k" && step > 0) { step--; }
   };
@@ -123,11 +190,13 @@
     projectId={manifest?.project?.project_id ?? null}
     {helpOpen}
     onToggleHelp={() => (helpOpen = !helpOpen)}
-    {showSteps}
-    onToggleSteps={() => (showSteps = !showSteps)}
+    onOpenFile={() => void openExternal()}
   />
 
-  <main class:with-help={helpOpen && view === "browse"} class:with-steps={showSteps && view === "browse"}>
+  <main
+    class:with-steps={showSteps && view === "browse"}
+    class:with-help={helpOpen && (view === "browse" || view === "run")}
+  >
     {#if view === "browse"}
       {#if showSteps}
         <StepsNav
@@ -145,7 +214,10 @@
         <HelpPanel manifest={manifest} {help} {helpQuery} onHelp={(h) => (help = h)} onQuery={(q) => (helpQuery = q)} />
       {/if}
     {:else if view === "run"}
-      <ExecutionView {manifest} {checklist} />
+      <ExecutionView {manifest} {checklist} onRunUpdate={() => void refreshRuns()} />
+      {#if helpOpen}
+        <HelpPanel manifest={manifest} {help} {helpQuery} onHelp={(h) => (help = h)} onQuery={(q) => (helpQuery = q)} />
+      {/if}
     {:else if view === "history"}
       <HistoryView {manifest} {checklist} />
     {:else if view === "settings"}
