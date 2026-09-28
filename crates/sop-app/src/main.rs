@@ -65,6 +65,8 @@ fn main() {
             commands::run_export,
             commands::run_export_to,
             commands::run_summary,
+            commands::run_delete,
+            commands::run_delete_all,
             commands::load_external_md,
             commands::repo_push,
         ])

@@ -32,7 +32,7 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | Capture entry with unit and expected-range highlight | Operator acknowledges out-of-range values | done |
 | Skips and deviations require a reason | Non-negotiable; this is the audit trail | done |
 | Notes per step and per run | Free text, timestamped | done |
-| Attach a log to a step, or a set to the run | Copied, hashed, filename prefixed with the hash | done |
+| Attach a log to a step, or a set to the run | Copied into the run's `logs/` under its own name, hashed, and listed in the record | done |
 | Block starting a `draft` checklist | Override is possible and recorded as an event with a reason | done |
 | Fully offline | The app makes no network calls of its own; publishing hands the push to `git` (D17) | done |
 | Checklist items shown as the author wrote them | The run screen ticks the words in the file, not `Item 1` | done |
@@ -101,7 +101,9 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | Feature | Notes | Priority |
 |---|---|---|
 | Stable step ids comparable across runs | The reason ids are authored rather than execution-assigned | done |
-| Run history per checklist | Filter by site, sensor, operator, outcome | done |
+| Run history by test plan and case | Grouped under the plan and case each run was started from; filter by site, operator, outcome; cases with no runs are shown | done |
+| Summary across every test | One markdown document: a coverage row for every case (run or not, with outcome counts) and one row per run with the attached file names | done |
+| Remove a run, or the whole history | **Delete** on a row and **Delete all runs** in the toolbar; the inbox is never touched | done |
 | Capture trend across runs | e.g. noise floor over successive calibrations | P4 |
 | Export run data as CSV | For the processing pipelines in `mag_gcs` and `geomag-uav-survey` | done |
 | Export one run's record as a self-contained document | `sop run export --format markdown --run <id>`, and **Export record** in the app (D16) | done |

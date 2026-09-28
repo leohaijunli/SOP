@@ -3,15 +3,22 @@
 ## Where logs live
 
 ```
-logs/<run_id>/
-  raw.csv
-  base_station.csv
-  notes.txt
+runs/<sop_id>/<run_id>/
+  logs/
+    raw.csv
+    base_station.csv
+    notes.txt
 ```
 
-One directory per run, named exactly after the run record's `run_id`. A log directory
-without a matching `runs/<sop_id>/<run_id>.md` is a validator error, because a log
-with no record has no context.
+Logs live inside the run directory, so one run is one folder that can be archived,
+moved, or deleted as a unit (`docs/DECISIONS.md` D10). Each attached file keeps its own
+name; a second file with the same name gets a `-2`, `-3` ... suffix. Picking a file the
+run already holds again adds nothing rather than a second copy.
+
+`logs/<run_id>/` at the repository root is the older location, kept readable for
+records written before the run directory became self-contained. A directory there
+without a matching `runs/<sop_id>/<run_id>.md` is a validator error, because a log with
+no record has no context.
 
 ## Why hash on attach
 
@@ -19,6 +26,9 @@ The app records `sha256` and `size` for every attached file. This is what turns 
 run used the Renfrew dataset" into a checkable claim: if a log is later edited,
 truncated, or replaced, the mismatch is detectable. Attach-time hashing is cheap; a
 dataset whose provenance is unknown is not.
+
+The record carries the hash in its `logs:` front matter as well as restating the file in
+its body, so the validator re-checks the file's presence, size, and hash on every pass.
 
 ## Naming
 
@@ -45,7 +55,7 @@ without LFS installed breaks checkout. To opt in:
 
 ```bash
 git lfs install
-git lfs track "logs/**/*.h5" "logs/**/*.bin" "logs/**/*.tif"
+git lfs track "runs/**/logs/**/*.h5" "runs/**/logs/**/*.bin" "runs/**/logs/**/*.tif"
 git add .gitattributes
 ```
 

@@ -121,6 +121,14 @@ export const runEnd = (sop: string, runId: string, status: string): Promise<RunV
 export const runAttach = (sop: string, runId: string, step: string | null, path: string): Promise<RunView> =>
   invoke<RunView>("run_attach", { sop, runId, step, path });
 
+// Remove one run (its record, run directory, and log directory). Returns how many paths
+// were removed.
+export const runDelete = (sop: string, runId: string): Promise<number> =>
+  invoke<number>("run_delete", { sop, runId });
+
+// Remove every run in the working copy. Returns how many runs there were.
+export const runDeleteAll = (): Promise<number> => invoke<number>("run_delete_all");
+
 // Pick any file to attach to a run (data, photo, etc.) via the native file picker.
 export const pickDataFile = async (): Promise<string | null> => {
   const path = await open({ multiple: false });
@@ -167,14 +175,15 @@ export const runExportDialog = async (sop: string, runId: string): Promise<Expor
   return invoke<ExportResult>("run_export_to", { sop, runId, out: path });
 };
 
-// Export a summary table of every run for a checklist, via the native save dialog.
-export const runSummaryDialog = async (sop: string): Promise<string | null> => {
+// Export a summary table of every run, grouped by test plan and case, via the native
+// save dialog.
+export const runSummaryDialog = async (): Promise<string | null> => {
   const path = await save({
-    defaultPath: `${sop}-summary.md`,
+    defaultPath: "test-summary.md",
     filters: [{ name: "Markdown", extensions: ["md"] }],
   });
   if (!path) return null;
-  return invoke<string>("run_summary", { sop, out: path });
+  return invoke<string>("run_summary", { out: path });
 };
 
 // ---- local file loading ------------------------------------------------------

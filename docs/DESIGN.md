@@ -130,7 +130,7 @@ runs/ground-walk-survey/2026-09-24-renfrew-walk01/
 ├── events.jsonl        # append-only source of truth
 ├── snapshot.md         # the checklist exactly as executed
 ├── record.md           # rendered from events.jsonl; committed for human review
-└── attachments/        # log files, filename prefixed with a sha256 short form
+└── logs/               # attached files, under their own names; sha256 in the record
 ```
 
 `snapshot.md` is why the record survives without git history: the run stays readable even
@@ -165,7 +165,7 @@ that was never written.
 {"type":"CaptureRecorded","at":"...","step":"cond-environment","key":"ambient_c","value":12,"unit":"C"}
 {"type":"CaptureCleared","at":"...","step":"cond-environment","key":"ambient_c","reason":"probe replaced"}
 {"type":"StepSkipped","at":"...","step":"testline-after","reason":"session ended early"}
-{"type":"AttachmentAdded","at":"...","step":"testline-before","path":"attachments/a1b2c3d-mag_raw.csv","sha256":"...","size":18623}
+{"type":"AttachmentAdded","at":"...","step":"testline-before","path":"runs/ground-walk-survey/2026-09-24-renfrew-walk01/logs/mag_raw.csv","sha256":"...","size":18623}
 {"type":"NoteAdded","at":"...","step":"testline-note","text":"..."}
 {"type":"RunCompleted","at":"...","status":"partial"}
 ```

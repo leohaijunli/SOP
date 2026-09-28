@@ -8,6 +8,7 @@ pub mod project;
 pub mod report;
 pub mod run;
 pub mod settings;
+pub mod summary;
 pub mod testplan;
 pub mod validate;
 

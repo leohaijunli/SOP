@@ -21,6 +21,10 @@ const DEFAULT_ORDER: i64 = 10_000;
 pub struct TestCase {
     /// File stem: the stable id of the case within its plan.
     pub id: String,
+    /// The checklist id a run of this case records: the case's front-matter `sop_id`,
+    /// or the file stem when it declares none. This is what links a run back to its
+    /// case, because a run records the checklist id, not the case's file path.
+    pub sop_id: String,
     pub title: Option<String>,
     /// Repository-relative path, e.g. `testplan/calib/power-on.md`.
     pub path: String,
@@ -64,9 +68,10 @@ pub fn plans(repo: &Repo) -> Vec<TestPlan> {
                 .and_then(|s| s.to_str())
                 .unwrap_or_default()
                 .to_owned();
-            let (case_title, step_count, case_order) = case_meta(repo, &path);
+            let (sop_id, case_title, step_count, case_order) = case_meta(repo, &path, &id);
             cases.push(TestCase {
                 id,
+                sop_id,
                 title: case_title,
                 path: path.display().to_string(),
                 step_count,
@@ -106,15 +111,24 @@ fn plan_doc(repo: &Repo, dir: &Path) -> Option<sop_core::Document> {
     sop_core::Document::parse_standalone(&text).ok()
 }
 
-/// A case's title, step count, and `order`, parsed from its own markdown.
-fn case_meta(repo: &Repo, path: &Path) -> (Option<String>, usize, i64) {
+/// A case's checklist id, title, step count, and `order`, parsed from its own markdown.
+///
+/// The id follows the same rule the app runs a case by: the front-matter `sop_id` when
+/// there is one, the file stem otherwise.
+fn case_meta(repo: &Repo, path: &Path, id: &str) -> (String, Option<String>, usize, i64) {
     let Ok(text) = repo.read_text(path) else {
-        return (None, 0, DEFAULT_ORDER);
+        return (id.to_owned(), None, 0, DEFAULT_ORDER);
     };
     let Ok(doc) = sop_core::Document::parse_standalone(&text) else {
-        return (None, 0, DEFAULT_ORDER);
+        return (id.to_owned(), None, 0, DEFAULT_ORDER);
     };
+    let sop_id = doc
+        .front
+        .str("sop_id")
+        .flatten()
+        .map(str::to_owned)
+        .unwrap_or_else(|| id.to_owned());
     let title = doc.front.str("title").flatten().map(str::to_owned);
     let order = doc.front.i64("order").unwrap_or(DEFAULT_ORDER);
-    (title, doc.steps.len(), order)
+    (sop_id, title, doc.steps.len(), order)
 }

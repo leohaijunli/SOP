@@ -36,19 +36,20 @@ to write records back into.
 ```
 procedures/       Reusable step blocks. The atomic unit of the whole system.
 checklists/       One experiment type = procedures to include + local steps.
-runs/             Execution records, one directory per run. Never overwritten.
+runs/             Execution records and their data, one directory per run. Never overwritten.
   _inbox/         Field observations that are candidates for promotion into procedures/.
+  <sop_id>/<run_id>/
+                  events.jsonl, snapshot.md, record.md, and logs/ - the attached files.
 help/             In-app documentation, shown in the app's help panel. Never executed.
 project.md        The repository's identity: which campaign this is, and who leads it.
 templates/        Starting points for authoring new files by hand.
-logs/             Raw instrument logs, one directory per run.
 crates/           The Rust domain, repository access, and `sop` CLI.
 docs/             Design, features, scenarios, decisions, log policy.
 SPEC.md           The authoritative format specification. Read this first.
 ```
 
-`logs/` is planned to move inside each run directory so that one run is one
-self-contained directory; see `docs/DESIGN.md` section 5.
+Attached files live in `logs/` inside the run directory, so one run is one
+self-contained directory; see `docs/DESIGN.md` section 5 and `docs/LOGS.md`.
 
 ## Documentation
 
@@ -161,11 +162,17 @@ when it is left out, and the current directory after that.
 | `sop run export <sop> --format markdown --run <id> [--out PATH]` | Export one run as a self-contained record document. |
 | `sop run delete <sop> <id> [--yes]` | List what a run occupies; with `--yes`, remove it. |
 
-The app's History screen has the two publishing actions: **Export record** writes one
-run's record to `exports/<sop_id>-<run_id>.md` (ignored by `git`; the record itself is
-committed under `runs/`), and **Push repo** runs `git add -A`, commits with the message
-you give it, and pushes to the configured remote. The app holds no credential and runs
-`git` with `GIT_TERMINAL_PROMPT=0`. See `docs/DECISIONS.md` D17.
+The app's History screen groups runs under the test plan and case they were started
+from, with anything that does not match a case kept under "Runs outside a test plan".
+Each row has **Export record**, which writes that run's record to
+`exports/<sop_id>-<run_id>.md` (ignored by `git`; the record itself is committed under
+`runs/`), and **Delete**, which removes that run's record, run directory, and attached
+data after asking. The toolbar has **Export summary** (one markdown document: a coverage
+row for every test case, run or not, then one row per run), **Push repo** (`git add -A`,
+commit with the message you give it, push to the configured remote), and **Delete all
+runs** (the whole history in this working copy; `runs/_inbox/` is left alone). Deletion
+cannot be undone. The app holds no credential and runs `git` with
+`GIT_TERMINAL_PROMPT=0`. See `docs/DECISIONS.md` D17.
 
 ```bash
 ./target/release/sop index

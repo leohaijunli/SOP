@@ -239,7 +239,7 @@
         <HelpPanel manifest={manifest} {help} {helpQuery} onHelp={(h) => (help = h)} onQuery={(q) => (helpQuery = q)} />
       {/if}
     {:else if view === "history"}
-      <HistoryView {manifest} {checklist} />
+      <HistoryView {manifest} onChanged={() => void refreshRuns()} />
     {:else if view === "settings"}
       <SettingsPanel />
     {:else if view === "project"}

@@ -157,6 +157,8 @@ pub struct RunStepView {
     pub checklist: Vec<ChecklistItemView>,
     pub captures: Vec<RunCaptureView>,
     pub notes: Vec<String>,
+    /// The data files attached to this step, in the order they were attached.
+    pub attachments: Vec<RunAttachmentView>,
 }
 
 /// One checkbox item: the text the template wrote, and what the operator left it as.

@@ -313,7 +313,7 @@ conditions:
   weather: clear
   temp_c: 12
 logs:
-  - path: logs/2026-09-24-renfrew-walk01/mag_raw.csv
+  - path: runs/ground-walk-survey/2026-09-24-renfrew-walk01/logs/mag_raw.csv
     sha256: 0f2a...
     size: 1048576
     description: Raw magnetometer log
@@ -382,11 +382,17 @@ discover them.
 Flow:
 
 1. Operator picks the log files for the run in the app.
-2. The app copies them to `logs/<run_id>/`.
+2. The app copies them into `logs/` inside the run's own directory
+   (`runs/<sop_id>/<run_id>/logs/`), keeping each file's own name. A second file with
+   the same name gets a `-2`, `-3` ... suffix, and picking a file the run already holds
+   again adds nothing.
 3. The app computes `sha256` and `size` for each and writes the `logs:` entries into
    the run record.
 4. The app commits the run record and the logs together, so the record and its data
    are never separated in history.
+
+`logs/<run_id>/` at the repository root is still read for records written before the
+run directory became self-contained; `logs[].path` is repository-relative either way.
 
 `sha256` is what makes a record trustworthy later: it proves the analysed file is the
 one that was collected. See `docs/LOGS.md` for naming, size limits, and the Git LFS

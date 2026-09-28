@@ -5,8 +5,10 @@
 //! recovered by replaying the log, the rendered record agrees with the events, and a
 //! skipped/deviated step cannot be recorded without a reason.
 
+use std::fs;
+
 use sop_core::RunEvent;
-use sop_repo::{Repo, run};
+use sop_repo::{Repo, manifest, run};
 
 mod common;
 use common::Scratch;
@@ -389,4 +391,122 @@ fn deleting_a_run_refuses_an_id_that_is_not_a_run_id() {
         run::delete(&repo, SOP, "../escape"),
         Err(run::RunError::BadRunId(_))
     ));
+}
+
+#[test]
+fn a_run_started_from_a_file_path_is_filed_under_the_checklists_sop_id() {
+    let scratch = Scratch::new("run-external-file");
+    let repo = scratch.repo();
+
+    // How the app runs an "Open file" checklist: `start` is handed the path, and the
+    // file stem ("power-on") is not the checklist's id. The run directory, the committed
+    // record, and the manifest's grouping all have to use the id, or History shows the
+    // same run twice - once under the stem and once under the id.
+    let external = scratch.path("external/power-on.md");
+    fs::create_dir_all(external.parent().unwrap()).unwrap();
+    fs::write(
+        &external,
+        "---\nkind: checklist\nsop_id: uas-mag-preflight-power-on\ntitle: Power On\nversion: 1\nstatus: active\n---\n\n## Supply\n\n- [ ] Recorded\n",
+    )
+    .unwrap();
+
+    let run_id = "2026-09-28-site-01";
+    run::start(&repo, external.to_str().unwrap(), run_id, "leo", "cfar", None).unwrap();
+    run::end(&repo, "uas-mag-preflight-power-on", run_id, "complete").unwrap();
+
+    assert!(scratch.path("runs/uas-mag-preflight-power-on").is_dir());
+    assert!(
+        scratch.path("runs/uas-mag-preflight-power-on/2026-09-28-site-01.md").is_file(),
+        "the committed record is filed under the checklist id"
+    );
+    assert!(
+        !scratch.path("runs/power-on").exists(),
+        "the in-progress record must not be filed under the file stem"
+    );
+
+    let manifest = manifest::build(&repo);
+    let matching: Vec<_> = manifest
+        .runs
+        .iter()
+        .filter(|entry| {
+            entry.run_id.as_ref().and_then(|id| id.as_str()) == Some(run_id)
+        })
+        .collect();
+    assert_eq!(matching.len(), 1, "History must list the run once, not twice");
+}
+
+#[test]
+fn an_attachment_is_saved_under_its_own_name_and_listed_in_the_record() {
+    let scratch = Scratch::new("run-attach");
+    let repo = scratch.repo();
+    start(&repo, RUN);
+
+    // `incoming/` is not one of the directories discovery or validation reads, so it
+    // stands in for a file picked from anywhere on the operator's machine.
+    let source = scratch.path("incoming/mag_raw.csv");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(&source, b"a,b\n1,2\n").unwrap();
+
+    let attachment = run::attach(&repo, SOP, RUN, Some("cond-location"), &source).unwrap();
+    assert_eq!(
+        attachment.path,
+        format!("runs/{SOP}/{RUN}/logs/mag_raw.csv"),
+        "the record names the file relative to the repository, next to the run"
+    );
+    assert!(scratch.path(&attachment.path).is_file());
+
+    // A different file with the same name must not overwrite the first.
+    fs::write(&source, b"other\n").unwrap();
+    let second = run::attach(&repo, SOP, RUN, Some("cond-location"), &source).unwrap();
+    assert_eq!(second.path, format!("runs/{SOP}/{RUN}/logs/mag_raw-2.csv"));
+    assert_eq!(scratch.read(&attachment.path), "a,b\n1,2\n");
+
+    // Picking the same file again is the same attachment, not a second copy.
+    fs::write(&source, b"a,b\n1,2\n").unwrap();
+    let again = run::attach(&repo, SOP, RUN, Some("cond-location"), &source).unwrap();
+    assert_eq!(again.path, attachment.path);
+    let held = run::load(&repo, SOP, RUN).unwrap().state.step("cond-location").unwrap().attachments.len();
+    assert_eq!(held, 2, "two files were attached, so two are recorded");
+
+    run::end(&repo, SOP, RUN, "partial").unwrap();
+    let record = scratch.read(&format!("runs/{SOP}/{RUN}.md"));
+    assert!(record.contains("logs:\n"), "the data files are listed in the record:\n{record}");
+    assert!(record.contains(&format!("path: {}\n", attachment.path)), "{record}");
+    assert!(record.contains(&attachment.sha256), "{record}");
+
+    // The listed path resolves, and the size and hash match, so the record verifies.
+    let (failed, report) = scratch.validate();
+    assert!(!failed, "a run carrying its data must validate:\n{report}");
+    assert!(
+        !report.contains("not under"),
+        "the run directory's logs/ is the app's own location:\n{report}"
+    );
+}
+
+#[test]
+fn deleting_every_run_removes_the_history_and_leaves_the_inbox_alone() {
+    let scratch = Scratch::new("run-delete-all");
+    let repo = scratch.repo();
+    start(&repo, RUN);
+    run::end(&repo, SOP, RUN, "partial").unwrap();
+
+    let found = run::all_runs(&repo);
+    assert!(
+        found.iter().any(|(sop, id)| sop == SOP && id == RUN),
+        "the new run is listed: {found:?}"
+    );
+    assert!(
+        found.iter().any(|(sop, _)| sop == "mag-sensor-calibration"),
+        "the fixture run is listed: {found:?}"
+    );
+
+    let removed = run::delete_all(&repo).unwrap();
+    assert!(!removed.is_empty());
+    assert!(run::all_runs(&repo).is_empty(), "every run record is gone");
+    assert!(!scratch.path(&format!("runs/{SOP}/{RUN}.md")).exists());
+    assert!(!scratch.path(&format!("runs/{SOP}/{RUN}")).exists());
+    assert!(
+        scratch.path("runs/_inbox/2026-09-24-wind-oscillation.md").is_file(),
+        "an observation in the inbox is not run history"
+    );
 }

@@ -181,17 +181,14 @@ pub fn create_test_plan(name: String, title: String, state: State<'_, AppState>)
     Ok(dir.display().to_string())
 }
 
-/// A compact test summary table of every run for a checklist: test item, notes, sensor,
-/// site, start time, and the attached log file names. Written to `out` (via the save
+/// A compact test summary of every run, in test-plan / test-case order, plus a coverage
+/// line for every case whether it has been run or not. Written to `out` (via the save
 /// dialog the frontend opens) and returned as text so the window can show it.
 #[tauri::command]
-pub fn run_summary(
-    sop: String,
-    out: String,
-    state: State<'_, AppState>,
-) -> Reply<String> {
+pub fn run_summary(out: String, state: State<'_, AppState>) -> Reply<String> {
     let repo = state.repo()?;
-    let text = build_summary_markdown(&repo, &sop)?;
+    let testcases = Repo::open(state.testcase_repo_root()?);
+    let text = sop_repo::summary::markdown(&repo, &testcases);
     let path = PathBuf::from(&out);
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -201,86 +198,32 @@ pub fn run_summary(
     Ok(path.display().to_string())
 }
 
-/// Build the summary table for one checklist's runs.
-fn build_summary_markdown(repo: &Repo, sop: &str) -> Result<String, String> {
-    use std::fmt::Write as _;
-
-    let sop_dir = repo.root().join("runs").join(sop);
-    let mut rows: Vec<SummaryRow> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&sop_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_none_or(|e| e != "md") {
-                continue;
-            }
-            let Some(id) = path.file_stem().and_then(|s| s.to_str()) else { continue };
-            let loaded = match run::load(repo, sop, id) {
-                Ok(loaded) => loaded,
-                Err(_) => continue,
-            };
-            rows.push(summary_row(&loaded.state));
-        }
+/// Remove one run: its record file, run directory, and log directory.
+///
+/// Both ids end up in a path, so both are checked as ids before anything is removed. The
+/// operator is asked first by the window; this only does what it is told.
+#[tauri::command]
+pub fn run_delete(sop: String, run_id: String, state: State<'_, AppState>) -> Reply<usize> {
+    let repo = state.repo()?;
+    if !sop_core::vocab::is_valid_id(&sop) {
+        return Err(format!("'{sop}' is not a checklist id"));
     }
-    rows.sort_by(|a, b| a.time.cmp(&b.time));
-
-    let mut out = String::from("| Test item | Notes | Sensor | Site | Time | Log file |\n");
-    out.push_str("|---|---|---|---|---|---|\n");
-    for row in rows {
-        let _ = writeln!(
-            out,
-            "| {} | {} | {} | {} | {} | {} |",
-            esc(&row.item),
-            esc(&row.notes),
-            esc(&row.sensor),
-            esc(&row.site),
-            esc(&row.time),
-            esc(&row.logs)
-        );
+    if !sop_core::vocab::is_valid_id(&run_id) {
+        return Err(format!("'{run_id}' is not a run id"));
     }
-    Ok(out)
+    let removed = run::delete(&repo, &sop, &run_id).map_err(text)?;
+    Ok(removed.len())
 }
 
-struct SummaryRow {
-    item: String,
-    notes: String,
-    sensor: String,
-    site: String,
-    time: String,
-    logs: String,
-}
-
-fn summary_row(state: &sop_core::run::RunState) -> SummaryRow {
-    let mut notes: Vec<String> = state.run_notes.clone();
-    for step in state.steps.values() {
-        notes.extend(step.notes.iter().cloned());
-    }
-    let sensor = state
-        .sensor
-        .as_ref()
-        .map(|s| s.model.as_str().to_owned())
-        .unwrap_or_default();
-    let logs = state
-        .run_attachments
-        .iter()
-        .filter_map(|a| {
-            std::path::Path::new(&a.path)
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    SummaryRow {
-        item: state.sop.clone().unwrap_or_default(),
-        notes: notes.join("; "),
-        sensor,
-        site: state.site.clone().unwrap_or_default(),
-        time: state.started.clone().unwrap_or_default(),
-        logs,
-    }
-}
-
-fn esc(value: &str) -> String {
-    value.replace('|', "\\|").replace('\n', " ")
+/// Remove every run in the working copy and report how many there were.
+///
+/// `runs/_inbox/` is left alone: it holds field observations, not run history.
+#[tauri::command]
+pub fn run_delete_all(state: State<'_, AppState>) -> Reply<usize> {
+    let repo = state.repo()?;
+    let runs = run::all_runs(&repo).len();
+    run::delete_all(&repo).map_err(text)?;
+    Ok(runs)
 }
 
 /// Resolve a case path: absolute as-is, otherwise against the repository root.
@@ -729,6 +672,9 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
             checklist,
             captures,
             notes: step_state.map(|s| s.notes.clone()).unwrap_or_default(),
+            attachments: step_state
+                .map(|state| state.attachments.iter().map(attachment_view).collect())
+                .unwrap_or_default(),
         });
     }
     RunView {
@@ -755,13 +701,17 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
         run_attachments: state
             .run_attachments
             .iter()
-            .map(|a| RunAttachmentView {
-                path: a.path.clone(),
-                sha256: a.sha256.clone(),
-                size: a.size,
-            })
+            .map(attachment_view)
             .collect(),
         record_path: loaded.record_path.display().to_string(),
+    }
+}
+
+fn attachment_view(attachment: &sop_core::run::Attachment) -> RunAttachmentView {
+    RunAttachmentView {
+        path: attachment.path.clone(),
+        sha256: attachment.sha256.clone(),
+        size: attachment.size,
     }
 }
 

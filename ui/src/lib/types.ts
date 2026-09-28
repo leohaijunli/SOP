@@ -129,6 +129,8 @@ export interface ChecklistEntry {
 
 export interface TestCase {
   id: string;
+  /// The checklist id a run of this case records.
+  sop_id: string;
   title: unknown;
   path: string;
   step_count: number;
@@ -254,6 +256,7 @@ export interface RunStepView {
   checklist: ChecklistItemView[];
   captures: RunCaptureView[];
   notes: string[];
+  attachments: RunAttachmentView[];
 }
 
 export interface ChecklistItemView {

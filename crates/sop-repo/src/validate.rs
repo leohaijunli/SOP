@@ -439,11 +439,18 @@ fn check_log_entry(repo: &Repo, path: &Path, run_id: &str, entry: &Value, report
         }
     };
 
-    let expected_prefix = format!("logs/{run_id}");
-    if !log_path.starts_with(&format!("{expected_prefix}/")) {
+    // A run's data lives inside the run directory (`runs/<sop>/<run_id>/logs/`), which is
+    // what the app writes and what D10 decided; `logs/<run_id>/` is kept as the location
+    // for records written before that. Anything else is a warning, because a log outside
+    // both is data the run cannot be archived with.
+    let record = repo.relpath(path);
+    let run_dir = record.strip_suffix(".md").unwrap_or(&record);
+    let inside_run = format!("{run_dir}/logs/");
+    let legacy = format!("logs/{run_id}/");
+    if !log_path.starts_with(&inside_run) && !log_path.starts_with(&legacy) {
         report.warning(
             path,
-            format!("log '{log_path}' is not under {expected_prefix}/ (see docs/LOGS.md)"),
+            format!("log '{log_path}' is not under {inside_run} (see docs/LOGS.md)"),
             None,
         );
     }

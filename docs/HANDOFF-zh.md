@@ -53,9 +53,12 @@ git                       全部未提交，工作副本干净可继续
 
 ### 主题 3：app 里的"导出记录 / 推送仓库"（D17）
 
-- History 视图：每行一个 **Export record**（写 `exports/<sop_id>-<run_id>.md`，
-  `exports/` 已进 `.gitignore`，因为记录本身已在 `runs/` 里），工具栏一个 **Push repo**
-  （`git add -A` → commit → `push <remote> HEAD`）。
+- History 视图按 **test plan / test case** 分组（run 记录的 `sop` 与用例 front matter 的
+  `sop_id` 对应，匹配不到用例的 run 归入 "Runs outside a test plan"），每行一个
+  **Export record**（写 `exports/<sop_id>-<run_id>.md`，`exports/` 已进 `.gitignore`，
+  因为记录本身已在 `runs/` 里），工具栏一个 **Export summary**（按 plan/case 顺序输出
+  一个 markdown：先是对每个用例的覆盖行——没跑过的用例也在，run 数为 0——再是每个 run
+  的明细行）和一个 **Push repo**（`git add -A` → commit → `push <remote> HEAD`）。
 - app 不持有凭据，调用 git 时带 `GIT_TERMINAL_PROMPT=0`，缺凭据是报错而不是弹窗等待。
   commit 成功而 push 失败时 commit 保留。报告逐行回显在页面上。
 - 对没有 run 目录的旧记录，`run::record_document` 直接返回 `runs/<sop>/<run_id>.md`
@@ -200,7 +203,7 @@ app 的窗口加载 `ui/dist`；改了 `ui/src/**` 必须重新 build，否则�
 | `ui/src/lib/api.ts` | 前端唯一的 IPC 出口，每个函数对应一个 Tauri 命令 |
 | `ui/src/components/AuthoringPanel.svelte` | Edit 视图（一次一个 step） |
 | `ui/src/components/ExecutionView.svelte` | Run 视图（状态颜色、勾选项、note） |
-| `ui/src/components/HistoryView.svelte` | History 视图（导出 / 推送） |
+| `ui/src/components/HistoryView.svelte` | History 视图（按 plan/case 分组；导出 / 汇总 / 推送 / 删除单条与全部 run） |
 | `SPEC.md` | 格式权威说明 |
 | `docs/DECISIONS.md` | 设计取舍，D15–D19 是本批改动 |
 | `docs/FEATURES.md` | 功能优先级表（本轮待办已登记在此） |

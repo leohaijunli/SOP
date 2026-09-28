@@ -15,7 +15,9 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
-use sop_core::run::{render_record, RunEvent, RunState, RecordStep, SensorIdentity, StepState};
+use sop_core::run::{
+    render_record, Attachment, RecordStep, RunEvent, RunState, SensorIdentity, StepState,
+};
 use sop_core::Document;
 use thiserror::Error;
 
@@ -112,9 +114,25 @@ pub struct CaptureDef {
     pub expected: Option<serde_json::Value>,
 }
 
-fn clean_sop_id(sop_id: &str) -> String {
+/// The key a run is filed under: the checklist's own `sop_id`.
+///
+/// A run can be named by a checklist id (`ground-walk-survey`) or by the path to the
+/// checklist file, which is how the app runs an external "Open file" checklist. A path's
+/// file stem is not the checklist's id - the id lives in the file's front matter - so the
+/// run directory, the record file, and the History view's grouping all have to come from
+/// this one answer. Deriving them differently put the in-progress record in
+/// `runs/<stem>/` while the run lived in `runs/<sop_id>/`, and History listed the run
+/// twice.
+fn run_key(repo: &Repo, sop_id: &str) -> String {
     let path = Path::new(sop_id);
     if path.is_file() {
+        if let Some(id) = repo
+            .load(path)
+            .ok()
+            .and_then(|loaded| loaded.doc.front.str("sop_id").flatten().map(str::to_owned))
+        {
+            return id;
+        }
         path.file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| sop_id.to_owned())
@@ -124,8 +142,14 @@ fn clean_sop_id(sop_id: &str) -> String {
 }
 
 fn run_dir(repo: &Repo, sop_id: &str, run_id: &str) -> PathBuf {
-    let clean = clean_sop_id(sop_id);
-    repo.resolve(&format!("runs/{clean}/{run_id}"))
+    let key = run_key(repo, sop_id);
+    repo.resolve(&format!("runs/{key}/{run_id}"))
+}
+
+/// The committed record file `runs/<sop_id>/<run_id>.md`, next to the run directory.
+fn committed_record_file(repo: &Repo, sop_id: &str, run_id: &str) -> PathBuf {
+    let key = run_key(repo, sop_id);
+    repo.resolve(&format!("runs/{key}/{run_id}.md"))
 }
 
 /// Freeze a resolved checklist into `snapshot.md` text and the step shapes for replay.
@@ -248,8 +272,7 @@ pub fn load(repo: &Repo, sop_id: &str, run_id: &str) -> Result<LoadedRun, RunErr
     let events_path = dir.join("events.jsonl");
     let snapshot_path = dir.join("snapshot.md");
     let record_path = dir.join("record.md");
-    let clean = clean_sop_id(sop_id);
-    let record_file = repo.resolve(&format!("runs/{clean}/{run_id}.md"));
+    let record_file = committed_record_file(repo, sop_id, run_id);
     if !dir.is_dir() {
         return Err(RunError::NoRun(sop_id.to_owned(), run_id.to_owned()));
     }
@@ -352,13 +375,7 @@ pub fn start_with_meta(
     // The recorded `sop` is the checklist's id, not the path it was loaded from. An
     // external file loaded via "Open file" names the checklist in its front matter; the
     // run directory and record use that id so History and later run commands can find it.
-    let display_sop = loaded
-        .doc
-        .front
-        .str("sop_id")
-        .flatten()
-        .map(str::to_owned)
-        .unwrap_or_else(|| clean_sop_id(sop_id));
+    let display_sop = run_key(repo, sop_id);
 
     let dir = run_dir(repo, &display_sop, run_id);
     if dir.is_dir() {
@@ -416,8 +433,7 @@ pub fn start_with_meta(
     // A committed record that already exists is left alone: it is a legacy record for
     // this run_id written before runs had a directory, and it is the authoritative file
     // until `end` re-commits the finished run.
-    let clean = clean_sop_id(sop_id);
-    let record_file = repo.resolve(&format!("runs/{clean}/{run_id}.md"));
+    let record_file = loaded_run.record_file.clone();
     if !record_file.exists() {
         let text = run_record_text(&loaded_run.state, &loaded_run.steps, run_id);
         atomic::write(&record_file, &text).map_err(|error| RunError::Io {
@@ -454,6 +470,11 @@ pub fn record(repo: &Repo, sop_id: &str, run_id: &str, event: &RunEvent) -> Resu
 }
 
 /// Copy a file into the run's logs, hash it, and record an event for it.
+///
+/// The copy keeps the file's own name (`logs/mag_raw.csv`), so the run directory reads
+/// like the folder the data came from; the recorded `sha256` is the identity. A second
+/// file with the same name gets `-2`, `-3` and so on, and re-attaching a file the run
+/// already holds is a no-op rather than a second copy.
 pub fn attach(
     repo: &Repo,
     sop_id: &str,
@@ -467,6 +488,18 @@ pub fn attach(
         source: error,
     })?;
     let digest = sha256_hex(&bytes);
+    // Attaching the same data to the same step twice is one attachment, not two records.
+    let held = match step {
+        Some(id) => loaded
+            .state
+            .step(id)
+            .map(|state| state.attachments.as_slice())
+            .unwrap_or(&[]),
+        None => loaded.state.run_attachments.as_slice(),
+    };
+    if let Some(existing) = held.iter().find(|attachment| attachment.sha256 == digest) {
+        return Ok(existing.clone());
+    }
     let name = source
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -476,18 +509,21 @@ pub fn attach(
         path: logs_dir.clone(),
         source,
     })?;
-    let dest = logs_dir.join(format!("{digest}-{name}"));
-    let mut file = fs::File::create(&dest).map_err(|error| RunError::Io {
-        path: dest.clone(),
-        source: error,
-    })?;
-    file.write_all(&bytes).map_err(|error| RunError::Io {
-        path: dest.clone(),
-        source: error,
-    })?;
+    let dest = attachment_dest(&logs_dir, &name, &bytes);
+    if !dest.is_file() {
+        let mut file = fs::File::create(&dest).map_err(|error| RunError::Io {
+            path: dest.clone(),
+            source: error,
+        })?;
+        file.write_all(&bytes).map_err(|error| RunError::Io {
+            path: dest.clone(),
+            source: error,
+        })?;
+    }
 
     let attachment = sop_core::run::Attachment {
-        path: dest.display().to_string(),
+        // Repository-relative, so the record reads and resolves the same in any clone.
+        path: repo.relpath(&dest),
         sha256: digest,
         size: bytes.len() as u64,
     };
@@ -500,6 +536,37 @@ pub fn attach(
     };
     record(repo, sop_id, run_id, &event)?;
     Ok(attachment)
+}
+
+/// Where an attached file is saved: `logs/<its own name>`, with a `-2`, `-3` ... suffix
+/// only when a *different* file already holds that name. Identical bytes reuse the file
+/// that is already there.
+fn attachment_dest(logs_dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
+    let taken = |path: &Path| path.is_file() && !same_bytes(path, bytes);
+    let direct = logs_dir.join(name);
+    if !taken(&direct) {
+        return direct;
+    }
+    let path = Path::new(name);
+    let stem = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.to_owned());
+    let extension = path
+        .extension()
+        .map(|ext| format!(".{}", ext.to_string_lossy()))
+        .unwrap_or_default();
+    for suffix in 2u32.. {
+        let candidate = logs_dir.join(format!("{stem}-{suffix}{extension}"));
+        if !taken(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("a free suffixed name always exists")
+}
+
+fn same_bytes(path: &Path, bytes: &[u8]) -> bool {
+    fs::read(path).is_ok_and(|existing| existing == bytes)
 }
 
 /// The front matter for the run record file, so the record is a valid `runs/...` file.
@@ -538,6 +605,23 @@ fn run_file_front(state: &RunState, run_id: &str) -> String {
         out.push_str("conditions:\n");
         for (key, value) in &state.conditions {
             out.push_str(&format!("  {key}: {}\n", scalar(value)));
+        }
+    }
+    // The data files, as a machine-readable list (`SPEC.md` section 9). The body restates
+    // them for a reader; this is the copy the validator re-checks, so an edited or missing
+    // file is caught rather than trusted.
+    let attachments: Vec<&Attachment> = state
+        .steps
+        .values()
+        .flat_map(|step| step.attachments.iter())
+        .chain(state.run_attachments.iter())
+        .collect();
+    if !attachments.is_empty() {
+        out.push_str("logs:\n");
+        for attachment in attachments {
+            out.push_str(&format!("  - path: {}\n", scalar(&attachment.path)));
+            out.push_str(&format!("    sha256: {}\n", scalar(&attachment.sha256)));
+            out.push_str(&format!("    size: {}\n", attachment.size));
         }
     }
     out.push_str(&format!("deviations_count: {}\n", state.deviations()));
@@ -597,7 +681,7 @@ pub fn record_document(repo: &Repo, sop_id: &str, run_id: &str) -> Result<String
     match record_text(repo, sop_id, run_id) {
         Ok(text) => Ok(text),
         Err(RunError::NoRun(..)) => {
-            let path = repo.resolve(&format!("runs/{sop_id}/{run_id}.md"));
+            let path = committed_record_file(repo, sop_id, run_id);
             if !path.is_file() {
                 return Err(RunError::NoRun(sop_id.to_owned(), run_id.to_owned()));
             }
@@ -610,7 +694,7 @@ pub fn record_document(repo: &Repo, sop_id: &str, run_id: &str) -> Result<String
 /// The three places a run's material can live.
 fn run_paths(repo: &Repo, sop_id: &str, run_id: &str) -> [PathBuf; 3] {
     [
-        repo.resolve(&format!("runs/{sop_id}/{run_id}.md")),
+        committed_record_file(repo, sop_id, run_id),
         run_dir(repo, sop_id, run_id),
         repo.resolve(&format!("logs/{run_id}")),
     ]
@@ -652,4 +736,49 @@ pub fn delete(repo: &Repo, sop_id: &str, run_id: &str) -> Result<Vec<PathBuf>, R
         })?;
     }
     Ok(present)
+}
+
+/// Every run record in the repository, as `(checklist id, run id)`.
+///
+/// A run's checklist id is the directory it is filed under, so this reads the tree rather
+/// than the records. `runs/_inbox/` is skipped: an inbox entry is an observation, not a
+/// run, and has no run directory.
+pub fn all_runs(repo: &Repo) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Ok(dirs) = fs::read_dir(repo.root().join("runs")) else {
+        return out;
+    };
+    for dir in dirs.flatten() {
+        let dir = dir.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Some(sop) = dir.file_name().and_then(|name| name.to_str()) else { continue };
+        if sop == "_inbox" {
+            continue;
+        }
+        let Ok(files) = fs::read_dir(&dir) else { continue };
+        for file in files.flatten() {
+            let file = file.path();
+            if file.extension().is_none_or(|ext| ext != "md") {
+                continue;
+            }
+            let Some(run_id) = file.file_stem().and_then(|stem| stem.to_str()) else { continue };
+            out.push((sop.to_owned(), run_id.to_owned()));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Remove every run: each record file, run directory, and log directory, in one pass.
+///
+/// This is [`delete`] for the whole history - what a "delete all runs" button needs.
+/// `runs/_inbox/` is left alone, because it holds observations rather than run history.
+pub fn delete_all(repo: &Repo) -> Result<Vec<PathBuf>, RunError> {
+    let mut removed = Vec::new();
+    for (sop, run_id) in all_runs(repo) {
+        removed.extend(delete(repo, &sop, &run_id)?);
+    }
+    Ok(removed)
 }

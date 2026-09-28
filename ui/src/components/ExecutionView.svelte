@@ -196,14 +196,28 @@
     if (!run) return;
     const path = await api.pickDataFile();
     if (!path) return;
+    // The stored name can differ from the picked one (a `-2` suffix on a name clash), so
+    // report the copy that actually landed rather than the source path.
+    const before = new Set(
+      [...run.steps.flatMap((s) => s.attachments), ...run.runAttachments].map((a) => a.sha256)
+    );
     try {
-      run = await api.runAttach(run.sop, run.runId, step?.id ?? null, path);
-      message = `attached ${path.split(/[\\/]/).pop()}`;
+      const next = await api.runAttach(run.sop, run.runId, step?.id ?? null, path);
+      const added = [...next.steps.flatMap((s) => s.attachments), ...next.runAttachments].find(
+        (a) => !before.has(a.sha256)
+      );
+      run = next;
+      message = added
+        ? `saved ${added.path}`
+        : `${path.split(/[\\/]/).pop()} is already attached to this step`;
       isError = false;
     } catch (e) {
       say(String(e), true);
     }
   };
+
+  // The file name part of a stored path, for a compact label next to the full path.
+  const fileName = (path: string): string => path.split(/[\\/]/).pop() ?? path;
 
   const end = (status: string): Promise<void> => {
     // A `complete` run must account for every step; ending a run with open steps as
@@ -540,13 +554,27 @@
           </div>
           <p class="muted">Skips and deviations require a reason; it is written into the record.</p>
 
+          {#if current.attachments.length}
+            <section class="attachments">
+              <h3>Data saved for this step ({current.attachments.length})</h3>
+              {#each current.attachments as att (att.sha256)}
+                <div class="attachment">
+                  <span class="name">{fileName(att.path)}</span>
+                  <span class="mono muted">{att.size} bytes &middot; sha256 {att.sha256.slice(0, 12)}&hellip;</span>
+                  <span class="where muted">{att.path}</span>
+                </div>
+              {/each}
+            </section>
+          {/if}
+
           {#if run.runAttachments.length}
             <section class="attachments">
-              <h3>Attached data ({run.runAttachments.length})</h3>
+              <h3>Data saved for the run ({run.runAttachments.length})</h3>
               {#each run.runAttachments as att (att.sha256)}
                 <div class="attachment">
-                  <span class="name">{att.path.split(/[\\/]/).pop()}</span>
+                  <span class="name">{fileName(att.path)}</span>
                   <span class="mono muted">{att.size} bytes &middot; sha256 {att.sha256.slice(0, 12)}&hellip;</span>
+                  <span class="where muted">{att.path}</span>
                 </div>
               {/each}
             </section>
@@ -590,8 +618,9 @@
   .expected { color: var(--warn); font-size: 12px; margin-top: 6px; }
   .divider-btn { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
   .attachments h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
-  .attachment { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; font-size: 13px; }
+  .attachment { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; padding: 2px 0; font-size: 13px; }
   .attachment .name { font-family: var(--mono); font-size: 12px; }
+  .attachment .where { flex-basis: 100%; font-family: var(--mono); font-size: 11px; word-break: break-all; }
   .ended-banner {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
     margin: 0 16px 12px; padding: 12px 16px; border-radius: 8px;
