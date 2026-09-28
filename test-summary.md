@@ -5,7 +5,7 @@
 | Test plan | Test case | Runs | Complete | Partial | Aborted | Last run |
 |---|---|---|---|---|---|---|
 | UAS-MAG Preflight | Power On and Boot | 0 | 0 | 0 | 0 |  |
-| UAS-MAG Preflight | heading error | 0 | 0 | 0 | 0 |  |
+| UAS-MAG Preflight | heading error | 1 | 1 | 0 | 0 | 2026-09-28T23:44:16Z |
 | UAS-MAG Preflight | Sensor Mount and Orientation | 0 | 0 | 0 | 0 |  |
 | UAS-MAG Preflight | GNSS Lock and Time Sync | 0 | 0 | 0 | 0 |  |
 | UAS-MAG Calibration | Zero Offset | 0 | 0 | 0 | 0 |  |
@@ -21,3 +21,4 @@
 
 | Test plan | Test case | Notes | Sensor | Site | Time | Log file |
 |---|---|---|---|---|---|---|
+| UAS-MAG Preflight | heading error |  |  | cfar | 2026-09-28T23:44:16Z |  |

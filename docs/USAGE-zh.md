@@ -195,6 +195,7 @@ settings   /home/dev/.config/field-sop/settings.json
   remote               origin                       Name of the git remote to use, for example origin. Not a URL.
   branch               (unset)                      Branch runs are recorded on. Absent means the current branch.
   help-open            true                         Whether the help panel starts open: true or false.
+  sensors              UAS-MAG; RM3100              Sensor models and their serial numbers, as model: serial, serial; model.
   recent-repositories                               Working copies opened before, most recent first.
 ```
 
@@ -294,8 +295,9 @@ step**。然后保存 → 切回 Run 视图，左栏就能看到新步骤。改�
 - **Working copy**：输入路径点 **Open** 打开另一个 field-sop 仓库；选择会被记住，
   下次启动落在上次所在仓库。
 - **Git remote**：输入 URL 点 **Set remote**，URL 写进 git 配置，不进应用设置。
-- **Application settings**：逐条列出 `repository / remote / branch / help-open /
-  recent-repositories`，改值即存，带值的可点 Clear 恢复默认。
+- **Application settings**：逐条列出 `repository / remote / branch / help-open / sensors /
+  recent-repositories`，改值即存，带值的可点 Clear 恢复默认。`sensors` 是 Start run
+  面板里那份仪器清单（`型号: 序列号, 序列号; 型号`）。
 - 每次操作会在下方显示成功或报错消息。
 
 ---
@@ -488,8 +490,12 @@ sop run record ... skip cond-location           # 拒绝：skipped/deviated 必�
 
 ### 桌面应用 Run 视图
 
-点工具栏 **Run** 进入。选清单 → 填 run id / operator / site（draft 还要 override 原因）→
-Start。之后每一步可：填 captures（有单位、期望范围高亮，越界会提示"acknowledge"）、
+点工具栏 **Run** 进入。选清单 → 填 operator / site，从下拉列表里选 sensor 型号和序列号
+（型号来自 `sensors` 设置，默认 `UAS-MAG`、`RM3100`；手输的新序列号会自动加进列表，
+清单 `equipment:` 里声明且与型号同名的仪器会被自动选中）→ 核对 checklist 声明的设备
+勾选（默认全选，没用到就取消）→ run id 已按日期+型号+序列号自动生成
+（`2026-09-28-uas-mag-1001`，同名再加 `-2`），想改就点 **Change**；draft 还要 override
+原因 → Start。之后每一步可：填 captures（有单位、期望范围高亮，越界会提示"acknowledge"）、
 勾选 checkboxes、Mark done / Skip / Deviate（后两者弹原因）、加备注、Attach 附件；
 右侧 End 按钮用 complete/partial/aborted 结束。崩溃重开会自动重放恢复未结束的 run。
 
@@ -728,7 +734,8 @@ id: zdc-1     # zero-drift-check 第 1 步
 ## 九、运行记录里还有什么：sensor / hardware / conditions
 
 Start run 面板里除了 run id / operator / site，还能填三项**可选**信息，它们会写进记录
-（front matter + 正文开头各一份）：
+（front matter + 正文开头各一份）。sensor 的型号和序列号从下拉列表选（列表来自机器设置
+`sensors`），`hardware` 默认就是清单 `equipment:` 里勾中的那几项：
 
 ```yaml
 sensor:

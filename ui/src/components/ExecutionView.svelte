@@ -32,13 +32,23 @@
   const isDraft = $derived(api.text(manifest?.checklists[checklist]?.status) === "draft");
 
   let runId = $state("");
+  let runIdTouched = $state(false);
+  let editingRunId = $state(false);
   let operator = $state("");
   let site = $state("");
   let overrideReason = $state("");
+  // The instrument is picked from a list rather than typed: `sensors` is a machine
+  // setting, seeded with the models the lab owns, so a run id and a record only ever
+  // carry a name the operator chose from the same menu.
+  let sensorsText = $state("UAS-MAG; RM3100");
   let sensorModel = $state("");
   let sensorSerial = $state("");
+  let customModel = $state("");
+  let customSerial = $state("");
   let sensorFirmware = $state("");
-  let hardwareText = $state("");
+  let sensorTouched = $state(false);
+  let equipmentChecked: string[] = $state([]);
+  let extraHardware = $state("");
   let conditionsText = $state("");
   let message = $state("");
   let isError = $state(false);
@@ -53,13 +63,18 @@
   // run instead of a small line of text the operator may miss.
   let ended = $state<{ status: string; runId: string } | null>(null);
 
-  // Clear the finished-run confirmation and go back to the start-a-run form.
+  // Clear the finished-run confirmation and go back to the start-a-run form, re-seeded
+  // from the checklist rather than left as the finished run left it.
   const newRun = (): void => {
     run = null;
     ended = null;
     runId = "";
+    runIdTouched = false;
+    editingRunId = false;
     site = "";
     currentStep = 0;
+    seeded = -1;
+    equipmentChecked = [];
   };
 
   const say = (msg: string, bad = false): void => {
@@ -67,7 +82,7 @@
     isError = bad;
   };
 
-  // Slugify a site name into the id-friendly form used by run ids.
+  // Slugify a name into the id-friendly form used by run ids.
   const slug = (value: string): string =>
     value
       .toLowerCase()
@@ -80,22 +95,130 @@
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   };
 
-  // Suggest `YYYY-MM-DD-<site>-NN`, skipping the number suffixes this checklist has
-  // already used, so the operator rarely has to think of an id and never collides with
-  // an existing run. An id the operator typed themselves is always kept.
-  $effect(() => {
-    if (run || runId.trim()) return;
-    const base = `${today()}-${slug(site)}`;
-    const existing = new Set(
+  // ---- instruments ----------------------------------------------------------
+  //
+  // `sensors` is `model: serial, serial; model`. The picker reads it, and a serial typed
+  // by hand is written back, so the list grows from the runs actually taken instead of
+  // having to be filled in up front.
+  type SensorStock = { model: string; serials: string[] };
+
+  const parseSensors = (value: string): SensorStock[] => {
+    const out: SensorStock[] = [];
+    for (const entry of value.split(";")) {
+      const trimmed = entry.trim();
+      if (!trimmed) continue;
+      const colon = trimmed.indexOf(":");
+      const model = (colon < 0 ? trimmed : trimmed.slice(0, colon)).trim();
+      if (!model) continue;
+      const serials = (colon < 0 ? "" : trimmed.slice(colon + 1))
+        .split(",")
+        .map((serial) => serial.trim())
+        .filter((serial) => serial !== "");
+      const known = out.find((stock) => stock.model === model);
+      if (known) {
+        for (const serial of serials) if (!known.serials.includes(serial)) known.serials.push(serial);
+      } else {
+        out.push({ model, serials });
+      }
+    }
+    return out;
+  };
+
+  const formatSensors = (stocks: SensorStock[]): string =>
+    stocks
+      .map((stock) => (stock.serials.length ? `${stock.model}: ${stock.serials.join(", ")}` : stock.model))
+      .join("; ");
+
+  const sensorOptions: SensorStock[] = $derived(parseSensors(sensorsText));
+  const serialsFor = (model: string): string[] =>
+    sensorOptions.find((stock) => stock.model === model)?.serials ?? [];
+  const usingOtherModel = (): boolean => sensorModel === "__other__";
+  const effectiveModel = (): string => (usingOtherModel() ? customModel.trim() : sensorModel);
+  const effectiveSerial = (): string =>
+    usingOtherModel() || sensorSerial === "__new__" ? customSerial.trim() : sensorSerial;
+
+  const pickModel = (): void => {
+    sensorTouched = true;
+    sensorSerial = "";
+    customSerial = "";
+  };
+
+  // The checklist already names the equipment it needs, so the form ticks it rather than
+  // asking the operator to retype it. The sensor, if the list has it, is preselected.
+  const equipmentOf = (index: number): string[] =>
+    ((manifest?.checklists[index]?.equipment ?? []) as unknown[])
+      .map((item) => text(item))
+      .filter((item) => item !== "");
+  const equipment: string[] = $derived(equipmentOf(checklist));
+
+  const toggleEquipment = (item: string, checked: boolean): void => {
+    equipmentChecked = checked
+      ? [...equipmentChecked, item]
+      : equipmentChecked.filter((name) => name !== item);
+  };
+
+  const existingRunIds = (): Set<string> =>
+    new Set(
       (manifest?.runs ?? [])
         .filter((r) => api.text(r.sop) === sop)
         .map((r) => api.text(r.run_id))
     );
+
+  // The id a run is filed under. `2026-09-28-uas-mag-1001` reads back the date, the model
+  // and the unit. With no instrument it falls back to the site, and either way a repeat
+  // gets `-2`, `-3` so it never collides with an existing run.
+  const suggestRunId = (): string => {
+    const existing = existingRunIds();
+    const model = effectiveModel();
+    const serial = effectiveSerial();
+    if (model || serial) {
+      const base = [today(), model ? slug(model) : "", serial ? slug(serial) : ""]
+        .filter((part) => part !== "")
+        .join("-");
+      let candidate = base;
+      for (let i = 2; existing.has(candidate); i++) candidate = `${base}-${i}`;
+      return candidate;
+    }
+    const base = `${today()}-${slug(site)}`;
     let candidate = `${base}-01`;
     for (let i = 2; existing.has(candidate); i++) {
       candidate = `${base}-${String(i).padStart(2, "0")}`;
     }
-    runId = candidate;
+    return candidate;
+  };
+
+  // Seed the form from the checklist that was opened, and again after "Start new run".
+  let seeded = -1;
+  $effect(() => {
+    if (checklist === seeded) return;
+    seeded = checklist;
+    equipmentChecked = equipment;
+    extraHardware = "";
+    sensorModel = "";
+    sensorSerial = "";
+    customModel = "";
+    customSerial = "";
+    sensorTouched = false;
+    runIdTouched = false;
+    editingRunId = false;
+  });
+
+  // Preselect the sensor the checklist names, once the setting has loaded and unless the
+  // operator has chosen one themselves.
+  $effect(() => {
+    if (sensorTouched || run) return;
+    const names = equipment.map((name) => name.toLowerCase());
+    const hit = sensorOptions.find((stock) =>
+      names.some((name) => name.includes(stock.model.toLowerCase()))
+    );
+    if (hit && hit.model !== sensorModel) sensorModel = hit.model;
+  });
+
+  // Keep the id in step with the date, the instrument and the site until it is edited by
+  // hand, at which point the operator's name wins.
+  $effect(() => {
+    if (run || editingRunId || runIdTouched) return;
+    runId = suggestRunId();
   });
 
   // One item per line; blank lines and surrounding space are dropped.
@@ -120,18 +243,43 @@
     return out;
   };
 
+  // A serial typed by hand joins the machine's sensor list, so the next run of the same
+  // unit picks it from the menu. The run has already started, so a failure here must not
+  // put an error banner over it.
+  const rememberSerial = async (model: string, serial: string): Promise<void> => {
+    if (!model || !serial) return;
+    const stocks = parseSensors(sensorsText);
+    let stock = stocks.find((item) => item.model === model);
+    if (!stock) {
+      stock = { model, serials: [] };
+      stocks.push(stock);
+    }
+    if (stock.serials.includes(serial)) return;
+    stock.serials.push(serial);
+    try {
+      const rows = await api.settingsSet("sensors", formatSensors(stocks));
+      const saved = rows.find((row) => row.key === "sensors")?.value;
+      if (saved) sensorsText = saved;
+    } catch {
+      /* keeping the list is a convenience, not part of the run */
+    }
+  };
+
   const start = async (): Promise<void> => {
+    const model = effectiveModel();
+    const serial = effectiveSerial();
     try {
       run = await api.runStart(runSop, runId.trim(), operator.trim(), site.trim(), overrideReason.trim() || null, {
-        sensorModel: sensorModel.trim() || null,
-        sensorSerial: sensorSerial.trim() || null,
+        sensorModel: model || null,
+        sensorSerial: serial || null,
         sensorFirmware: sensorFirmware.trim() || null,
-        hardware: parseLines(hardwareText),
+        hardware: [...new Set([...equipmentChecked, ...parseLines(extraHardware)])],
         conditions: parseConditions(conditionsText),
       });
       currentStep = 0;
       message = `started ${runId.trim()}`;
       isError = false;
+      void rememberSerial(model, serial);
       onRunUpdate();
     } catch (e) {
       say(String(e), true);
@@ -326,6 +474,14 @@
   }
 
   onMount(() => {
+    // The sensor picker reads a machine setting; a failure leaves the built-in default.
+    void api
+      .settingsRows()
+      .then((rows) => {
+        const value = rows.find((row) => row.key === "sensors")?.value;
+        if (value) sensorsText = value;
+      })
+      .catch(() => {});
     // Resume the most recent unfinished run of this checklist, if any.
     void api.manifest().then(async (m) => {
       const runs = m.runs
@@ -405,29 +561,97 @@
         <p class="warn">This checklist is a draft. It cannot start without an override reason.</p>
       {/if}
       <div class="field-row">
-        <div class="field">
-          <label for="run-id">run id</label>
-          <input id="run-id" placeholder={`${today()}-${slug(site)}-01`} bind:value={runId} />
-          <span class="desc">Auto-suggested from today's date and the site; a suffix avoids a duplicate.</span>
-        </div>
         <div class="field"><label for="operator">operator</label><input id="operator" placeholder="your name" bind:value={operator} /></div>
         <div class="field"><label for="site">site</label><input id="site" placeholder="Renfrew 395" bind:value={site} /></div>
       </div>
+
+      <h3>Instrument</h3>
+      <div class="field-row">
+        <div class="field">
+          <label for="sensor-model">sensor model</label>
+          <select id="sensor-model" bind:value={sensorModel} onchange={pickModel}>
+            <option value="">(none)</option>
+            {#each sensorOptions as stock (stock.model)}
+              <option value={stock.model}>{stock.model}</option>
+            {/each}
+            <option value="__other__">Other model&hellip;</option>
+          </select>
+        </div>
+        {#if usingOtherModel()}
+          <div class="field">
+            <label for="sensor-model-other">model name</label>
+            <input id="sensor-model-other" placeholder="RM3100" bind:value={customModel} oninput={() => (sensorTouched = true)} />
+          </div>
+        {/if}
+        <div class="field">
+          <label for="sensor-serial">serial number</label>
+          {#if usingOtherModel() || sensorSerial === "__new__"}
+            <input id="sensor-serial" placeholder="1001" bind:value={customSerial} />
+          {:else}
+            <select id="sensor-serial" bind:value={sensorSerial}>
+              <option value="">(none)</option>
+              {#each serialsFor(sensorModel) as serial (serial)}
+                <option value={serial}>{serial}</option>
+              {/each}
+              <option value="__new__">New serial&hellip;</option>
+            </select>
+          {/if}
+        </div>
+        <div class="field"><label for="sensor-firmware">firmware</label><input id="sensor-firmware" placeholder="optional" bind:value={sensorFirmware} /></div>
+      </div>
+      <span class="desc">The list comes from the <span class="mono">sensors</span> setting, and a serial entered here is added to it.</span>
+
+      <div class="field">
+        <label for="run-id">run id</label>
+        {#if editingRunId}
+          <div class="field-row">
+            <input id="run-id" bind:value={runId} oninput={() => (runIdTouched = true)} />
+            {#if runIdTouched}
+              <button type="button" onclick={() => { runIdTouched = false; editingRunId = false; }}>Use suggested</button>
+            {/if}
+          </div>
+        {:else}
+          <div class="field-row">
+            <code class="id-preview">{runId || "…"}</code>
+            <button type="button" onclick={() => (editingRunId = true)}>Change</button>
+          </div>
+        {/if}
+        <span class="desc">
+          Filed as <span class="mono">runs/{sop}/{runId || "…"}/</span>, beside this
+          checklist's other runs. The name is built from the date and the instrument so a
+          run reads back what it was taken with; change it only if you want your own.
+        </span>
+      </div>
+
       {#if isDraft}
         <div class="field">
           <label for="override-reason">override reason (required to start a draft)</label>
           <input id="override-reason" bind:value={overrideReason} />
         </div>
       {/if}
-      <h3>Instrument and conditions (optional)</h3>
-      <div class="field-row">
-        <div class="field"><label for="sensor-model">sensor model</label><input id="sensor-model" placeholder="GEM GSM-19" bind:value={sensorModel} /></div>
-        <div class="field"><label for="sensor-serial">serial</label><input id="sensor-serial" placeholder="4451233" bind:value={sensorSerial} /></div>
-        <div class="field"><label for="sensor-firmware">firmware</label><input id="sensor-firmware" placeholder="7.0" bind:value={sensorFirmware} /></div>
-      </div>
+
+      <h3>Equipment and conditions</h3>
+      {#if equipment.length}
+        <div class="field">
+          <span class="group-label">equipment this checklist declares</span>
+          <div class="equipment">
+            {#each equipment as item (item)}
+              <label class="task">
+                <input
+                  type="checkbox"
+                  checked={equipmentChecked.includes(item)}
+                  onchange={(e) => toggleEquipment(item, (e.currentTarget as HTMLInputElement).checked)}
+                />
+                {item}
+              </label>
+            {/each}
+          </div>
+          <span class="desc">Everything not ticked is left out of the record, so drop what the run did not use.</span>
+        </div>
+      {/if}
       <div class="field">
-        <label for="hardware">hardware (one per line)</label>
-        <textarea id="hardware" rows="2" placeholder="mag_gcs v0.3.1" bind:value={hardwareText}></textarea>
+        <label for="extra-hardware">additional hardware (one per line)</label>
+        <textarea id="extra-hardware" rows="2" placeholder="mag_gcs v0.3.1" bind:value={extraHardware}></textarea>
       </div>
       <div class="field">
         <label for="conditions">conditions (one <span class="mono">key: value</span> per line)</label>
@@ -608,6 +832,13 @@
   .start-panel { flex: 1; min-height: 0; padding: 16px; overflow: auto; }
   .start-panel p { max-width: 68ch; }
   .start-panel .field { margin-bottom: 8px; }
+  .start-panel .field-row { align-items: flex-end; }
+  .id-preview {
+    font-family: var(--mono); font-size: 13px; padding: 5px 10px; border-radius: 4px;
+    background: var(--quote); border: 1px solid var(--line); flex: 1;
+  }
+  .equipment { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+  .start-panel .group-label { font-size: 12px; color: var(--muted); }
   .exec-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 300px minmax(0, 1fr); }
   .exec-layout > nav { overflow: auto; border-right: 1px solid var(--line); }
   .exec-layout > nav button { width: 100%; margin-top: 4px; font-size: 12px; }

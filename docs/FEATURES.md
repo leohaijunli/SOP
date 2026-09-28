@@ -27,6 +27,9 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | Feature | Notes | Priority |
 |---|---|---|
 | Start a run from a checklist | Freezes `snapshot.md`, opens `events.jsonl` | done |
+| Pick the instrument from a list | The `sensors` setting (`model: serial, serial; model`) fills the model and serial menus; a serial entered by hand is added to it, and a sensor the checklist declares is preselected | done |
+| Equipment ticked off, not retyped | The checklist's `equipment:` front matter appears as checkboxes; only what the run used reaches the record | done |
+| A run id that reads back its own run | `2026-09-28-uas-mag-1001` from the date, model and serial, with `-2` on a repeat; shown as a preview and editable by hand | done |
 | Ordered step list with instructions inline | Prose, tables, warnings, and acceptance criteria next to the widgets | done |
 | Interactive checkboxes | Every toggle is an event | done |
 | Capture entry with unit and expected-range highlight | Operator acknowledges out-of-range values | done |

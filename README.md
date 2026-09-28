@@ -162,6 +162,12 @@ when it is left out, and the current directory after that.
 | `sop run export <sop> --format markdown --run <id> [--out PATH]` | Export one run as a self-contained record document. |
 | `sop run delete <sop> <id> [--yes]` | List what a run occupies; with `--yes`, remove it. |
 
+Starting a run picks the instrument from a list instead of a text box: the `sensors`
+setting holds `model: serial, serial; model` (default `UAS-MAG; RM3100`), the checklist's
+own `equipment:` front matter arrives ticked, and a serial typed by hand joins the list.
+The run id is built from the date, model and serial (`2026-09-28-uas-mag-1001`) and can
+still be changed by hand.
+
 The app's History screen groups runs under the test plan and case they were started
 from, with anything that does not match a case kept under "Runs outside a test plan".
 Each row has **Export record**, which writes that run's record to

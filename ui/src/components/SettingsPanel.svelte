@@ -16,6 +16,7 @@
     branch: "Branch runs are recorded on. Absent means the current branch.",
     "testcase-repo": "Separate repository holding the testplan/ tree (e.g. a clone of this repo on the testcases branch). Absent uses the working copy.",
     "help-open": "Whether the help panel starts open: true or false.",
+    sensors: "Sensor models and their serial numbers, as model: serial, serial; model (for example UAS-MAG: 1001; RM3100). Fills the picker in the start-a-run form.",
     "recent-repositories": "Working copies opened before, most recent first.",
   };
 

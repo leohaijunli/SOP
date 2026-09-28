@@ -39,6 +39,75 @@ pub fn is_repo_key(key: &str) -> bool {
     REPO_KEYS.contains(&key)
 }
 
+/// The instruments shown in the start-a-run form before the operator records their own.
+///
+/// Field laptops see a handful of the same magnetometers, and typing a model name by hand
+/// is the step where a record picks up a typo. The names are only suggestions: the setting
+/// is a plain list, so a lab with other hardware edits one line rather than the form.
+pub const DEFAULT_SENSORS: &str = "UAS-MAG; RM3100";
+
+/// One instrument model and the serial numbers of the units this machine has used.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SensorStock {
+    pub model: String,
+    pub serials: Vec<String>,
+}
+
+/// Parse the `sensors` setting: `model: serial, serial; model`.
+///
+/// A model with no serials yet is just its name, so a fresh inventory is readable and a
+/// hand-edited one that repeats a model merges rather than drops the second entry.
+pub fn parse_sensors(text: &str) -> Vec<SensorStock> {
+    let mut out: Vec<SensorStock> = Vec::new();
+    for entry in text.split(';') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let (model, rest) = match entry.split_once(':') {
+            Some((model, rest)) => (model.trim(), rest),
+            None => (entry, ""),
+        };
+        if model.is_empty() {
+            continue;
+        }
+        match out.iter_mut().find(|stock| stock.model == model) {
+            Some(stock) => push_serials(stock, rest),
+            None => {
+                let mut stock = SensorStock {
+                    model: model.to_owned(),
+                    serials: Vec::new(),
+                };
+                push_serials(&mut stock, rest);
+                out.push(stock);
+            }
+        }
+    }
+    out
+}
+
+fn push_serials(stock: &mut SensorStock, rest: &str) {
+    for serial in rest.split(',') {
+        let serial = serial.trim();
+        if !serial.is_empty() && !stock.serials.iter().any(|known| known == serial) {
+            stock.serials.push(serial.to_owned());
+        }
+    }
+}
+
+/// Render the `sensors` setting so that it round-trips through [`parse_sensors`].
+pub fn format_sensors(stocks: &[SensorStock]) -> String {
+    stocks
+        .iter()
+        .filter(|stock| !stock.model.trim().is_empty())
+        .map(|stock| match stock.serials.is_empty() {
+            true => stock.model.trim().to_owned(),
+            false => format!("{}: {}", stock.model.trim(), stock.serials.join(", ")),
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SettingsError {
     #[error("'{0}' is not a setting; run `sop settings` to list them")]
@@ -127,6 +196,12 @@ pub const KEYS: &[(&str, &str)] = &[
         "Separate repository holding the testplan/ tree. Absent uses the working copy.",
     ),
     (
+        "sensors",
+        "Sensor models and their serial numbers, as `model: serial, serial; model`, for \
+         example `UAS-MAG: 1001; RM3100`. Fills the picker in the start-a-run form. Kept \
+         on this machine.",
+    ),
+    (
         "recent-repositories",
         "Working copies opened before, most recent first.",
     ),
@@ -159,6 +234,13 @@ impl Settings {
             "testcase-repo" => self.testcase_repo.clone(),
             "help-open" => Some(self.help_open.to_string()),
             "recent-repositories" => Some(self.recent_repositories.join(", ")),
+            "sensors" => Some(
+                self.extra
+                    .get("sensors")
+                    .and_then(Json::as_str)
+                    .unwrap_or(DEFAULT_SENSORS)
+                    .to_owned(),
+            ),
             _ => self.extra.get(key).map(|value| value.to_string()),
         }
     }
@@ -212,6 +294,24 @@ impl Settings {
                 };
             }
             "recent-repositories" => return Err(SettingsError::NotSettable(key.to_owned())),
+            "sensors" => {
+                // An emptied box means "back to the built-in list", not an error that
+                // would fail the whole config save.
+                if value.is_empty() {
+                    self.extra.remove("sensors");
+                    return Ok(());
+                }
+                let stocks = parse_sensors(value);
+                if stocks.is_empty() {
+                    return Err(SettingsError::Invalid {
+                        key: key.to_owned(),
+                        message: "must name at least one model, for example `UAS-MAG: 1001, 1002`"
+                            .to_owned(),
+                    });
+                }
+                self.extra
+                    .insert(key.to_owned(), Json::String(format_sensors(&stocks)));
+            }
             other if self.extra.contains_key(other) => {
                 self.extra
                     .insert(other.to_owned(), Json::String(value.to_owned()));
@@ -230,6 +330,9 @@ impl Settings {
             "testcase-repo" => self.testcase_repo = None,
             "help-open" => self.help_open = true,
             "recent-repositories" => self.recent_repositories.clear(),
+            "sensors" => {
+                self.extra.remove("sensors");
+            }
             other => {
                 self.extra.remove(other);
             }

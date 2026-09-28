@@ -368,7 +368,10 @@ contain one: a run whose steps have no outcome is not complete. A step with neit
 outcome nor any data is left out of the record rather than written as a placeholder.
 
 `sensor`, `hardware`, and `conditions` are optional front matter that records what the
-checklist cannot know. `sensor` is a mapping of `model`, `serial`, and `firmware`;
+checklist cannot know. The field app fills `sensor` from a list of `model`s and their
+`serial`s (the machine-local `sensors` setting) rather than a free-text box, so a model
+name in a record is one that was chosen, not typed. `sensor` is a mapping of `model`,
+`serial`, and `firmware`;
 `hardware` is a list of software and equipment; `conditions` is a free-form mapping such
 as `weather` and `temp_c`. Values are text, and a hand-written number or boolean is
 accepted. They are what lets two runs at the same site be told apart later, so the record

@@ -248,3 +248,58 @@ fn a_repository_file_that_is_not_an_object_is_reported() {
     let error = settings::apply_repo(&scratch.root, &mut settings).unwrap_err().to_string();
     assert!(error.contains("settings.json"), "{error}");
 }
+
+#[test]
+fn the_sensor_inventory_round_trips_and_merges_repeated_models() {
+    use sop_core::settings::{DEFAULT_SENSORS, format_sensors, parse_sensors};
+
+    assert_eq!(
+        parse_sensors(DEFAULT_SENSORS),
+        vec![
+            sop_core::settings::SensorStock { model: "UAS-MAG".to_owned(), serials: vec![] },
+            sop_core::settings::SensorStock { model: "RM3100".to_owned(), serials: vec![] },
+        ],
+        "the default names the models the form offers"
+    );
+
+    // A model written twice keeps both sets of serials rather than losing one, and a
+    // serial repeated inside one model is only listed once.
+    let stocks = parse_sensors("UAS-MAG: 1001, 1002; RM3100; UAS-MAG: 1001, 1003 ");
+    assert_eq!(stocks.len(), 2, "a repeated model is merged: {stocks:?}");
+    assert_eq!(stocks[0].serials, vec!["1001", "1002", "1003"]);
+    assert_eq!(stocks[1].model, "RM3100");
+    assert!(stocks[1].serials.is_empty());
+    assert_eq!(format_sensors(&stocks), "UAS-MAG: 1001, 1002, 1003; RM3100");
+    assert_eq!(parse_sensors(&format_sensors(&stocks)), stocks);
+}
+
+#[test]
+fn the_sensor_setting_defaults_normalises_and_can_be_cleared() {
+    let mut settings = Settings::default();
+    assert_eq!(settings.get("sensors").as_deref(), Some("UAS-MAG; RM3100"));
+
+    // Writing a serial back after a run normalises the text on the way in.
+    settings.set("sensors", "UAS-MAG: 1001 ; RM3100: 3001,3002").unwrap();
+    assert_eq!(
+        settings.get("sensors").as_deref(),
+        Some("UAS-MAG: 1001; RM3100: 3001, 3002")
+    );
+    assert!(settings.to_json().contains("sensors"), "the value is persisted");
+
+    // A value with no model at all is rejected rather than stored as an empty picker.
+    let error = settings.set("sensors", "  ;  ").unwrap_err().to_string();
+    assert!(error.contains("sensors"), "{error}");
+    assert_eq!(
+        settings.get("sensors").as_deref(),
+        Some("UAS-MAG: 1001; RM3100: 3001, 3002"),
+        "a rejected value leaves the setting alone"
+    );
+
+    // Clearing the box in the settings page is how the operator goes back to the
+    // built-in list; it must not fail the whole save.
+    settings.set("sensors", "   ").unwrap();
+    assert_eq!(settings.get("sensors").as_deref(), Some("UAS-MAG; RM3100"));
+    settings.set("sensors", "UAS-MAG: 1001").unwrap();
+    settings.unset("sensors").unwrap();
+    assert_eq!(settings.get("sensors").as_deref(), Some("UAS-MAG; RM3100"));
+}

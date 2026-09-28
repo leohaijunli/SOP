@@ -1,0 +1,45 @@
+# Run heading-error (2026-09-28T23:44:16Z)
+
+operator: leo
+
+site: cfar
+
+sop_version: 1
+sop_commit: 94dae4d
+hardware: Bartington UAS-MAG fluxgate, Non-magnetic rotation table, Azimuth marks
+
+## Mount
+
+- [ ] Sensor centered on the rotation table
+- [ ] Table marked at known azimuths
+- [ ] No nearby ferrous objects
+
+```yaml result
+step: mount
+status: done
+```
+
+## Rotate
+
+- [ ] Full 360-degree sweep recorded
+- [ ] Azimuth and reading logged at each mark
+- [ ] Peak-to-peak heading error computed
+
+```yaml result
+step: rotate
+status: done
+```
+
+## Result
+
+- [ ] Heading error logged
+- [ ] Residual error acknowledged by the operator
+
+```yaml result
+step: result
+status: done
+```
+
+
+status: complete
+deviations_count: 0
