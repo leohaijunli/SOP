@@ -61,6 +61,7 @@ self-contained directory; see `docs/DESIGN.md` section 5 and `docs/LOGS.md`.
 | `docs/SCENARIOS.md` | Six typical situations the tool is built for |
 | `docs/DECISIONS.md` | Decisions that are expensive to revisit |
 | `docs/LOGS.md` | Attachment naming, hashing, and size policy |
+| `docs/IMPROVEMENTS.md` | Review notes: improvements for field engineers, ordered by value |
 | `help/*.md` | Documentation for people using the tool, shown in the app's help panel |
 
 ## Current content
