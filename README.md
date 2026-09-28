@@ -80,6 +80,64 @@ cargo build --release
 ./target/release/sop validate
 ```
 
+## Building and deploying on Ubuntu
+
+The desktop app is a Tauri shell over the Svelte renderer, so building it needs the
+WebKit/GTK system libraries plus Rust and Node.
+
+**1. Install the system dependencies** (Debian/Ubuntu):
+
+```bash
+sudo apt-get install build-essential curl wget file libssl-dev libgtk-3-dev \
+  libwebkit2gtk-4.1-dev librsvg2-dev patchelf libayatana-appindicator3-dev \
+  libsoup-3.0-dev javascriptcoregtk-4.1-dev
+```
+
+**2. Install the toolchains:**
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+# Node 18+ (or via mise/nvm); npm is used to build the renderer.
+node --version && npm --version
+```
+
+**3. Build the renderer and the app** (from the repository root):
+
+```bash
+cd ui && npm install && npm run build && cd ..
+cargo build -p sop-app --release
+```
+
+**4. Run the desktop app:**
+
+```bash
+./run-app.sh --release
+# or point it at the working copy explicitly:
+./run-app.sh --repo /path/to/working-copy --release
+```
+
+`run-app.sh` installs the frontend deps, builds the renderer if missing, builds the Rust
+binary, and starts the window. Add `--no-isolate` to use the machine's real settings
+instead of a throwaway XDG directory.
+
+**5. Package installers (`.deb` and AppImage):**
+
+```bash
+cargo tauri build --bundles deb,appimage
+```
+
+The installers are written to `target/release/bundle/`. Installing the `.deb`:
+
+```bash
+sudo dpkg -i target/release/bundle/deb/field-sop_*.deb
+# or apt so missing dependencies are fetched
+sudo apt install ./target/release/bundle/deb/field-sop_*.deb
+```
+
+Everything runs in CI on `ubuntu-latest` (`.github/workflows/validate.yml`): formatting,
+clippy, the full test suite, content validation, and the manifest build.
+
 Every command takes `--repo <path>`; the working copy configured in the settings is used
 when it is left out, and the current directory after that.
 
