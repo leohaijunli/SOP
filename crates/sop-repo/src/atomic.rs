@@ -71,8 +71,20 @@ pub fn write(path: &Path, text: &str) -> Result<(), WriteError> {
 }
 
 /// A temporary path beside the real one, so the rename cannot cross a filesystem.
+///
+/// The suffix carries the process id and a per-process counter: two writers (the app and
+/// the CLI, or two threads) must not share a temporary, or one renames it away while the
+/// other is still writing and the second rename fails with "no such file".
 fn sibling_temporary(path: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(
+        ".{}.{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
     name.push(".tmp");
     path.with_file_name(name)
 }

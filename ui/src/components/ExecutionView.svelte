@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { htmlOf } from "../lib/md.svelte";
   import { text } from "../lib/text";
+  import { localDateTime } from "../lib/dates";
   import { expectsNumber, expectedHint, expectedOk, formatProblem, missingRequired } from "../lib/capture";
   import MarkdownEditor from "./MarkdownEditor.svelte";
+  import PromptModal from "./PromptModal.svelte";
   import * as api from "../lib/api";
   import type { Drift, Manifest, RunEntry, RunStepView, RunView } from "../lib/types";
 
@@ -13,6 +15,9 @@
     caseContext,
     onNextCase,
     onRunUpdate,
+    onResumeRun = () => {},
+    resumeRunId = null,
+    onResumed = () => {},
   }: {
     manifest: Manifest | null;
     checklist: number;
@@ -28,6 +33,12 @@
     } | null;
     onNextCase: () => void;
     onRunUpdate: () => void;
+    /// Ask the shell to open another checklist's run (it owns the checklist selection).
+    onResumeRun?: (sopId: string, runId: string) => void;
+    /// A run the shell asked this view to open, after switching checklists.
+    resumeRunId?: string | null;
+    /// Called once `resumeRunId` has been loaded, so the shell can clear it.
+    onResumed?: () => void;
   } = $props();
 
   const sop = $derived(
@@ -109,6 +120,32 @@
   // A pending request to end the run. Ending is not undoable, so the first press only
   // arms this and the second confirms.
   let endPending = $state<string | null>(null);
+  // The reason prompt in flight, if any. A promise keeps the call sites readable
+  // (`const reason = await ask(...)`) while the UI is a component, not a browser dialog.
+  let promptRequest = $state<{
+    title: string;
+    message?: string | null;
+    label?: string;
+    choices?: string[];
+    optional?: boolean;
+    submitLabel?: string;
+    placeholder?: string;
+  } | null>(null);
+  let promptResolve: ((value: string | null) => void) | null = null;
+
+  const ask = (request: NonNullable<typeof promptRequest>): Promise<string | null> => {
+    promptRequest = request;
+    return new Promise((resolve) => {
+      promptResolve = resolve;
+    });
+  };
+
+  const settlePrompt = (value: string | null): void => {
+    const resolve = promptResolve;
+    promptResolve = null;
+    promptRequest = null;
+    resolve?.(value);
+  };
 
   // Clear the finished-run confirmation and go back to the start-a-run form, re-seeded
   // from the checklist rather than left as the finished run left it.
@@ -419,12 +456,23 @@
 
   const setStatus = async (step: RunStepView, status: string): Promise<void> => {
     if (status === "skipped" || status === "deviated") {
-      const reason = prompt(`Reason for ${status}:`);
-      if (!reason) {
-        say("a reason is required", true);
+      const skipped = status === "skipped";
+      const reason = await ask({
+        title: skipped ? `Skip ${step.title}` : `Deviate from ${step.title}`,
+        message: "The reason is written into the record and cannot be left out.",
+        label: "Reason",
+        choices: skipped
+          ? ["not applicable at this site", "equipment unavailable", "no time in this session", "weather"]
+          : ["wind shifted the plan", "sensor drift", "site access changed", "equipment swapped"],
+        placeholder: skipped ? "Why is this step being skipped?" : "How did this differ from the checklist?",
+        submitLabel: skipped ? "Skip step" : "Record deviation",
+      });
+      // Cancelling, or submitting nothing, leaves the step as it was.
+      if (reason === null || reason.trim() === "") {
+        if (reason !== null) say("a reason is required", true);
         return;
       }
-      await emit({ type: "StepStatusChanged", step: step.id, status, reason });
+      await emit({ type: "StepStatusChanged", step: step.id, status, reason: reason.trim() });
     } else {
       await emit({ type: "StepStatusChanged", step: step.id, status, reason: null });
     }
@@ -446,7 +494,15 @@
   // The recorded judgement for a value outside the expected range. The tool never judges;
   // the operator does, and this event is what survives review.
   const acknowledge = async (step: RunStepView, key: string): Promise<void> => {
-    const reason = prompt("Why is this value acceptable? (optional, recorded)");
+    const reason = await ask({
+      title: "Value outside the expected range",
+      message: "The tool does not judge the value; recording why you accepted it is enough.",
+      label: "Why is it acceptable?",
+      optional: true,
+      choices: ["within sensor tolerance", "expected at this site", "will re-measure"],
+      placeholder: "optional - a sentence for the reviewer",
+      submitLabel: "Acknowledge",
+    });
     if (reason === null) return;
     await emit({ type: "CaptureAcknowledged", step: step.id, key, reason: reason.trim() || null });
   };
@@ -506,15 +562,27 @@
   // Ending cannot be undone, so a press first arms a confirmation bar and only a second
   // press writes the event. `blockedReason` is the `complete` coverage check, kept so the
   // confirmation bar can explain why that status is not offered.
-  const blockedReason = $derived(
-    (() => {
-      if (!run) return null;
-      const open = run.steps.filter((s) => !["done", "deviated"].includes(s.status));
-      if (open.length === 0) return null;
-      return `${open.length} step(s) are skipped or have no outcome; a complete run cannot ` +
-        `contain those. Finish or deviate them, or end as partial/aborted`;
-    })()
+  // A step blocks `complete` when it is skipped or has no outcome yet.
+  const blockingSteps: RunStepView[] = $derived(
+    run ? run.steps.filter((s) => !["done", "deviated"].includes(s.status)) : []
   );
+
+  const blockedReason = $derived(
+    blockingSteps.length === 0
+      ? null
+      : `${blockingSteps.length} step(s) are skipped or have no outcome; a complete run ` +
+        `cannot contain those. Finish or deviate them, or end as partial/aborted`
+  );
+
+  // How much of the run is accounted for, for the header and the disabled button.
+  const settledCount = $derived(run ? run.steps.length - blockingSteps.length : 0);
+  const totalSteps = $derived(run ? run.steps.length : 0);
+
+  // Jump to the first step that blocks `complete`, and say so.
+  const goToFirstBlocker = (): void => {
+    if (!run || blockingSteps.length === 0) return;
+    currentStep = run.steps.indexOf(blockingSteps[0]);
+  };
 
   const requestEnd = (status: string): void => {
     // A `complete` run must account for every step and cannot contain a skipped one:
@@ -559,15 +627,55 @@
     const missing = missingRequired(step.captures);
     let reason: string | null = null;
     if (missing.length) {
-      const typed = prompt(
-        `${missing.length} required capture(s) are empty: ${missing.join(", ")}. ` +
-          `Finish anyway? Add a reason to record (blank cancels):`
-      );
-      if (!typed) return;
+      const typed = await ask({
+        title: `${missing.length} required capture${missing.length === 1 ? "" : "s"} still empty`,
+        message: `${missing.join(", ")}. This is a reminder, not a verdict: you can finish the step anyway and the reason is recorded.`,
+        label: "Why finish with the field empty?",
+        choices: ["not measurable here", "reading failed, will retry", "not required for this run"],
+        placeholder: "A sentence for the reviewer",
+        submitLabel: "Finish step anyway",
+      });
+      // Cancelling, or submitting nothing, leaves the step open.
+      if (typed === null || typed.trim() === "") return;
       reason = `done with ${missing.length} required capture(s) empty (${missing.join(", ")}): ${typed.trim()}`;
     }
-    await emit({ type: "StepStatusChanged", step: step.id, status: "done", reason });
+    const saved = await emit({ type: "StepStatusChanged", step: step.id, status: "done", reason });
+    if (saved) advance(step);
   };
+
+  // Move to the next step that still needs an outcome, so a keyboard run flows forward
+  // instead of leaving the operator to hunt for where they were. It wraps, so finishing
+  // the last step lands on the first one still open.
+  const advance = (from: RunStepView): void => {
+    if (!run) return;
+    const settled = (step: RunStepView): boolean => ["done", "deviated"].includes(step.status);
+    const index = run.steps.indexOf(from);
+    for (let offset = 1; offset <= run.steps.length; offset += 1) {
+      const next = (index + offset) % run.steps.length;
+      if (!settled(run.steps[next])) {
+        currentStep = next;
+        return;
+      }
+    }
+  };
+
+  // Landing on a step puts the cursor in the first capture that still needs a value, so a
+  // keyboard-only run does not have to tab past the ones already filled. It only fires
+  // when the step changes, so it never yanks focus while the operator is typing.
+  let focusedStep = $state<number | null>(null);
+  $effect(() => {
+    if (!run || !current || focusedStep === currentStep) return;
+    focusedStep = currentStep;
+    void tick().then(() => {
+      const box = capturesBox;
+      if (!box) return;
+      const fields = Array.from(
+        box.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select")
+      );
+      const empty = fields.find((field) => (field.value ?? "").trim() === "");
+      (empty ?? fields[0])?.focus();
+    });
+  });
 
   // The keyboard contract in `help/app-basics.md`: field use is one-handed, so every
   // action on the run screen has a key. `F1` and `/` belong to the shell, so they are
@@ -577,6 +685,8 @@
   const onKey = (event: KeyboardEvent): void => {
     const target = event.target as HTMLElement;
     const inField = target.matches("input, select, textarea");
+    // A prompt owns the keyboard while it is open; the dialog handles Escape itself.
+    if (promptRequest) return;
     if (endPending) {
       event.preventDefault();
       if (event.key === "Escape") cancelEnd();
@@ -720,6 +830,39 @@
       }
     });
   });
+
+  // Every run in the working copy that has not been ended, across every checklist. A run
+  // left open somewhere else used to be invisible unless its checklist happened to be
+  // the one on screen.
+  const unfinished = $derived((manifest?.runs ?? []).filter((entry) => !api.text(entry.status)));
+
+  const loadRun = async (sopId: string, id: string): Promise<void> => {
+    try {
+      const loaded = await api.runState(sopId, id);
+      run = loaded;
+      message = `resumed ${loaded.runId}`;
+      isError = false;
+    } catch (e) {
+      say(String(e), true);
+    }
+  };
+
+  // Resume from the list: a run of this checklist loads here, one of another checklist
+  // asks the shell to switch to it (the shell owns the checklist selection).
+  const resume = (entry: RunEntry): void => {
+    const id = api.text(entry.run_id);
+    const target = api.text(entry.sop);
+    if (!id) return;
+    if (target === sop) void loadRun(runSop, id);
+    else onResumeRun(target, id);
+  };
+
+  // The shell switched the checklist to hand us a run to open.
+  $effect(() => {
+    const id = resumeRunId;
+    if (!id || !runSop) return;
+    void loadRun(runSop, id).then(() => onResumed());
+  });
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -735,6 +878,10 @@
     {/if}
     <span class="spacer"></span>
     {#if run}
+      <span class="progress" title="steps with an outcome: done or deviated">
+        <progress value={settledCount} max={Math.max(totalSteps, 1)}></progress>
+        {settledCount} / {totalSteps} done
+      </span>
       <span class="muted">
         {run!.runId} &middot; {run!.operator ?? "?"} &middot; {run!.site ?? "?"}{#if run!.runStatus} &middot; {run!.runStatus}{/if}
       </span>
@@ -814,6 +961,23 @@
   {#if !run}
     <section class="start-panel">
       <h2>Start a run</h2>
+      {#if unfinished.length}
+        <div class="unfinished">
+          <h3>Runs still open ({unfinished.length})</h3>
+          <ul>
+            {#each unfinished as entry (text(entry.sop) + "/" + text(entry.run_id))}
+              <li>
+                <button type="button" class="primary" onclick={() => resume(entry)}>Resume</button>
+                <span class="mono">{text(entry.run_id)}</span>
+                <span class="muted">{text(entry.sop)}{#if text(entry.sop) === sop} (this checklist){/if}</span>
+                <span class="muted">{localDateTime(entry.started)}</span>
+                {#if text(entry.operator)}<span class="muted">{text(entry.operator)}</span>{/if}
+                {#if text(entry.site)}<span class="muted">{text(entry.site)}</span>{/if}
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
       {#if caseContext}
         <p class="breadcrumb-plan">
           Plan <strong>{caseContext.planTitle}</strong> &mdash;
@@ -1005,6 +1169,14 @@
           title={blockedReason ?? "End the run as complete"}
           onclick={() => requestEnd("complete")}
         >End: complete</button>
+        {#if blockingSteps.length}
+          <p class="blockers">
+            {blockingSteps.length} step(s) block a complete run.
+            <button type="button" onclick={goToFirstBlocker}>
+              Go to {blockingSteps[0].title}
+            </button>
+          </p>
+        {/if}
         <button onclick={() => requestEnd("partial")}>End: partial</button>
         <button onclick={() => requestEnd("aborted")}>End: aborted</button>
       </nav>
@@ -1183,6 +1355,18 @@
   {/if}
 </article>
 
+<PromptModal
+  open={promptRequest !== null}
+  title={promptRequest?.title ?? ""}
+  message={promptRequest?.message ?? null}
+  label={promptRequest?.label ?? "Reason"}
+  choices={promptRequest?.choices ?? []}
+  optional={promptRequest?.optional ?? false}
+  submitLabel={promptRequest?.submitLabel ?? "Save"}
+  placeholder={promptRequest?.placeholder ?? ""}
+  onResolve={settlePrompt}
+/>
+
 <style>
   /* The app shell lays this view beside the help panel, so the run screen ends up with
      the same three columns as Browse: step list, instructions, help. This view owns the
@@ -1193,6 +1377,12 @@
   .run-meta { display: flex; gap: 16px; flex-wrap: wrap; }
   .breadcrumb { font-size: 12px; color: var(--muted); }
   .breadcrumb-plan { color: var(--muted); }
+  .progress {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+  .progress progress { width: 90px; height: 8px; }
+  .blockers { font-size: 12px; color: var(--warn); margin: 6px 0; }
   .saved { font-family: var(--mono); font-size: 11px; color: var(--ok); }
   .drift-warn { color: var(--warn); font-weight: 600; }
   .spacer { flex: 1; }
@@ -1209,6 +1399,11 @@
   }
   .equipment { display: flex; flex-wrap: wrap; gap: 4px 16px; }
   .start-panel .group-label { font-size: 12px; color: var(--muted); }
+  .unfinished { margin-bottom: 16px; }
+  .unfinished h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .unfinished ul { list-style: none; margin: 6px 0 0; padding: 0; }
+  .unfinished li { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; padding: 4px 0; }
+  .unfinished button { font-size: 12px; }
   .condition-field { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
   .condition-field input { max-width: 28ch; }
   .exec-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 300px minmax(0, 1fr); }

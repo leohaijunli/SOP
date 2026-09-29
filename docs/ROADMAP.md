@@ -15,9 +15,9 @@ supersedes both as the list of what is left.
 
 Invariants: no database, no change of UI framework, and Markdown plus event sourcing stays.
 
-Progress: **batch 1 is merged** - 0.2, 0.3, 0.4, and 1.1-1.4 are done (they carry a
-`done` mark below). 0.1 found no code to change but still needs a real Ubuntu machine, so
-it stays open. Batch 2 (P2) is next.
+Progress: **batches 1 and 2 are merged** - 0.2, 0.3, 0.4, 1.1-1.4, and 2.1-2.4 are done
+(they carry a `done` mark below). 0.1 has no code to change but still needs a real Ubuntu
+machine, so it stays open. Next up is 2.5-2.6, then P3.
 
 ## P0 - Data safety
 
@@ -46,10 +46,10 @@ together.
 
 | # | Item | Notes |
 |---|---|---|
-| 2.1 | **In-app modals instead of `prompt`/`confirm`** | Skip, deviate, and acknowledging an out-of-range value use blocking browser dialogs; offer shortcut buttons for the common reasons. |
-| 2.2 | **Commands must not block the window** `[verify]` | Every Tauri command is a synchronous `fn`, and startup runs `git pull` unconditionally with no timeout. Make them `async` with `spawn_blocking`, give git a timeout, and skip the sync when there is no network. |
-| 2.3 | **Progress and navigation** | "12 of 38 done"; advance to the next step after marking done; focus the first empty capture when a step opens; when **End: complete** is disabled, say which steps block it and offer to jump there. |
-| 2.4 | **A global list of unfinished runs** | Today only the newest run of the open checklist is offered for resume; runs of other checklists, and older open runs, are invisible. |
+| 2.1 `done` | **In-app modals instead of `prompt`/`confirm`** | `PromptModal.svelte`; skip, deviate, acknowledge, and the required-capture reminder each offer one-tap reasons plus a text box. |
+| 2.2 `done` | **Commands must not block the window** `[verify]` | Every command carries `#[tauri::command(async)]` (Tauri's blocking thread pool); git commands have a kill-deadline (15s local, 30s network); startup skips the pull when `navigator.onLine` is false. |
+| 2.3 `done` | **Progress and navigation** | A "N / M done" bar; marking done advances to the next open step; opening a step focuses its first empty capture; the End:complete blocker is spelled out with a jump button. |
+| 2.4 `done` | **A global list of unfinished runs** | The start form lists every in-progress run across checklists; resuming one on another checklist switches to it through the shell. |
 | 2.5 | **Collapse the start form** | Only run id, operator, and site are required; the rest folds into a "same as last time: …" line. |
 | 2.6 | **Reorder navigation** | Land on Test Plans; order plan / run / history; move Edit, Project, and Settings under "Manage" so a field tap cannot change the SOP. |
 | 2.7 | **Multi-file attachments and a size warning** | One file per dialog today; add multi-select, drag and drop, and a total-size warning per run. |

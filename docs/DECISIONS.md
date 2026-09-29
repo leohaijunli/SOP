@@ -509,6 +509,12 @@ Cost: a run's `events.jsonl` can no longer be edited by hand and re-saved as a w
 correction is a new event (the `Reopen` path already works this way). This bumped the
 declared Rust floor to 1.89 for `File::lock`.
 
+Writing the concurrency test paid for itself: `atomic::write` used a fixed `path.tmp`
+sibling, so two writers of the same `record.md` shared one temporary and the second
+`rename` failed with "no such file". The temporary now carries the process id and a
+per-process counter. The event log itself was never affected - it is appended, not
+rewritten - but the rendered `record.md` was racing.
+
 ## D24 - Ending a run asks first, and a completeness gap is a reminder
 
 Decision: ending a run goes through a confirmation bar (`requestEnd` / `confirmEnd`).
@@ -527,3 +533,50 @@ Reasons:
 - Showing the `expected` range before a value is typed, and rejecting a non-number for a
   `number` capture, moves the check to the moment the operator can act on it. The
   judgement on an out-of-range value is still theirs (the `Acknowledge` path, D3/D4).
+
+## D25 - Commands run off the window's thread, and git is bounded
+
+Decision: every Tauri command is `#[tauri::command(async)]` even though the functions are
+synchronous, `git` subprocesses have a kill-deadline (15s for a local query, 30s for one
+that reaches the network), and startup skips the pull when `navigator.onLine` is false.
+
+Reasons:
+
+- A synchronous Tauri command runs on the window's main thread. One slow command - a
+  `git pull` at an unreachable remote, a walk over a large repository, a big attachment
+  copy - freezes the whole window. Tauri maps a `(async)` sync fn onto its blocking
+  thread pool, which is the `spawn_blocking` this would otherwise spell out by hand, and
+  the function stays synchronous so Rust can still call it directly.
+- `Command::output()` waits forever, so a dead network hangs the thread as long as the
+  kernel lets it. The helper drains stdout/stderr on side threads (so a chatty command
+  cannot fill its pipe and deadlock), polls to a deadline, and kills the child.
+- A field laptop is often offline, so the startup pull is skipped outright when the
+  system already knows there is no connection. The timeout is the backstop for when that
+  signal is wrong.
+
+Cost: an async command cannot borrow non-`'static` data across an await, so the bodies
+stay synchronous (no awaits). A killed `git` leaves the repository as it was - the pull
+either completed or did not.
+
+## D26 - Reasons are collected in the app, and finishing a step moves you on
+
+Decision: skip/deviate reasons, acknowledgement notes, and the required-capture reason
+are collected by `PromptModal.svelte` with one-tap buttons for the common answers. A
+reason prompt is `await`ed like a function. Marking a step done advances to the next step
+with an outcome still missing; opening a step focuses its first empty capture.
+
+Reasons:
+
+- `window.prompt`/`confirm` block the webview, look like the browser rather than the app,
+  and may not render at all in a packaged build (this is one of the three things ROADMAP
+  0.1 has to confirm on a real machine). A field operator is one-handed and often gloved,
+  so the answer they give most of the time should be one tap, not a keyboard.
+- The modal never decides anything: it collects the operator's words, which is exactly
+  what the event records. The tool still does not judge (D4).
+- After a step is finished the next thing the operator wants is the next step, and the
+  cursor belongs in the first field that still needs a value. Both are navigation, not
+  policy.
+
+Cost: a modal is more code than `prompt`, and auto-advance is a small surprise the first
+time (a jump to another checklist, or wrapping to the first open step). The alternative -
+leaving the operator to hunt for their place on a glare-washed screen - is worse.

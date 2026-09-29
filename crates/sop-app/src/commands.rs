@@ -4,6 +4,13 @@
 //! it and undoes it if the repository as a whole stops validating. Nothing here decides
 //! whether an edit is allowed; it only carries the answer back, including the report
 //! when the answer is no.
+//!
+//! Every command is `#[tauri::command(async)]`. Tauri runs a synchronous command on the
+//! window's main thread, so a slow one - a `git pull` with no network, a directory walk
+//! over a big repository, a copy of a large attachment - freezes the window while it runs.
+//! The `async` flag moves the same body onto Tauri's blocking thread pool, which is the
+//! `spawn_blocking` this code would otherwise have to spell out by hand. The functions
+//! stay synchronous so they can still be called directly from Rust.
 
 use std::path::{Path, PathBuf};
 
@@ -23,21 +30,21 @@ type Reply<T> = Result<T, String>;
 
 // ------------------------------------------------------------------- reading
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn manifest_json(state: State<'_, AppState>) -> Reply<String> {
     let repo = state.repo()?;
     Ok(manifest::build(&repo).to_json())
 }
 
 /// The test plans and their cases, from the `testplan/` tree of the testcase repository.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn test_plans(state: State<'_, AppState>) -> Reply<Vec<sop_repo::testplan::TestPlan>> {
     let repo = Repo::open(state.testcase_repo_root()?);
     Ok(sop_repo::testplan::plans(&repo))
 }
 
 /// Pull the working copy and the testcase repository, fast-forward only, and report.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn sync_pull(state: State<'_, AppState>) -> Reply<String> {
     let mut lines: Vec<String> = Vec::new();
 
@@ -61,7 +68,7 @@ pub fn sync_pull(state: State<'_, AppState>) -> Reply<String> {
 }
 
 /// Commit and push the testcase repository after the operator changed a case or plan.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn testcase_push(message: String, state: State<'_, AppState>) -> Reply<String> {
     let root = state.testcase_repo_root()?;
     let remote = state.settings()?.remote;
@@ -71,7 +78,7 @@ pub fn testcase_push(message: String, state: State<'_, AppState>) -> Reply<Strin
 
 /// Duplicate a test case (a plan folder's md) so a repeat or variant experiment has its
 /// own case. The copy gets a new id and title from its new filename.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn duplicate_test_case(path: String, state: State<'_, AppState>) -> Reply<String> {
     let repo = Repo::open(state.testcase_repo_root()?);
     let src = resolve_file(&repo, &path)?;
@@ -109,7 +116,7 @@ pub fn duplicate_test_case(path: String, state: State<'_, AppState>) -> Reply<St
 }
 
 /// Delete a test case (remove its md from the plan folder).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_test_case(path: String, state: State<'_, AppState>) -> Reply<()> {
     let repo = Repo::open(state.testcase_repo_root()?);
     let file = resolve_file(&repo, &path)?;
@@ -120,7 +127,7 @@ pub fn delete_test_case(path: String, state: State<'_, AppState>) -> Reply<()> {
 
 /// Import a markdown file into a plan folder as a new test case. The source file is
 /// copied in under a unique name and given a fresh id/title so it is a runnable case.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn import_test_case(plan_path: String, source: String, state: State<'_, AppState>) -> Reply<String> {
     let repo = Repo::open(state.testcase_repo_root()?);
     let plan_dir = resolve_file(&repo, &plan_path)?;
@@ -157,7 +164,7 @@ pub fn import_test_case(plan_path: String, source: String, state: State<'_, AppS
 }
 
 /// Create a new test plan: a folder under `testplan/` with a `plan.md` carrying its title.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_test_plan(name: String, title: String, state: State<'_, AppState>) -> Reply<String> {
     let name = name.trim().to_lowercase();
     if !sop_core::vocab::is_valid_id(&name) {
@@ -184,7 +191,7 @@ pub fn create_test_plan(name: String, title: String, state: State<'_, AppState>)
 /// A compact test summary of every run, in test-plan / test-case order, plus a coverage
 /// line for every case whether it has been run or not. Written to `out` (via the save
 /// dialog the frontend opens) and returned as text so the window can show it.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn run_summary(out: String, state: State<'_, AppState>) -> Reply<String> {
     let repo = state.repo()?;
     let testcases = Repo::open(state.testcase_repo_root()?);
@@ -202,7 +209,7 @@ pub fn run_summary(out: String, state: State<'_, AppState>) -> Reply<String> {
 ///
 /// Both ids end up in a path, so both are checked as ids before anything is removed. The
 /// operator is asked first by the window; this only does what it is told.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn run_delete(sop: String, run_id: String, state: State<'_, AppState>) -> Reply<usize> {
     let repo = state.repo()?;
     if !sop_core::vocab::is_valid_id(&sop) {
@@ -218,7 +225,7 @@ pub fn run_delete(sop: String, run_id: String, state: State<'_, AppState>) -> Re
 /// Remove every run in the working copy and report how many there were.
 ///
 /// `runs/_inbox/` is left alone: it holds field observations, not run history.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn run_delete_all(state: State<'_, AppState>) -> Reply<usize> {
     let repo = state.repo()?;
     let runs = run::all_runs(&repo).len();
@@ -236,26 +243,26 @@ fn resolve_file(repo: &Repo, path: &str) -> Result<PathBuf, String> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn status(state: State<'_, AppState>) -> Reply<Status> {
     build_status(&state)
 }
 
 /// Render Markdown to HTML. The renderer lives in `sop_core::md`, so the app, the
 /// preview server, and (later) the record export all read a note the same way.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn render_markdown(text: String) -> Reply<String> {
     Ok(sop_core::md::render(&text))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn validation_report(state: State<'_, AppState>) -> Reply<String> {
     let repo = state.repo()?;
     Ok(validate::validate_repository(&repo).report.render(repo.root()))
 }
 
 /// The procedures that can be included in a checklist, and whether it already has them.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn procedure_choices(file: Option<String>, state: State<'_, AppState>) -> Reply<Vec<ProcedureChoice>> {
     let repo = state.repo()?;
     let included = match file.as_deref() {
@@ -303,29 +310,29 @@ pub struct ProcedureChoice {
 
 // ------------------------------------------------------------------ settings
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn settings_rows(state: State<'_, AppState>) -> Reply<Vec<SettingRow>> {
     rows(&state)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn settings_path(state: State<'_, AppState>) -> Reply<String> {
     Ok(state.settings_path().display().to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn settings_set(key: String, value: String, state: State<'_, AppState>) -> Reply<Vec<SettingRow>> {
     state.set_setting(&key, &value)?;
     rows(&state)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn settings_unset(key: String, state: State<'_, AppState>) -> Reply<Vec<SettingRow>> {
     state.unset_setting(&key)?;
     rows(&state)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn settings_repo_path(state: State<'_, AppState>) -> Reply<String> {
     Ok(state.settings_repo_path()?.display().to_string())
 }
@@ -335,7 +342,7 @@ pub fn settings_repo_path(state: State<'_, AppState>) -> Reply<String> {
 /// This is what the Project and Settings pages load on open; the operator can then edit
 /// either page and press Confirm, which writes the same JSON back to `configure.json`
 /// and applies the values to `project.md` and the settings files.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn config_load(state: State<'_, AppState>) -> Reply<String> {
     let repo = state.repo()?;
     let config_path = repo.resolve("configure.json");
@@ -369,7 +376,7 @@ pub fn config_load(state: State<'_, AppState>) -> Reply<String> {
 /// The Confirm button on the Project and Settings pages sends the whole edited document;
 /// this applies the project fields and settings so the rest of the app sees them, then
 /// stores the document for the next launch to load.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn config_save(json: String, state: State<'_, AppState>) -> Reply<String> {
     let repo = state.repo()?;
     let parsed: serde_json::Value =
@@ -408,20 +415,20 @@ pub fn config_save(json: String, state: State<'_, AppState>) -> Reply<String> {
     Ok(config_path.display().to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_repository(repo: String, state: State<'_, AppState>) -> Reply<Status> {
     state.open(&repo)?;
     build_status(&state)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn remote_url(state: State<'_, AppState>) -> Reply<Option<String>> {
     let repo = state.repo()?;
     let settings = state.settings()?;
     Ok(git::state(repo.root(), &settings.remote).url)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn remote_set(url: String, state: State<'_, AppState>) -> Reply<String> {
     let repo = state.repo()?;
     let settings = state.settings()?;
@@ -441,12 +448,12 @@ pub fn remote_set(url: String, state: State<'_, AppState>) -> Reply<String> {
 
 // ------------------------------------------------------------------- project
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn project_fields(state: State<'_, AppState>) -> Reply<ProjectView> {
     build_project(&state)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn project_set(key: String, value: String, state: State<'_, AppState>) -> Reply<ProjectView> {
     let repo = state.repo()?;
     project::set(&repo, &key, &value).map_err(text)?;
@@ -455,7 +462,7 @@ pub fn project_set(key: String, value: String, state: State<'_, AppState>) -> Re
 
 // ------------------------------------------------------------------- editing
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn step_add(
     file: String,
     step: StepInput,
@@ -468,7 +475,7 @@ pub fn step_add(
     Ok(repo.relpath(&path))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn step_update(
     file: String,
     id: String,
@@ -480,7 +487,7 @@ pub fn step_update(
     Ok(repo.relpath(&path))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn step_remove(file: String, id: String, state: State<'_, AppState>) -> Reply<String> {
     let repo = state.repo()?;
     let path = authoring::remove_step(&repo, &file, &id).map_err(text)?;
@@ -488,7 +495,7 @@ pub fn step_remove(file: String, id: String, state: State<'_, AppState>) -> Repl
 }
 
 /// Move a step or an include marker past its neighbour. `up` is false for down.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn item_move(
     file: String,
     kind: String,
@@ -507,7 +514,7 @@ pub fn item_move(
     Ok(repo.relpath(&path))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn capture_set(
     file: String,
     step: String,
@@ -519,7 +526,7 @@ pub fn capture_set(
     Ok(repo.relpath(&path))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn capture_remove(
     file: String,
     step: String,
@@ -531,14 +538,14 @@ pub fn capture_remove(
     Ok(repo.relpath(&path))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn include_add(file: String, target: String, state: State<'_, AppState>) -> Reply<String> {
     let repo = state.repo()?;
     let path = authoring::add_include(&repo, &file, &target, None).map_err(text)?;
     Ok(repo.relpath(&path))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn include_remove(file: String, target: String, state: State<'_, AppState>) -> Reply<String> {
     let repo = state.repo()?;
     let path = authoring::remove_include(&repo, &file, &target).map_err(text)?;
@@ -547,7 +554,7 @@ pub fn include_remove(file: String, target: String, state: State<'_, AppState>) 
 
 // ------------------------------------------------------------------ running
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn run_start(
     sop: String,
     run_id: String,
@@ -587,7 +594,7 @@ pub fn run_start(
     Ok(build_run_view(&loaded, &run_id))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn run_record(
     sop: String,
     run_id: String,
@@ -599,7 +606,7 @@ pub fn run_record(
     Ok(build_run_view(&loaded, &run_id))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn run_state(sop: String, run_id: String, state: State<'_, AppState>) -> Reply<RunView> {
     let repo = state.repo()?;
     let loaded = run::load(&repo, &sop, &run_id).map_err(text)?;
@@ -607,20 +614,20 @@ pub fn run_state(sop: String, run_id: String, state: State<'_, AppState>) -> Rep
 }
 
 /// Whether the checklist this run was started from has changed since the snapshot.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn run_drift(sop: String, run_id: String, state: State<'_, AppState>) -> Reply<run::Drift> {
     let repo = state.repo()?;
     run::drift(&repo, &sop, &run_id).map_err(text)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn run_end(sop: String, run_id: String, status: String, state: State<'_, AppState>) -> Reply<RunView> {
     let repo = state.repo()?;
     let loaded = run::end(&repo, &sop, &run_id, &status).map_err(text)?;
     Ok(build_run_view(&loaded, &run_id))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn run_attach(
     sop: String,
     run_id: String,
@@ -754,7 +761,7 @@ pub struct ExportResult {
 /// With no destination the document lands in `exports/<sop_id>-<run_id>.md` inside the
 /// working copy. `exports/` is not one of the directories discovery reads, so an export
 /// never changes what the content means.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn run_export(
     sop: String,
     run_id: String,
@@ -794,7 +801,7 @@ pub fn run_export(
 /// The frontend opens the native save dialog (through `tauri-plugin-dialog`, which runs
 /// it on the correct thread) and passes the chosen path here. A command thread must not
 /// open a native dialog itself, which is why the dialog never lives in this file.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn run_export_to(
     sop: String,
     run_id: String,
@@ -830,7 +837,7 @@ pub fn run_export_to(
 /// The frontend opens the native file picker (via `tauri-plugin-dialog`) and passes the
 /// chosen path here. The file can live anywhere: no `checklists/` or `procedures/`
 /// folder is required, and a plain markdown file is parsed for `##`-heading steps.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn load_external_md(path: String, state: State<'_, AppState>) -> Reply<Option<String>> {
     let _ = state;
     let path = PathBuf::from(&path);
@@ -917,7 +924,7 @@ pub struct PushResult {
 ///
 /// The app names the commit and the remote; `git` does the rest, with the operator's
 /// identity and the operator's credentials. See `sop_repo::git`.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn repo_push(message: String, state: State<'_, AppState>) -> Reply<PushResult> {
     let repo = state.repo()?;
     let settings = state.settings()?;

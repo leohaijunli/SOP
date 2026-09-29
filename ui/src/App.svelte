@@ -39,6 +39,9 @@
   let help = $state<string | null>(null);
   let helpQuery = $state("");
   let stepQuery = $state("");
+  // A run the Execution view asked to resume: the shell switches the checklist, then the
+  // view loads it. Cleared by the view once it has the run.
+  let resumeRunId = $state<string | null>(null);
 
   // A plan run walks the cases of one test plan in `order`, carrying the start
   // configuration from one case to the next. `index` is the case now loaded.
@@ -187,9 +190,34 @@
     await refresh();
   };
 
+  // Open another checklist's unfinished run: the Execution view cannot change the
+  // selection itself, so it hands the run up and the shell points the view at it.
+  const resumeRun = (sopId: string, runId: string): void => {
+    const index = (manifest?.checklists ?? []).findIndex((c) => api.text(c.sop_id) === sopId);
+    if (index < 0) {
+      sync = `cannot resume ${runId}: checklist ${sopId} is not loaded. Open it with "Open file" first.`;
+      syncBad = true;
+      return;
+    }
+    checklist = index;
+    step = 0;
+    planRun = null;
+    resumeRunId = runId;
+    view = "run";
+  };
+
   // Pull the working copy and the testcase repo, and report what happened. Called on
   // start and after edits so all machines stay in step; the result is shown as a banner.
   const doSync = async (): Promise<void> => {
+    // A field laptop is often offline. `git pull` at an unreachable remote sits in DNS
+    // and TCP until it times out, so skip it outright when the system already knows there
+    // is no connection; the git command has its own bound as a backstop when this is
+    // wrong. Sync stays one tap away for when the network comes back.
+    if (!navigator.onLine) {
+      sync = "offline - skipped sync";
+      syncBad = false;
+      return;
+    }
     try {
       const report = await api.syncPull();
       sync = report;
@@ -314,6 +342,9 @@
         {caseContext}
         onNextCase={nextCase}
         onRunUpdate={() => void refreshRuns()}
+        onResumeRun={resumeRun}
+        {resumeRunId}
+        onResumed={() => (resumeRunId = null)}
       />
       {#if helpOpen}
         <HelpPanel manifest={manifest} {help} {helpQuery} onHelp={(h) => (help = h)} onQuery={(q) => (helpQuery = q)} />

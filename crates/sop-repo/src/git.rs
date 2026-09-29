@@ -11,8 +11,18 @@
 //! copied to a laptop as a plain directory is still usable - so nothing here fails hard
 //! on the first missing answer.
 
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
+
+/// How long a local `git` query may take before it is killed.
+const LOCAL_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How long a command that touches the network may take. An unreachable remote can hang
+/// for a long time in DNS, TCP, or ssh; without a bound the thread is stuck until the
+/// connection eventually gives up, and the operator only sees a spinner.
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What the app knows about the working copy's git state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -35,6 +45,11 @@ pub struct GitState {
 pub enum GitError {
     NotAvailable(String),
     NotARepository(String),
+    /// The command was still running at the deadline and was killed.
+    TimedOut {
+        command: String,
+        seconds: u64,
+    },
     CommandFailed { command: String, message: String },
 }
 
@@ -46,6 +61,10 @@ impl std::fmt::Display for GitError {
                 formatter,
                 "{root} is not a git working copy; run `git init` there first"
             ),
+            GitError::TimedOut { command, seconds } => write!(
+                formatter,
+                "`{command}` did not finish within {seconds}s - is the network reachable?"
+            ),
             GitError::CommandFailed { command, message } => {
                 write!(formatter, "`{command}` failed: {}", message.trim())
             }
@@ -55,16 +74,80 @@ impl std::fmt::Display for GitError {
 
 impl std::error::Error for GitError {}
 
-fn run(root: &Path, args: &[&str]) -> Result<Option<String>, GitError> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .output()
-        .map_err(|error| GitError::NotAvailable(error.to_string()))?;
+/// Run the command, reading its output on helper threads and killing it at `limit`.
+///
+/// `Command::output()` waits forever and cannot be interrupted; a `git pull` at a dead
+/// remote would pin the calling thread. The output is drained concurrently so a chatty
+/// command cannot fill its pipe and block before the deadline.
+fn output_with_timeout(
+    command: &mut Command,
+    limit: Duration,
+    label: &str,
+) -> Result<(ExitStatus, Vec<u8>, Vec<u8>), GitError> {
+    let mut child = child_of(command)?;
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let mut stderr = child.stderr.take().expect("stderr is piped");
+    let out = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        bytes
+    });
+    let err = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stderr.read_to_end(&mut bytes);
+        bytes
+    });
 
-    if output.status.success() {
-        let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let deadline = Instant::now() + limit;
+    let mut timed_out = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() >= deadline => {
+                timed_out = true;
+                let _ = child.kill();
+                let _ = child.wait();
+                break;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(error) => return Err(GitError::NotAvailable(error.to_string())),
+        }
+    }
+    let stdout = out.join().unwrap_or_default();
+    let stderr = err.join().unwrap_or_default();
+    if timed_out {
+        return Err(GitError::TimedOut {
+            command: label.to_owned(),
+            seconds: limit.as_secs(),
+        });
+    }
+    let status = child
+        .wait()
+        .map_err(|error| GitError::NotAvailable(error.to_string()))?;
+    Ok((status, stdout, stderr))
+}
+
+/// Spawn the child with its streams piped and stdin closed, so git cannot wait for input.
+fn child_of(command: &mut Command) -> Result<Child, GitError> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| GitError::NotAvailable(error.to_string()))
+}
+
+fn label(root: &Path, args: &[&str]) -> String {
+    format!("git -C {} {}", root.display(), args.join(" "))
+}
+
+fn run(root: &Path, args: &[&str]) -> Result<Option<String>, GitError> {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(root).args(args);
+    let (status, stdout, _) = output_with_timeout(&mut command, LOCAL_TIMEOUT, &label(root, args))?;
+
+    if status.success() {
+        let text = String::from_utf8_lossy(&stdout).trim().to_owned();
         return Ok(Some(text));
     }
     Ok(None)
@@ -209,21 +292,21 @@ pub fn pull(root: &Path, remote: &str) -> Result<Vec<String>, GitError> {
 /// Unlike [`run`], a failure is an error rather than a `None`: a publish that fails has
 /// to say why, and the reason is usually a sentence from `git` on standard error.
 fn run_capture(root: &Path, args: &[&str]) -> Result<String, GitError> {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .arg("-C")
         .arg(root)
         .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .map_err(|error| GitError::NotAvailable(error.to_string()))?;
+        .env("GIT_TERMINAL_PROMPT", "0");
+    let (status, stdout, stderr) = output_with_timeout(&mut command, NETWORK_TIMEOUT, &label(root, args))?;
 
-    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-    text.push_str(&String::from_utf8_lossy(&output.stderr));
-    if output.status.success() {
+    let mut text = String::from_utf8_lossy(&stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&stderr));
+    if status.success() {
         return Ok(text.trim().to_owned());
     }
     Err(GitError::CommandFailed {
-        command: format!("git -C {} {}", root.display(), args.join(" ")),
+        command: label(root, args),
         message: text,
     })
 }
@@ -274,19 +357,54 @@ pub fn set_remote_url(root: &Path, remote: &str, url: &str) -> Result<(), GitErr
     } else {
         vec!["remote", "add", remote, url]
     };
-    let command = format!("git -C {} {}", root.display(), args.join(" "));
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(&args)
-        .output()
-        .map_err(|error| GitError::NotAvailable(error.to_string()))?;
-    if output.status.success() {
+    let mut child = Command::new("git");
+    child.arg("-C").arg(root).args(&args);
+    let (status, _, stderr) = output_with_timeout(&mut child, LOCAL_TIMEOUT, &label(root, &args))?;
+    if status.success() {
         Ok(())
     } else {
         Err(GitError::CommandFailed {
-            command,
-            message: String::from_utf8_lossy(&output.stderr).into_owned(),
+            command: label(root, &args),
+            message: String::from_utf8_lossy(&stderr).into_owned(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_quick_command_returns_its_output() {
+        let mut command = Command::new("git");
+        command.args(["--version"]);
+        let (status, stdout, _) = output_with_timeout(&mut command, LOCAL_TIMEOUT, "git --version").unwrap();
+        assert!(status.success());
+        assert!(String::from_utf8_lossy(&stdout).contains("git version"));
+    }
+
+    #[test]
+    fn a_command_that_overruns_is_killed() {
+        // `sleep` stands in for a `git pull` at a remote that never answers.
+        let mut command = Command::new("sleep");
+        command.arg("30");
+        let started = Instant::now();
+        let error = output_with_timeout(&mut command, Duration::from_millis(150), "sleep 30").unwrap_err();
+        assert!(matches!(error, GitError::TimedOut { .. }), "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the helper returns at the deadline, not when the child would have finished"
+        );
+    }
+
+    #[test]
+    fn output_larger_than_a_pipe_buffer_does_not_deadlock() {
+        // 300 KB is several times the usual 64 KB pipe buffer; the reader threads have to
+        // drain it while the process is still running.
+        let mut command = Command::new("head");
+        command.args(["-c", "300000", "/dev/zero"]);
+        let (status, stdout, _) = output_with_timeout(&mut command, LOCAL_TIMEOUT, "head").unwrap();
+        assert!(status.success());
+        assert_eq!(stdout.len(), 300000);
     }
 }

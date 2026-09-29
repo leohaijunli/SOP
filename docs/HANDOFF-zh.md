@@ -1,7 +1,7 @@
 # 交接说明（中文）
 
 本文件记录**刚提交的这一批**改动、验证到什么程度、以及下一步怎么走。格式的权威
-说明是 `SPEC.md`，设计取舍编号索引是 `docs/DECISIONS.md`（Batch 1 补到 D24），功能优先级表
+说明是 `SPEC.md`，设计取舍编号索引是 `docs/DECISIONS.md`（Batch 1–2 补到 D26），功能优先级表
 是 `docs/FEATURES.md`，本批的评审与路线图是 `docs/REVIEW-engineer-workflow.md`（Phase 1–5，
 Phase 6/7 为建议）。中文操作教程在 `docs/USAGE-zh.md`。
 
@@ -10,10 +10,12 @@ Phase 6/7 为建议）。中文操作教程在 `docs/USAGE-zh.md`。
 > 里未提交的只剩 `runs/` 下 App 正在生成/删除的 run，**不要顺手提交**。上一版交接
 > （D15–D19 那一批）在历史里：`git show 94dae4d:docs/HANDOFF-zh.md`。
 
-## 0. 最新一批（Batch 1：数据安全 + 录入正确）
+## 0. 最近两批（Batch 1：数据安全 + 录入正确；Batch 2：现场可用性）
 
-按 `docs/ROADMAP.md` 的 P0/P1 顺序做的第一批。**做完了 0.2 / 0.3 / 0.4 / 1.1–1.4**，
-0.1 需要真机，留在这里（§0.4）。
+按 `docs/ROADMAP.md` 的 P0→P1→P2 顺序做的。**Batch 1 做完了 0.2 / 0.3 / 0.4 / 1.1–1.4；
+Batch 2 做完了 2.1–2.4**。0.1 需要真机，留在这里（§0.5）。Batch 2 的改动在 §0.6–§0.9。
+
+### Batch 1
 
 ### 0.1 事件日志改成真正的 append（ROADMAP 0.2）
 
@@ -63,15 +65,57 @@ Phase 6/7 为建议）。中文操作教程在 `docs/USAGE-zh.md`。
 并把结论补进本文件：
 
 1. `prompt()` / `confirm()` 在 Tauri 打包后的 webview 里是否正常弹出（Batch 2 的 2.1
-   会用应用内模态替换它们；如果已经不能用，2.1 的优先级要提前）。
+   已经用应用内模态替换了它们；这里只是确认旧行为，作为记录）。
 2. 断网启动是否会冻结：启动时无条件 `git pull` 且没有超时（对应 2.2）。
 3. 录入中途 `kill -9`、以及拔电之后，run 能否恢复（现在有 append + fsync + 截断容错，
    预期可以，但需要实测确认）。
 
+### 0.6 应用内原因对话框（ROADMAP 2.1）
+
+- 新增 `ui/src/components/PromptModal.svelte`：原生 `<dialog>`（自带焦点陷阱和 `Esc`），
+  常用理由是一个按钮点一下，另配一个文本框；`Enter` 提交、`Shift+Enter` 换行。
+- `ExecutionView.svelte` 里 4 处 `prompt()` 全部换掉：Skip、Deviate、超范围 Acknowledge、
+  空必填项提醒。调用方式仍是 `const reason = await ask({...})`，UI 状态在 `promptRequest`。
+- 对话框打开时 `onKey` 直接返回，不影响对话框自己的键盘处理。
+
+### 0.7 命令不再阻塞窗口 + git 超时（ROADMAP 2.2）
+
+- `crates/sop-app/src/commands.rs`：45 个命令全部加上 `#[tauri::command(async)]`。
+  Tauri 把同步命令放在窗口主线程上；`(async)` 会把它放到阻塞线程池（等价于
+  `spawn_blocking`），函数本身仍是同步的，Rust 侧可以直接调用（见 D25）。
+- `crates/sop-repo/src/git.rs`：`git` 子进程有了截止时间（本地查询 15s、联网 30s）。
+  新辅助函数 `output_with_timeout` 在旁路线程里读 stdout/stderr（避免输出塞满管道死锁），
+  到点 `kill` 子进程并报 `GitError::TimedOut`。3 条单元测试覆盖：正常、超时被杀、输出
+  超过管道缓冲不阻塞。
+- `ui/src/App.svelte`：启动同步前先看 `navigator.onLine`，断网直接跳过并显示
+  "offline - skipped sync"；联网时 git 超时是兜底。
+
+### 0.8 进度与导航（ROADMAP 2.3）
+
+- 运行页顶部 `N / M done` 进度条（`done`、`deviated` 都算有结果）。
+- `markDone` 成功后调用 `advance()`：跳到下一个还没结果的步骤，跑完绕回第一个。
+- 切换步骤时（`$effect` 里用 `tick()` 等 DOM 更新后）聚焦该步第一个还没填的 capture。
+- `End: complete` 置灰时，左侧写明还有几步挡着，并给一个 **Go to &lt;步骤名&gt;** 按钮。
+
+### 0.9 没做完的 run 全局可见（ROADMAP 2.4）
+
+- `ExecutionView.svelte` 的开始表单顶部新增 "Runs still open (N)"：从 `manifest.runs`
+  里筛出没有 `status` 的 run，跨 checklist 列出，带 Resume 按钮。
+- 属于当前 checklist 的直接 `runState` 打开；属于别的 checklist 的通过新 prop
+  `onResumeRun(sopId, runId)` 交给 `App.svelte`，由它切 checklist、置 `resumeRunId`，
+  `ExecutionView` 的 `$effect` 再加载，加载完回调 `onResumed()` 清掉。
+- 外部 checklist（"Open file"打开、不在 manifest 里的）如果没先加载，会提示先打开它。
+
+### 0.10 顺手修掉的一个真 bug
+
+写并发测试时暴露出 `atomic::write` 的临时文件名是固定的 `path.tmp`：两个线程同时写
+`record.md` 时共用一个临时文件，后一个 `rename` 报 "No such file"（`concurrent_writers`
+测试先过了一次，再跑就红——正是竞态）。临时名现在带进程号和自增计数（见 D23 末尾）。
+
 ## 1. 当前状态
 
 ```
-cargo test                  18 个测试目标 / 161 个测试全部通过（Batch 1 新增 4 条）
+cargo test                  18 个测试目标 / 164 个测试全部通过（Batch 1 +2，Batch 2 +3）
 cargo check -p sop-app      通过
 sop validate                0 error(s), 0 warning(s)；若 App 里有一条已结束但没记任何结果的
                             run，会多一条 "no step results" warning，这是预期行为
@@ -80,9 +124,11 @@ cd ui && npm run build      通过（ui/dist 已重建，且被 git 跟踪）
 git                         上一批已推送；Batch 1 见 §0，提交后一并推送
 ```
 
-**Batch 1 的验证边界**：Rust 侧（append / fsync / 并发）有测试；前端 `capture.ts` /
-`dates.ts` 是纯函数但没有前端测试框架（`npm install` 装不了 vitest，见 §4），
-只过了 `svelte-check`。真机三件事见 §0.5。
+**Batch 1–2 的验证边界**：Rust 侧（append / fsync / 并发 / git 超时）有测试；前端
+`capture.ts` / `dates.ts` 是纯函数但没有前端测试框架（`npm install` 装不了 vitest，见 §4），
+只过了 `svelte-check`。**应用内改变（模态、自动前进、恢复列表、异步命令）没有在真实
+窗口里点过**，`cargo check`/`npm run check`/`build` 只能保证类型和编译。真机三件事见 §0.5，
+另外建议按 §5 的清单把运行页完整走一遍。
 
 **验证到哪一步**：Rust 侧全部有测试；前端只有 `svelte-check` + `build` 的静态验证，
 **没有在运行中的窗口里点过**。接手第一件事建议 `REBUILD_UI=1 ./run-app.sh`，按 §5 的
@@ -224,7 +270,7 @@ git                         上一批已推送；Batch 1 见 §0，提交后一�
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"
 
-cargo test                              # 15 个目标 / 145 个测试
+cargo test                              # 18 个目标 / 164 个测试
 cargo check -p sop-app
 cargo run -q -p sop-cli -- validate     # 0 error(s), 0 warning(s)
 
