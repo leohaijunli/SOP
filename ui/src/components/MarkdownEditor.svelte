@@ -6,7 +6,7 @@
   // The parent owns the text (matching SensorsEditor): this component renders it and
   // reports edits, and exposes `focus()` so a keyboard shortcut in the parent can reach
   // the textarea.
-  import { markdown } from "../lib/markdown";
+  import { htmlOf } from "../lib/md.svelte";
 
   let {
     value,
@@ -60,7 +60,7 @@
   {#if filled}
     <div class="md-preview">
       <div class="md-preview-label">Preview</div>
-      <div class="prose">{@html markdown(value)}</div>
+      <div class="prose">{@html htmlOf(value)}</div>
     </div>
   {/if}
 </div>

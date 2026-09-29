@@ -113,6 +113,11 @@ export const runStart = (
 export const runRecord = (sop: string, runId: string, event: RunEventInput): Promise<RunView> =>
   invoke<RunView>("run_record", { sop, runId, event });
 
+/// Render Markdown to HTML. The rules live in Rust (`sop_core::md`); this is the only
+/// way the window asks for HTML.
+export const renderMarkdown = (text: string): Promise<string> =>
+  invoke<string>("render_markdown", { text });
+
 export const runState = (sop: string, runId: string): Promise<RunView> =>
   invoke<RunView>("run_state", { sop, runId });
 

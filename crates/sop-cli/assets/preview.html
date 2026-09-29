@@ -180,99 +180,9 @@
 <script>
 "use strict";
 
-// --------------------------------------------------------------- markdown
+// --------------------------------------------------------------- escaping
 
 const escapeHtml = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
-
-function inline(text) {
-  let out = escapeHtml(text);
-  out = out.replace(/`([^`]+)`/g, (_, code) => `<code>${code}</code>`);
-  out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  out = out.replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>");
-  out = out.replace(/\[([^\]]*)\]\(([^)\s]+)\)/g, (_, label, href) => `<a href="${href}">${label}</a>`);
-  return out;
-}
-
-// A deliberately small Markdown subset: enough for the content in this repository, and
-// no more: fenced code, hr, h1-h4, tables, blockquotes, and lists.
-function markdown(source) {
-  const lines = source.split("\n");
-  const html = [];
-  let index = 0;
-
-  const flushParagraph = (buffer) => {
-    if (buffer.length) html.push(`<p>${inline(buffer.join(" "))}</p>`);
-    buffer.length = 0;
-  };
-
-  while (index < lines.length) {
-    const line = lines[index];
-
-    if (/^\s*```/.test(line)) {
-      const ticks = line.match(/^\s*`+/)[0].trim().length;
-      const body = [];
-      index++;
-      while (index < lines.length && !new RegExp(`^\\s*\`{${ticks},}\\s*$`).test(lines[index])) body.push(lines[index++]);
-      index++;
-      html.push(`<pre><code>${escapeHtml(body.join("\n"))}</code></pre>`);
-      continue;
-    }
-
-    if (/^\s*(---+|\*\*\*+)\s*$/.test(line)) { html.push("<hr>"); index++; continue; }
-
-    const heading = line.match(/^(#{1,4})\s+(.*)$/);
-    if (heading) { html.push(`<h${heading[1].length}>${inline(heading[2])}</h${heading[1].length}>`); index++; continue; }
-
-    if (/^\s*\|/.test(line) && /^\s*\|[\s:|-]+\|\s*$/.test(lines[index + 1] || "")) {
-      const cells = (row) => row.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
-      const head = cells(line);
-      index += 2;
-      const body = [];
-      while (index < lines.length && /^\s*\|/.test(lines[index])) body.push(cells(lines[index++]));
-      html.push(
-        `<table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead>` +
-        `<tbody>${body.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`
-      );
-      continue;
-    }
-
-    if (/^\s*>\s?/.test(line)) {
-      const body = [];
-      while (index < lines.length && /^\s*>\s?/.test(lines[index])) body.push(lines[index++].replace(/^\s*>\s?/, ""));
-      html.push(`<blockquote>${markdown(body.join("\n"))}</blockquote>`);
-      continue;
-    }
-
-    const bullet = line.match(/^(\s*)[-*+]\s+(.*)$/);
-    const numbered = line.match(/^(\s*)\d+[.)]\s+(.*)$/);
-    if (bullet || numbered) {
-      const ordered = Boolean(numbered);
-      const items = [];
-      while (index < lines.length) {
-        const m = lines[index].match(ordered ? /^\s*\d+[.)]\s+(.*)$/ : /^\s*[-*+]\s+(.*)$/);
-        if (!m) break;
-        const task = m[1].match(/^\[([ xX])\]\s+(.*)$/);
-        items.push(task
-          ? `<li class="task"><input type="checkbox" disabled${task[1] === " " ? "" : " checked"}> ${inline(task[2])}</li>`
-          : `<li>${inline(m[1])}</li>`);
-        index++;
-      }
-      html.push(`<${ordered ? "ol" : "ul"}>${items.join("")}</${ordered ? "ol" : "ul"}>`);
-      continue;
-    }
-
-    if (!line.trim()) { index++; continue; }
-
-    const paragraph = [];
-    while (index < lines.length && lines[index].trim() && !/^\s*(```|>|[-*+]\s|\d+[.)]\s|\||#{1,4}\s)/.test(lines[index])) {
-      paragraph.push(lines[index++]);
-    }
-    flushParagraph(paragraph);
-    void flushParagraph;
-  }
-
-  return html.join("\n");
-}
 
 // ------------------------------------------------------------------- app
 
@@ -374,7 +284,7 @@ function renderDetail() {
       <span class="badge">from ${text(step.source)}</span>
     </div>
     ${captures ? `<section class="captures"><h2>Captures</h2>${captures}</section>` : ""}
-    <div class="prose">${markdown(text(step.body))}</div>`;
+    <div class="prose">${text(step.bodyHtml)}</div>`;
 }
 
 function mathNotices() {
@@ -418,7 +328,7 @@ function renderHelp() {
 
   const page = byId(state.help);
   el("helptitle").textContent = text(page.title);
-  el("helpbody").innerHTML = markdown(text(page.body));
+  el("helpbody").innerHTML = text(page.bodyHtml);
 }
 
 function toggleHelp(force) {

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { markdown, text } from "../lib/markdown";
+  import { htmlOf } from "../lib/md.svelte";
+  import { text } from "../lib/text";
   import type { Capture, Manifest } from "../lib/types";
 
   let {
@@ -72,7 +73,7 @@
         {/each}
       </section>
     {/if}
-    <div class="prose">{@html markdown(text(stepEntry.body))}</div>
+    <div class="prose">{@html htmlOf(stepEntry.body)}</div>
   {/if}
 </article>
 

@@ -5,7 +5,8 @@
 是 `docs/FEATURES.md`，本批的评审与路线图是 `docs/REVIEW-engineer-workflow.md`（Phase 1–5，
 Phase 6/7 为建议）。中文操作教程在 `docs/USAGE-zh.md`。
 
-> 本批已提交到本地 `main`，**尚未推送**；工作副本里剩下的未提交内容只有 `runs/` 下
+> 本批两个提交，都在本地 `main` 上、**尚未推送**：先是 Phase 1–3 + note 编辑器（`4766953`），
+> 然后是 Markdown 渲染器 Rust 化（见 §2.7）。工作副本里剩下的未提交内容只有 `runs/` 下
 > App 正在生成/删除的 run。上一版交接（D15–D19 那一批）同样在历史里：
 > `git show 94dae4d:docs/HANDOFF-zh.md`。
 
@@ -16,6 +17,7 @@ cargo test                  15 个测试目标 / 145 个测试全部通过
 cargo check -p sop-app      通过
 sop validate                0 error(s), 0 warning(s)；若 App 里有一条已结束但没记任何结果的
                             run，会多一条 "no step results" warning，这是预期行为
+cargo test                  新增 md::tests（12 条）后仍然全绿
 cd ui && npm run check      0 errors, 0 warnings
 cd ui && npm run build      通过（ui/dist 已重建，且被 git 跟踪）
 git                         本批已提交到本地 main（未推送）
@@ -92,6 +94,21 @@ git                         本批已提交到本地 main（未推送）
 - `.prose h1` 补了字号（桌面 `ui/src/app.css` 18px，preview 20px），否则浏览器默认 2em
   会比页面标题还大。
 
+### 2.7 Markdown 渲染移到 Rust（D22）
+
+- 新增 `crates/sop-core/src/md.rs`：`render(source) -> String`，支持 `#`–`####`、表格、
+  引用、列表（含任务项）、代码块、hr 与行内 code/strong/em/link；12 条单元测试，包含
+  「操作员写的 `<script>` 必须被转义」。
+- 窗口：新增 Tauri 命令 `render_markdown`，前端 `ui/src/lib/md.svelte.ts` 提供按源码文本
+  缓存的 `htmlOf()`（模板里同步取，未命中时问一次 Rust，答案到了自动重渲染）。
+  `ui/src/lib/markdown.ts` 删除，只留下 `text()` 移到 `ui/src/lib/text.ts`。
+- `sop preview`：`preview.rs` 在服务端把每个 `body` 渲染成 `bodyHtml` 再发给页面；
+  `preview.html` 里那 70 行 JS 渲染器整块删掉（只保留错误信息用的 `escapeHtml`）。
+  已实测：fixture 仓库 2 个 checklist / 85 个 step 全部带上 `bodyHtml`，页面里已没有
+  `function markdown`。
+- 顺手修掉 JS 版的一个真 bug：有序列表 `<ol>` 用 `</ul>` 收尾。
+- 依赖：`sop-core` 新增 `regex`（本来就在 workspace lock 里，离线可用）。
+
 ### 2.6 校验器：进行中的 run 不再报错
 
 - 根因：`run_front_matter` 把 `status` 当无条件必填，但 `status` / `ended` 只在
@@ -102,8 +119,11 @@ git                         本批已提交到本地 main（未推送）
 
 ## 3. 文件清单（本批）
 
-新增：`ui/src/components/MarkdownEditor.svelte`、`ui/src/components/SensorsEditor.svelte`、
+新增：`crates/sop-core/src/md.rs`、`ui/src/lib/md.svelte.ts`、`ui/src/lib/text.ts`、
+`ui/src/components/MarkdownEditor.svelte`、`ui/src/components/SensorsEditor.svelte`、
 `ui/src/lib/sensors.ts`、`docs/REVIEW-engineer-workflow.md`、本文件。
+
+删除：`ui/src/lib/markdown.ts`（渲染器进 Rust，`text()` 移到 `text.ts`）。
 
 修改：`ui/src/app.css`、`crates/sop-cli/assets/preview.html`、`SPEC.md`、`SPEC-COMPAT.md`、
 `crates/sop-core/src/{check,front,run,vocab}.rs`、`crates/sop-repo/src/{lib,manifest,run,validate}.rs`、
@@ -134,9 +154,9 @@ git                         本批已提交到本地 main（未推送）
    拆成多个提交在这里没法干净切分：`ExecutionView.svelte`、`crates/sop-core/src/{run,check}.rs`
    与 `ui/dist/**` 同时装着 Phase 1–3 和 note/渲染器/校验器两类改动；把 `ui/dist` 单独提交
    的话，前一个提交 checkout 出来窗口加载的仍是旧界面。
-7. **Markdown 渲染器有两份**（`ui/src/lib/markdown.ts` 与 `crates/sop-cli/assets/preview.html`
-   内嵌 JS），靠人工保持一致，容易漏（这次 `#` 就漏了一次）。要根治可以抽成一份由
-   `include_str!` 或构建步骤共用的源码，并加一条两边输出一致的测试。
+7. ~~Markdown 渲染器有两份~~ 已在 §2.7 合并成 `sop_core::md` 一份（D22）。剩下的小事：
+   窗口里 note 的实时预览是一次 IPC（本地、按文本缓存），如果哪天觉得卡，可以在
+   `MarkdownEditor` 里做 100ms 防抖。
 
 ## 5. 怎么跑 / 怎么验
 

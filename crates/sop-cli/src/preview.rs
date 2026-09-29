@@ -63,7 +63,7 @@ fn respond(repo: &sop_repo::Repo, mut stream: TcpStream) -> std::io::Result<()> 
             PAGE.as_bytes(),
         ),
         "/manifest.json" => {
-            let body = manifest::build(repo).to_json();
+            let body = render_manifest(repo);
             send(
                 &mut stream,
                 "200 OK",
@@ -77,6 +77,41 @@ fn respond(repo: &sop_repo::Repo, mut stream: TcpStream) -> std::io::Result<()> 
             "text/plain; charset=utf-8",
             b"not found\n",
         ),
+    }
+}
+
+/// The manifest with every Markdown body already rendered to HTML.
+///
+/// The page is a viewer, not a second implementation: `sop_core::md` renders the bodies
+/// here, and the desktop app asks the same function over its own command. Any object with
+/// a `body` string gains a `bodyHtml` next to it, so a new body field is covered without
+/// touching this function again.
+fn render_manifest(repo: &sop_repo::Repo) -> String {
+    let mut value: serde_json::Value =
+        serde_json::from_str(&manifest::build(repo).to_json()).unwrap_or(serde_json::Value::Null);
+    add_body_html(&mut value);
+    let mut out = serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_owned());
+    out.push('\n');
+    out
+}
+
+fn add_body_html(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(body) = map.get("body").and_then(serde_json::Value::as_str) {
+                let html = sop_core::md::render(body);
+                map.insert("bodyHtml".to_owned(), serde_json::Value::String(html));
+            }
+            for child in map.values_mut() {
+                add_body_html(child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                add_body_html(item);
+            }
+        }
+        _ => {}
     }
 }
 

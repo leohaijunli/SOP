@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { markdown, text } from "../lib/markdown";
+  import { htmlOf } from "../lib/md.svelte";
+  import { text } from "../lib/text";
   import MarkdownEditor from "./MarkdownEditor.svelte";
   import * as api from "../lib/api";
   import type { Drift, Manifest, RunEntry, RunStepView, RunView } from "../lib/types";
@@ -974,7 +975,7 @@
             <span class="badge">{current.id}</span>
           </div>
           <h2>{current.title}</h2>
-          <div class="prose">{@html markdown(current.prose)}</div>
+          <div class="prose">{@html htmlOf(current.prose)}</div>
 
           {#if current.captures.length}
             <div class="captures" bind:this={capturesBox}>
@@ -1078,7 +1079,7 @@
             <section class="notes">
               <h3>Notes on this step ({current.notes.length})</h3>
               {#each current.notes as note, i (i)}
-                <div class="prose note-body">{@html markdown(note)}</div>
+                <div class="prose note-body">{@html htmlOf(note)}</div>
               {/each}
             </section>
           {/if}
@@ -1102,7 +1103,7 @@
           <details class="run-notes" open={run.runNotes.length > 0}>
             <summary>Run notes ({run.runNotes.length})</summary>
             {#each run.runNotes as note, i (i)}
-              <div class="prose note-body">{@html markdown(note)}</div>
+              <div class="prose note-body">{@html htmlOf(note)}</div>
             {/each}
             <MarkdownEditor
               value={runNoteText}

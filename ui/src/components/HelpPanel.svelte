@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { markdown, text } from "../lib/markdown";
+  import { htmlOf } from "../lib/md.svelte";
+  import { text } from "../lib/text";
   import type { Manifest } from "../lib/types";
 
   let {
@@ -70,7 +71,7 @@ let sections = $derived(
     </ul>
     {#if selected}
       <h2 id="helptitle">{text(selected.title)}</h2>
-      <div class="prose">{@html markdown(text(selected.body))}</div>
+      <div class="prose">{@html htmlOf(selected.body)}</div>
     {/if}
   {/if}
 </aside>

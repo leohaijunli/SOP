@@ -459,6 +459,29 @@ Reasons:
   does not outrank the step title above it.
 
 Cost: a note written by hand (not through the app) has to follow the same per-line rule to
-read back as one block, and the renderer exists in two places -
-`ui/src/lib/markdown.ts` and the JS embedded in `crates/sop-cli/assets/preview.html` - so
-a change to one is a change to both. Unifying them is the obvious next cleanup.
+read back as one block. The renderer itself is one implementation now - see D22.
+
+## D22 - Markdown is rendered in Rust, not in the window
+
+Decision: `sop_core::md::render` is the only Markdown implementation. The window asks for
+HTML through the `render_markdown` command, with a small cache keyed by the source text.
+`sop preview` renders every body server-side into the manifest it serves, so its page ships
+no renderer at all.
+
+Reasons:
+
+- The window's own description is "No rules live here", and a renderer is a rule: what a
+  `#` means, whether a table is a table, and what a task item looks like are as much a
+  format decision as front matter is. Two copies (the window's TypeScript and the JS
+  embedded in the preview page) had to be changed by hand in step, and a divergence would
+  show the operator one document and a reviewer another.
+- Rust is already where the format lives, so the next consumer - the PDF/HTML report in
+  Phase 6 - gets the renderer for free, and `md::render` is tested next to `front`,
+  `check`, and `run` instead of in a toolchain the repository does not otherwise use.
+- Removing the page's renderer leaves the page what it is: a viewer. It also removes the
+  only two places where content markup was decided outside `sop-core`.
+
+Cost: rendering as the operator types is a Tauri round trip (local, and cached by source
+text), and the preview page depends on the manifest carrying HTML. Both are cheaper than
+two implementations of the same rule. The port also fixed a real bug the JS copy had: an
+ordered list was closed with `</ul>`.

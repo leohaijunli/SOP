@@ -13,6 +13,7 @@ pub mod error;
 pub mod fence;
 pub mod front;
 pub mod link;
+pub mod md;
 pub mod run;
 pub mod settings;
 pub mod step;

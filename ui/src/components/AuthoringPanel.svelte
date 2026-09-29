@@ -1,6 +1,6 @@
 <script lang="ts">
   import * as api from "../lib/api";
-  import { text } from "../lib/markdown";
+  import { text } from "../lib/text";
   import type { Manifest, ProcedureChoice, StepEntry } from "../lib/types";
 
   let {

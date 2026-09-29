@@ -241,6 +241,13 @@ pub fn status(state: State<'_, AppState>) -> Reply<Status> {
     build_status(&state)
 }
 
+/// Render Markdown to HTML. The renderer lives in `sop_core::md`, so the app, the
+/// preview server, and (later) the record export all read a note the same way.
+#[tauri::command]
+pub fn render_markdown(text: String) -> Reply<String> {
+    Ok(sop_core::md::render(&text))
+}
+
 #[tauri::command]
 pub fn validation_report(state: State<'_, AppState>) -> Reply<String> {
     let repo = state.repo()?;

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { text } from "../lib/markdown";
+  import { text } from "../lib/text";
   import type { Manifest } from "../lib/types";
 
   let {

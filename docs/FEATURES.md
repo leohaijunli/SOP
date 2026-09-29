@@ -21,7 +21,7 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | The app edits one step at a time | A step list plus the selected step's fields, so the screen scales with the checklist | done |
 | An edit is written to the file that defines the step | A step pulled in by an include is edited in its procedure, not in the checklist that includes it | done |
 | Schema compatibility policy | Written down in `SPEC-COMPAT.md`, so format evolution is a decision and not an accident | done |
-| One small Markdown renderer for prose, help, and notes | `h1`-`h4`, tables, lists (with task items), quotes, fenced code, links; the content tree, the notes, and the preview server show the same subset | done |
+| One small Markdown renderer for prose, help, and notes | `h1`-`h4`, tables, lists (with task items), quotes, fenced code, links; one implementation (`sop_core::md`), used by the window through a command and by `sop preview` server-side (D22) | done |
 
 ## B. Execution on site
 

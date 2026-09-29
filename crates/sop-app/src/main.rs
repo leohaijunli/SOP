@@ -36,6 +36,7 @@ fn main() {
             commands::testcase_push,
             commands::status,
             commands::validation_report,
+            commands::render_markdown,
             commands::procedure_choices,
             commands::settings_rows,
             commands::settings_path,
