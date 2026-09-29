@@ -132,6 +132,7 @@ fn a_run_records_the_instrument_and_conditions_it_was_started_with() {
         conditions,
         plan: Some("uas-mag-calibration".to_owned()),
         case: Some("heading-error".to_owned()),
+        clock: None,
     };
     run::start_with_meta(&repo, SOP, "2026-09-25-meta", "leo", "Renfrew 395", Some("test"), &meta)
         .unwrap();
@@ -879,4 +880,32 @@ fn a_step_added_mid_run_appears_in_the_view_and_the_record() {
     assert!(record.contains("Steps added during the run"), "{record}");
     assert!(record.contains("adhoc-001"), "{record}");
     assert!(record.contains("added_steps: 1"), "the record counts the added steps: {record}");
+}
+
+#[test]
+fn a_run_keeps_its_clock_and_dropped_markers() {
+    let scratch = Scratch::new("clock-marker");
+    let repo = scratch.repo();
+    let meta = run::RunMeta {
+        clock: Some(sop_core::run::ClockInfo {
+            basis: "GPS".to_owned(),
+            instrument_time: "2026-09-25T12:00:00Z".to_owned(),
+            offset_secs: 3,
+        }),
+        ..run::RunMeta::default()
+    };
+    run::start_with_meta(&repo, SOP, RUN, "leo", "Renfrew 395", Some("test"), &meta).unwrap();
+
+    run::marker(&repo, SOP, RUN, "start of the third line").unwrap();
+    let loaded = run::load(&repo, SOP, RUN).unwrap();
+    assert_eq!(loaded.state.clock.as_ref().unwrap().basis, "GPS");
+    assert_eq!(loaded.state.markers.len(), 1);
+    assert_eq!(loaded.state.markers[0].label, "start of the third line");
+    assert!(!loaded.state.markers[0].at.is_empty(), "the marker is stamped");
+
+    run::end(&repo, SOP, RUN, "complete", None).unwrap();
+    let record = scratch.read("runs/ground-walk-survey/2026-09-25-test-run.md");
+    assert!(record.contains("clock:"), "{record}");
+    assert!(record.contains("Field markers"), "{record}");
+    assert!(record.contains("start of the third line"), "{record}");
 }

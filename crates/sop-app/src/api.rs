@@ -122,12 +122,32 @@ pub struct RunView {
     pub sensor: Option<SensorView>,
     pub hardware: Vec<String>,
     pub conditions: BTreeMap<String, String>,
+    pub clock: Option<RunClockView>,
     pub steps: Vec<RunStepView>,
     /// Steps added to this run after it started, in the order they were added.
     pub added_steps: Vec<RunAddedStepView>,
+    /// Tagged moments the operator dropped, with the tool's clock at each.
+    pub markers: Vec<RunMarkerView>,
     pub run_notes: Vec<String>,
     pub run_attachments: Vec<RunAttachmentView>,
     pub record_path: String,
+}
+
+/// The instrument's clock as recorded at run start.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunClockView {
+    pub basis: String,
+    pub instrument_time: String,
+    pub offset_secs: i64,
+}
+
+/// A tagged field marker: a label plus the tool's clock at the moment it was dropped.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunMarkerView {
+    pub at: String,
+    pub label: String,
 }
 
 /// A step added mid-run, shown so the operator can see it was not part of the template.
@@ -170,6 +190,11 @@ pub struct RunMetaInput {
     pub plan: Option<String>,
     #[serde(default)]
     pub case: Option<String>,
+    /// The instrument's current time as displayed, and its basis, at run start.
+    #[serde(default)]
+    pub clock_instrument_time: Option<String>,
+    #[serde(default)]
+    pub clock_basis: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

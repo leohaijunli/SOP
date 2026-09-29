@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 use sop_core::run::{
-    render_record, Attachment, RecordStep, RunEvent, RunState, SensorIdentity, StepState,
+    render_record, Attachment, ClockInfo, RecordStep, RunEvent, RunState, SensorIdentity, StepState,
 };
 use sop_core::Document;
 use thiserror::Error;
@@ -84,6 +84,8 @@ pub struct RunMeta {
     /// The test plan and case this run came from, when started from `testplan/`.
     pub plan: Option<String>,
     pub case: Option<String>,
+    /// The instrument's clock, when the operator recorded it at run start.
+    pub clock: Option<ClockInfo>,
 }
 
 impl RunMeta {
@@ -569,9 +571,10 @@ pub fn start_with_meta(
         case: meta.case.clone(),
         // Only carry a sensor block that has something in it; an all-blank entry is
         // noise in the log and would render an empty `sensor:` block in the record.
-        sensor: meta.sensor.clone().filter(|sensor| !sensor.is_empty()),
+sensor: meta.sensor.clone().filter(|sensor| !sensor.is_empty()),
         hardware: meta.hardware.clone(),
         conditions: meta.conditions.clone(),
+        clock: meta.clock.clone().filter(|clock| !clock.is_empty()),
     }];
     if let Some(reason) = override_reason {
         events.push(RunEvent::NoteAdded {
@@ -608,6 +611,29 @@ pub fn start_with_meta(
 /// `record.md` is a convenience, rebuilt from the log afterwards and never the truth.
 pub fn record(repo: &Repo, sop_id: &str, run_id: &str, event: &RunEvent) -> Result<LoadedRun, RunError> {
     record_events(repo, sop_id, run_id, std::slice::from_ref(event))
+}
+
+/// Drop a tagged field marker on the run: a timestamped, labelled moment for aligning a
+/// log to a physical feature (`item 3`).
+pub fn marker(
+    repo: &Repo,
+    sop_id: &str,
+    run_id: &str,
+    label: &str,
+) -> Result<LoadedRun, RunError> {
+    let label = label.trim();
+    if label.is_empty() {
+        return Err(RunError::Core(sop_core::RunError::ReasonRequired("marker")));
+    }
+    record(
+        repo,
+        sop_id,
+        run_id,
+        &RunEvent::FieldMarker {
+            at: now(),
+            label: label.to_owned(),
+        },
+    )
 }
 
 /// Append one or more events as a batch: validate them all against the current state,
@@ -792,6 +818,21 @@ fn run_file_front(state: &RunState, run_id: &str) -> String {
         out.push_str("conditions:\n");
         for (key, value) in &state.conditions {
             out.push_str(&format!("  {key}: {}\n", scalar(value)));
+        }
+    }
+    if let Some(clock) = &state.clock
+        && !clock.is_empty()
+    {
+        out.push_str("clock:\n");
+        out.push_str(&format!("  basis: {}\n", scalar(&clock.basis)));
+        out.push_str(&format!("  instrument_time: {}\n", scalar(&clock.instrument_time)));
+        out.push_str(&format!("  offset_secs: {}\n", clock.offset_secs));
+    }
+    if !state.markers.is_empty() {
+        out.push_str("markers:\n");
+        for marker in &state.markers {
+            out.push_str(&format!("  - at: {}\n", scalar(&marker.at)));
+            out.push_str(&format!("    label: {}\n", scalar(&marker.label)));
         }
     }
     // The data files, as a machine-readable list (`SPEC.md` section 9). The body restates

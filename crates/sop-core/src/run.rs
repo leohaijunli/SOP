@@ -76,6 +76,25 @@ impl SensorIdentity {
     }
 }
 
+/// The instrument's clock as the operator recorded it at run start.
+///
+/// Notebook events carry the tool's clock; the instrument's data carries the instrument's
+/// clock. Recording both lets a later analysis align the two (`item 3`): `instrument_time`
+/// is what the instrument displayed, `offset_secs` is instrument minus tool clock, and
+/// `basis` names the instrument's time base (`UTC` / `GPS` / `local`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClockInfo {
+    pub basis: String,
+    pub instrument_time: String,
+    pub offset_secs: i64,
+}
+
+impl ClockInfo {
+    pub fn is_empty(&self) -> bool {
+        self.basis.is_empty() && self.instrument_time.is_empty()
+    }
+}
+
 /// One line of the run's event log. The `type` discriminates the variant.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "PascalCase")]
@@ -108,6 +127,9 @@ pub enum RunEvent {
         /// else the checklist asks for. Free-form so a new dimension needs no schema.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         conditions: BTreeMap<String, String>,
+        /// The instrument's clock, when the operator recorded it at run start.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        clock: Option<ClockInfo>,
     },
     StepOpened {
         at: String,
@@ -125,6 +147,13 @@ pub enum RunEvent {
         /// The step id to insert after; `None` appends at the end.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         after: Option<String>,
+    },
+    /// A tagged moment the operator dropped in the field, so a later analysis can align a
+    /// log to a physical feature ("start of the third line") when the instrument clock is
+    /// not the notebook clock. One hotkey + a label, nothing more (`item 3`).
+    FieldMarker {
+        at: String,
+        label: String,
     },
     CheckboxToggled {
         at: String,
@@ -260,6 +289,13 @@ pub struct AddedStep {
     pub after: Option<String>,
 }
 
+/// A tagged moment the operator dropped in the field, with the tool's clock at that moment.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FieldMarker {
+    pub at: String,
+    pub label: String,
+}
+
 /// The state of one step during a run.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StepState {
@@ -297,9 +333,12 @@ pub struct RunState {
     pub sensor: Option<SensorIdentity>,
     pub hardware: Vec<String>,
     pub conditions: BTreeMap<String, String>,
+    pub clock: Option<ClockInfo>,
     pub steps: BTreeMap<String, StepState>,
     /// Steps added mid-run, in the order they were added.
     pub added_steps: Vec<AddedStep>,
+    /// Tagged moments the operator dropped, in the order they were dropped.
+    pub markers: Vec<FieldMarker>,
     pub run_notes: Vec<String>,
     pub run_attachments: Vec<Attachment>,
 }
@@ -350,6 +389,7 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
             sensor,
             hardware,
             conditions,
+            clock,
         } = event
         else {
             return Err(RunError::MustStartWithRunStarted);
@@ -366,6 +406,7 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
         state.sensor = sensor.clone();
         state.hardware = hardware.clone();
         state.conditions = conditions.clone();
+        state.clock = clock.clone();
         return Ok(());
     }
 
@@ -389,6 +430,12 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
                 id: id.clone(),
                 title: title.clone(),
                 after: after.clone(),
+            });
+        }
+        RunEvent::FieldMarker { label, .. } => {
+            state.markers.push(FieldMarker {
+                at: event.at(),
+                label: label.clone(),
             });
         }
         RunEvent::CheckboxToggled {
@@ -513,6 +560,7 @@ impl RunEvent {
             RunEvent::RunStarted { at, .. }
             | RunEvent::StepOpened { at, .. }
             | RunEvent::StepAdded { at, .. }
+            | RunEvent::FieldMarker { at, .. }
             | RunEvent::CheckboxToggled { at, .. }
             | RunEvent::CaptureRecorded { at, .. }
             | RunEvent::CaptureCleared { at, .. }
@@ -534,6 +582,7 @@ impl RunEvent {
             RunEvent::RunStarted { at: slot, .. }
             | RunEvent::StepOpened { at: slot, .. }
             | RunEvent::StepAdded { at: slot, .. }
+            | RunEvent::FieldMarker { at: slot, .. }
             | RunEvent::CheckboxToggled { at: slot, .. }
             | RunEvent::CaptureRecorded { at: slot, .. }
             | RunEvent::CaptureCleared { at: slot, .. }
@@ -930,6 +979,14 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
         out.push('\n');
     }
 
+    if !state.markers.is_empty() {
+        out.push_str("## Field markers\n\n");
+        for marker in &state.markers {
+            out.push_str(&format!("- {label} at {at}\n", label = marker.label, at = marker.at));
+        }
+        out.push('\n');
+    }
+
     if !state.run_notes.is_empty() {
         out.push_str("## Run notes\n\n");
         for note in &state.run_notes {
@@ -989,6 +1046,7 @@ mod tests {
             sensor: None,
             hardware: Vec::new(),
             conditions: BTreeMap::new(),
+            clock: None,
         }
     }
 

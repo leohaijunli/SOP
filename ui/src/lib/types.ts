@@ -247,11 +247,26 @@ export interface RunView {
   sensor: SensorView | null;
   hardware: string[];
   conditions: Record<string, string>;
+  clock: RunClockView | null;
   steps: RunStepView[];
   addedSteps: RunAddedStepView[];
+  markers: RunMarkerView[];
   runNotes: string[];
   runAttachments: RunAttachmentView[];
   recordPath: string;
+}
+
+/// The instrument's clock as recorded at run start.
+export interface RunClockView {
+  basis: string;
+  instrumentTime: string;
+  offsetSecs: number;
+}
+
+/// A tagged field marker: a label plus the tool's clock at the moment it was dropped.
+export interface RunMarkerView {
+  at: string;
+  label: string;
 }
 
 /// A step added to a run after it started; not part of the checklist template.
@@ -276,6 +291,9 @@ export interface RunMetaInput {
   conditions: Record<string, string>;
   plan?: string | null;
   case?: string | null;
+  /// The instrument's current time as displayed, and its basis, at run start.
+  clockInstrumentTime?: string | null;
+  clockBasis?: string | null;
 }
 
 export interface RunStepView {

@@ -130,6 +130,10 @@ export const runAddStep = (
   after: string | null
 ): Promise<RunView> => invoke<RunView>("run_add_step", { sop, runId, title, after });
 
+// Drop a tagged field marker: a label plus the tool's clock at this moment.
+export const runMarker = (sop: string, runId: string, label: string): Promise<RunView> =>
+  invoke<RunView>("run_marker", { sop, runId, label });
+
 export const runDrift = (sop: string, runId: string): Promise<Drift> =>
   invoke<Drift>("run_drift", { sop, runId });
 

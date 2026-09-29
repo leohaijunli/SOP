@@ -81,6 +81,10 @@
   let equipmentChecked: string[] = $state([]);
   let extraHardware = $state("");
   let conditionsText = $state("");
+  // The instrument's clock at run start: what it displayed, and its basis, so a later
+  // analysis can align notebook events to the instrument's own timestamps.
+  let clockBasis = $state("UTC");
+  let clockInstrumentTime = $state("");
   // Values for the conditions this checklist declares, keyed by the declared key. Kept
   // apart from the free-form box so a declared field and an extra never collide.
   let declaredValues: Record<string, string> = $state({});
@@ -128,6 +132,7 @@
   let addingStep = $state(false);
   let newStepTitle = $state("");
   let newStepAfter = $state("");
+  let showMarkers = $state(false);
   // The reason prompt in flight, if any. A promise keeps the call sites readable
   // (`const reason = await ask(...)`) while the UI is a component, not a browser dialog.
   let promptRequest = $state<{
@@ -441,6 +446,8 @@
         },
         plan: caseContext ? caseContext.planId : null,
         case: caseContext ? caseContext.caseId : null,
+        clockInstrumentTime: clockInstrumentTime.trim() || null,
+        clockBasis: clockBasis.trim() || null,
       });
       currentStep = 0;
       message = `started ${runId.trim()}`;
@@ -759,6 +766,27 @@
     }
   };
 
+  // Drop a tagged field marker: a labelled moment, stamped with the tool's clock, for
+  // aligning a log to a physical feature when the instrument clock is not the notebook's.
+  const mark = async (): Promise<void> => {
+    if (!run) return;
+    const label = await ask({
+      title: "Drop a field marker",
+      message: "A tagged moment, e.g. \u201cstart of the third line\u201d, stamped with the tool's clock.",
+      label: "Label",
+      submitLabel: "Drop marker",
+      placeholder: "e.g. start of the third line",
+    });
+    if (!label || !label.trim()) return;
+    try {
+      run = await api.runMarker(run.sop, run.runId, label.trim());
+      message = `marked: ${label.trim()}`;
+      isError = false;
+    } catch (e) {
+      say(String(e), true);
+    }
+  };
+
   // The keyboard contract in `help/app-basics.md`: field use is one-handed, so every
   // action on the run screen has a key. `F1` and `/` belong to the shell, so they are
   // left alone here. `ctrl+enter` asks to finish the run, but only when the focus is not
@@ -796,6 +824,8 @@
     } else if (event.key === "n") {
       event.preventDefault();
       noteInput?.focus();
+    } else if (event.key === "m") {
+      void mark();
     }
   };
 
@@ -1062,7 +1092,23 @@
             .join(", ")}
         </span>
       {/if}
+      {#if run.clock}
+        <span title="instrument clock minus tool clock">
+          clock: {run.clock.instrumentTime} ({run.clock.basis}, offset {run.clock.offsetSecs}s)
+        </span>
+      {/if}
     </p>
+  {/if}
+
+  {#if run && showMarkers && run.markers.length}
+    <section class="markers">
+      <h3>Field markers ({run.markers.length})</h3>
+      <ul>
+        {#each run.markers as marker (marker.at)}
+          <li><span class="mono">{localDateTime(marker.at)}</span> &mdash; {marker.label}</li>
+        {/each}
+      </ul>
+    </section>
   {/if}
 
   {#if !run}
@@ -1234,6 +1280,24 @@
         </label>
         <textarea id="conditions" rows="2" placeholder="weather: clear&#10;temp_c: 12" bind:value={conditionsText}></textarea>
       </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="clock-basis">instrument time basis</label>
+          <select id="clock-basis" bind:value={clockBasis}>
+            <option value="UTC">UTC</option>
+            <option value="GPS">GPS</option>
+            <option value="local">local</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="clock-time">instrument time displayed now</label>
+          <input id="clock-time" placeholder="2026-09-25T12:00:00Z" bind:value={clockInstrumentTime} />
+        </div>
+      </div>
+      <span class="desc">
+        If the instrument has its own clock, note what it shows and its basis; the tool
+        records the difference from its own clock, so a later analysis can align the data.
+      </span>
       </details>
       {#if runIdConflict}
         <p class="err">
@@ -1415,6 +1479,12 @@
             {/if}
             <span class="divider-btn"></span>
             <button onclick={() => void attach(current)}>Attach data / photo</button>
+            <button onclick={() => void mark()} title="Drop a timestamped, labelled marker (m)">Mark <span class="key">m</span></button>
+            {#if run?.markers.length}
+              <button onclick={() => (showMarkers = !showMarkers)} title="Show the markers dropped this run">
+                {run!.markers.length} marker{run!.markers.length === 1 ? "" : "s"}
+              </button>
+            {/if}
           </div>
           <p class="muted">Skips and deviations require a reason; it is written into the record.</p>
 
@@ -1572,6 +1642,11 @@
   .add-step input, .add-step select { width: 100%; box-sizing: border-box; }
   .add-step-actions { display: flex; gap: 8px; margin-top: 8px; }
   .add-step p { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+  .markers { margin: 0 16px 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; }
+  .markers h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 6px; }
+  .markers ul { list-style: none; margin: 0; padding: 0; }
+  .markers li { padding: 2px 0; font-size: 13px; }
+  .key { font-family: var(--mono); font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; margin-left: 3px; }
   .notes h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
   .note-body {
     background: var(--quote); border-left: 3px solid var(--line); border-radius: 6px;

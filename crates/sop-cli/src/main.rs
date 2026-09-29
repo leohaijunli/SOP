@@ -183,6 +183,13 @@ enum RunAction {
         /// The checklist's sop_id.
         sop: String,
     },
+    /// Print one run's step timeline as CSV, so a script can join a log to a step by time.
+    Timeline {
+        /// The checklist's sop_id.
+        sop: String,
+        /// The run's id.
+        run_id: String,
+    },
     /// Export run data: CSV for the processing pipelines, Markdown for the record.
     Export {
         /// The checklist's sop_id.
@@ -747,6 +754,9 @@ RunAction::End { sop, run_id, status, conclusion, note } => {
         }
         RunAction::Deviations { sop } => run_deviations(&repo, &sop)
             .map(|count| println!("{count} deviation(s) across {sop}")),
+        RunAction::Timeline { sop, run_id } => run::load(&repo, &sop, &run_id)
+            .map(|loaded| print!("{}", sop_core::run::timeline_csv(&loaded.state, &loaded.steps)))
+            .map_err(|error| error.to_string()),
         RunAction::Export {
             sop,
             format,

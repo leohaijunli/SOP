@@ -21,8 +21,9 @@ use tauri::State;
 
 use crate::api::{
     CaptureInput, ChecklistItemView, ContentCounts, GitInfo, ProjectField, ProjectView,
-    RunAddedStepView, RunAttachmentView, RunCaptureView, RunMetaInput, RunStepView, RunView,
-    SensorView, SettingRow, Status, StepInput, StepPatch, ValidationCounts,
+    RunAddedStepView, RunAttachmentView, RunCaptureView, RunClockView, RunMarkerView,
+    RunMetaInput, RunStepView, RunView, SensorView, SettingRow, Status, StepInput, StepPatch,
+    ValidationCounts,
 };
 use crate::state::AppState;
 
@@ -587,6 +588,26 @@ pub fn run_start(
             .collect(),
         plan: meta.plan.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty()),
         case: meta.case.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty()),
+        clock: match (meta.clock_instrument_time, meta.clock_basis) {
+            (Some(instrument_time), Some(basis))
+                if !instrument_time.trim().is_empty() && !basis.trim().is_empty() =>
+            {
+                let instrument_time = instrument_time.trim().to_owned();
+                let now_epoch = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                let offset_secs = sop_core::timestamp::epoch_seconds(&instrument_time)
+                    .map(|instrument| instrument - now_epoch)
+                    .unwrap_or(0);
+                Some(sop_core::run::ClockInfo {
+                    basis: basis.trim().to_owned(),
+                    instrument_time,
+                    offset_secs,
+                })
+            }
+            _ => None,
+        },
     };
     let loaded =
         run::start_with_meta(&repo, &sop, &run_id, &operator, &site, r#override.as_deref(), &meta)
@@ -651,6 +672,20 @@ fn next_adhoc_id(state: &sop_core::RunState) -> String {
         .max()
         .unwrap_or(0);
     format!("adhoc-{max:03}")
+}
+
+/// Drop a tagged field marker on the run: a timestamped, labelled moment for aligning a
+/// log to a physical feature when the instrument clock is not the notebook clock.
+#[tauri::command(async)]
+pub fn run_marker(
+    sop: String,
+    run_id: String,
+    label: String,
+    state: State<'_, AppState>,
+) -> Reply<RunView> {
+    let repo = state.repo()?;
+    let loaded = run::marker(&repo, &sop, &run_id, &label).map_err(text)?;
+    Ok(build_run_view(&loaded, &run_id))
 }
 
 /// Whether the checklist this run was started from has changed since the snapshot.
@@ -778,6 +813,11 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
         }),
         hardware: state.hardware.clone(),
         conditions: state.conditions.clone(),
+        clock: state.clock.as_ref().map(|clock| RunClockView {
+            basis: clock.basis.clone(),
+            instrument_time: clock.instrument_time.clone(),
+            offset_secs: clock.offset_secs,
+        }),
         steps,
         added_steps: state
             .added_steps
@@ -786,6 +826,14 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
                 id: added.id.clone(),
                 title: added.title.clone(),
                 after: added.after.clone(),
+            })
+            .collect(),
+        markers: state
+            .markers
+            .iter()
+            .map(|marker| RunMarkerView {
+                at: marker.at.clone(),
+                label: marker.label.clone(),
             })
             .collect(),
         run_notes: state.run_notes.clone(),
