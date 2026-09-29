@@ -18,6 +18,8 @@ pub struct Status {
     pub institution: Option<String>,
     pub git: GitInfo,
     pub content: ContentCounts,
+    /// The current validation pass, so the header can show a badge without a second call.
+    pub validation: ValidationCounts,
 }
 
 #[derive(Debug, Serialize)]
@@ -41,6 +43,14 @@ pub struct ContentCounts {
     pub runs: usize,
     pub help: usize,
     pub log_directories: usize,
+}
+
+/// How many problems a full validation pass found.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidationCounts {
+    pub errors: usize,
+    pub warnings: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -98,6 +108,8 @@ pub struct RunView {
     pub run_id: String,
     pub operator: Option<String>,
     pub site: Option<String>,
+    pub plan: Option<String>,
+    pub case: Option<String>,
     pub started: Option<String>,
     pub ended: Option<String>,
     pub run_status: Option<String>,
@@ -141,6 +153,10 @@ pub struct RunMetaInput {
     pub hardware: Vec<String>,
     #[serde(default)]
     pub conditions: BTreeMap<String, String>,
+    #[serde(default)]
+    pub plan: Option<String>,
+    #[serde(default)]
+    pub case: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -181,6 +197,8 @@ pub struct RunCaptureView {
     pub options: Vec<String>,
     pub expected: Option<serde_json::Value>,
     pub value: Option<String>,
+    /// True once the operator acknowledged this value as outside the expected range.
+    pub acknowledged: bool,
 }
 
 #[derive(Debug, Serialize)]

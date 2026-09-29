@@ -11,12 +11,15 @@
   import HistoryView from "./components/HistoryView.svelte";
   import TestPlansView from "./components/TestPlansView.svelte";
   import * as api from "./lib/api";
-  import type { ChecklistEntry, Manifest } from "./lib/types";
+  import type { ChecklistEntry, Manifest, Status, TestCase, TestPlan } from "./lib/types";
 
   // Which screen the window is showing.
   type View = "browse" | "testplans" | "run" | "history" | "settings" | "project" | "authoring";
 
   let manifest: Manifest | null = $state(null);
+  // Git and validation state, shown in the header so the operator sees whether the
+  // working copy is committed and whether the content is clean.
+  let status: Status | null = $state(null);
   let error: string | null = $state(null);
   // Sync status: pull/push result shown as a non-intrusive banner.
   let sync = $state("");
@@ -36,6 +39,29 @@
   let help = $state<string | null>(null);
   let helpQuery = $state("");
   let stepQuery = $state("");
+
+  // A plan run walks the cases of one test plan in `order`, carrying the start
+  // configuration from one case to the next. `index` is the case now loaded.
+  type PlanCase = { path: string; id: string; title: string; sopId: string };
+  type PlanRun = { planId: string; planTitle: string; cases: PlanCase[]; index: number };
+  let planRun: PlanRun | null = $state(null);
+
+  // What the Execution view needs to know about the case it is starting, or null when
+  // the checklist was opened directly. This is what the run records as its provenance.
+  const caseContext = $derived.by(() => {
+    if (!planRun) return null;
+    const c = planRun.cases[planRun.index];
+    if (!c) return null;
+    return {
+      planId: planRun.planId,
+      planTitle: planRun.planTitle,
+      caseId: c.id,
+      caseTitle: c.title,
+      index: planRun.index,
+      total: planRun.cases.length,
+      hasNext: planRun.index < planRun.cases.length - 1,
+    };
+  });
 
   const counts = (): string => {
     const m = manifest;
@@ -59,10 +85,13 @@
   };
 
   // Start a test case: load its markdown as the active checklist and open the Run view.
-  const startCase = async (path: string): Promise<void> => {
+  // `context` carries the plan queue when the case is part of a plan run, so the run can
+  // record its plan/case and offer the next one; a direct start clears it.
+  const startCase = async (path: string, context: PlanRun | null = null): Promise<void> => {
     try {
       const entry = await api.loadExternalMd(path);
       if (!entry || !manifest) return;
+      planRun = context;
       externalChecklists = [
         ...externalChecklists.filter((c) => api.text(c.sop_id) !== api.text(entry.sop_id)),
         entry,
@@ -79,6 +108,47 @@
     } catch (e) {
       console.warn("start case:", e);
     }
+  };
+
+  // Run a whole plan: load its first case, and let the ended-run banner advance through
+  // the rest in order via `nextCase`.
+  const planCase = (c: { path: string; id: string; title: unknown; sop_id: string }): PlanCase => ({
+    path: c.path,
+    id: c.id,
+    title: api.text(c.title) || c.id,
+    sopId: c.sop_id,
+  });
+
+  // A one-case queue, so starting a single case from the plan table still records which
+  // plan and case it came from, but offers no "next case" at the end.
+  const startPlanCase = (plan: TestPlan, c: TestCase): void => {
+    const queue: PlanRun = {
+      planId: plan.id,
+      planTitle: api.text(plan.title) || plan.id,
+      cases: [planCase(c)],
+      index: 0,
+    };
+    void startCase(c.path, queue);
+  };
+
+  const startPlan = (plan: TestPlan): void => {
+    const cases: PlanCase[] = plan.cases.map(planCase);
+    if (cases.length === 0) return;
+    const queue: PlanRun = {
+      planId: plan.id,
+      planTitle: api.text(plan.title) || plan.id,
+      cases,
+      index: 0,
+    };
+    void startCase(cases[0].path, queue);
+  };
+
+  // Advance a plan run to its next case after the current one has ended.
+  const nextCase = (): void => {
+    if (!planRun) return;
+    const next = planRun.index + 1;
+    if (next >= planRun.cases.length) return;
+    void startCase(planRun.cases[next].path, { ...planRun, index: next });
   };
 
   const refresh = async (): Promise<void> => {
@@ -106,6 +176,7 @@
           ...externalChecklists,
         ],
       };
+      status = await api.status();
       error = null;
     } catch (e) {
       error = String(e);
@@ -193,6 +264,7 @@
 {:else}
   <Header
     {counts}
+    {status}
     view={view}
     onView={openView}
     title={manifest?.project?.title ?? null}
@@ -230,11 +302,19 @@
       {/if}
     {:else if view === "testplans"}
       <TestPlansView
-        onStart={(p) => void startCase(p)}
+        {manifest}
+        onStartCase={startPlanCase}
+        onStartPlan={startPlan}
         onChanged={() => void refresh()}
       />
     {:else if view === "run"}
-      <ExecutionView {manifest} {checklist} onRunUpdate={() => void refreshRuns()} />
+      <ExecutionView
+        {manifest}
+        {checklist}
+        {caseContext}
+        onNextCase={nextCase}
+        onRunUpdate={() => void refreshRuns()}
+      />
       {#if helpOpen}
         <HelpPanel manifest={manifest} {help} {helpQuery} onHelp={(h) => (help = h)} onQuery={(q) => (helpQuery = q)} />
       {/if}

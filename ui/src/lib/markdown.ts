@@ -1,6 +1,6 @@
 // A deliberately small Markdown renderer: enough for the content in this repository and
 // no more. The set of constructs it supports is the set the content actually uses:
-// fenced code, hr, h2-h4, tables, blockquotes, lists (with task items), and inline
+// fenced code, hr, h1-h4, tables, blockquotes, lists (with task items), and inline
 // code/strong/em/links. Everything else is emitted as plain paragraphs.
 //
 // This is the same renderer the preview server uses, lifted out of the HTML so the
@@ -43,7 +43,7 @@ export function markdown(source: string): string {
 
     if (/^\s*(---+|\*\*\*+)\s*$/.test(line)) { html.push("<hr>"); index++; continue; }
 
-    const heading = line.match(/^(#{2,4})\s+(.*)$/);
+    const heading = line.match(/^(#{1,4})\s+(.*)$/);
     if (heading) { html.push(`<h${heading[1].length}>${inline(heading[2])}</h${heading[1].length}>`); index++; continue; }
 
     if (/^\s*\|/.test(line) && /^\s*\|[\s:|-]+\|\s*$/.test(lines[index + 1] || "")) {
@@ -87,7 +87,7 @@ export function markdown(source: string): string {
     if (!line.trim()) { index++; continue; }
 
     const paragraph: string[] = [];
-    while (index < lines.length && lines[index].trim() && !/^\s*(```|>|[-*+]\s|\d+[.)]\s|\||#{2,4}\s)/.test(lines[index])) {
+    while (index < lines.length && lines[index].trim() && !/^\s*(```|>|[-*+]\s|\d+[.)]\s|\||#{1,4}\s)/.test(lines[index])) {
       paragraph.push(lines[index++]);
     }
     flushParagraph(paragraph);

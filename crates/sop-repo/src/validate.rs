@@ -286,6 +286,7 @@ fn check_checklist(repo: &Repo, loaded: &Loaded, report: &mut Report) {
     report.extend(path, check::front_matter(doc, "checklist"));
     report.extend(path, check::id_matches_filename(doc, "sop_id", &stem));
     report.extend(path, check::checklist_status(doc));
+    report.extend(path, check::checklist_conditions(doc));
 
     if doc.front.string_list("equipment").is_empty() {
         report.warning(
@@ -351,7 +352,9 @@ fn check_run(
     let sop = doc.front.str("sop").flatten();
     let mut checklist_steps: Option<Vec<String>> = None;
     match sop {
-        Some(name) if repo.resolve(&format!("checklists/{name}.md")).is_file() => {
+        // The checklist a run names can be a `checklists/` file or a `testplan/` case;
+        // both record their `sop_id`, and both have to resolve here.
+        Some(name) if repo.checklist_path(name).is_some() => {
             checklist_steps = repo.checklist_step_ids(name);
         }
         _ => report.error(
@@ -405,7 +408,10 @@ fn check_run(
         );
     }
 
-    if doc.results.is_empty() {
+    // A run that has just started has no results yet, and that is the normal state of a
+    // record on disk mid-run. Only a finished run with nothing recorded is worth a
+    // second look.
+    if doc.results.is_empty() && doc.front.contains("ended") {
         report.warning(path, "run record has no step results", None);
     }
 

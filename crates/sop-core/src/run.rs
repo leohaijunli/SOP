@@ -10,7 +10,7 @@
 //! the log and record live, and checks the events against the content the run was
 //! started from.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -78,6 +78,15 @@ pub enum RunEvent {
         snapshot_sha256: String,
         operator: String,
         site: String,
+        /// The test plan this run belongs to, when it was started from `testplan/`.
+        /// Absent for a checklist opened directly, so a reader can tell a plan run
+        /// from an ad-hoc one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plan: Option<String>,
+        /// The test case within `plan` this run was started from. Meaningful only
+        /// together with `plan`; both are absent on a run started from a checklist.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        case: Option<String>,
         /// The instrument, when the operator recorded one. Absent in logs written
         /// before this field existed, which is why every reader treats it as optional.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -112,6 +121,16 @@ pub enum RunEvent {
         step: String,
         key: String,
         reason: String,
+    },
+    /// The operator saw a capture whose value is outside the expected range and accepted
+    /// it. The tool never judges; this is the recorded judgement, so a red line becomes a
+    /// decision that survives review.
+    CaptureAcknowledged {
+        at: String,
+        step: String,
+        key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
     NoteAdded {
         at: String,
@@ -150,6 +169,9 @@ pub enum StepStatus {
 impl StepStatus {
     fn parse(value: &str) -> Result<Self, RunError> {
         match value {
+            // `open` is not a recorded result status; it is how a mis-tapped step is
+            // reopened. A compensating event carries it so the log stays append-only.
+            "open" => Ok(StepStatus::Open),
             "done" => Ok(StepStatus::Done),
             "skipped" => Ok(StepStatus::Skipped),
             "deviated" => Ok(StepStatus::Deviated),
@@ -187,6 +209,8 @@ pub struct StepState {
     pub status: StepStatus,
     pub reason: Option<String>,
     pub captures: BTreeMap<String, CaptureValue>,
+    /// Capture keys the operator acknowledged as outside the expected range.
+    pub acknowledged: BTreeSet<String>,
     pub checkboxes: Vec<bool>,
     pub notes: Vec<String>,
     pub attachments: Vec<Attachment>,
@@ -201,6 +225,8 @@ pub struct RunState {
     pub snapshot_sha256: Option<String>,
     pub operator: Option<String>,
     pub site: Option<String>,
+    pub plan: Option<String>,
+    pub case: Option<String>,
     pub started: Option<String>,
     pub ended: Option<String>,
     pub run_status: Option<String>,
@@ -243,6 +269,8 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
             snapshot_sha256,
             operator,
             site,
+            plan,
+            case,
             sensor,
             hardware,
             conditions,
@@ -257,6 +285,8 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
         state.snapshot_sha256 = Some(snapshot_sha256.clone());
         state.operator = Some(operator.clone());
         state.site = Some(site.clone());
+        state.plan = plan.clone();
+        state.case = case.clone();
         state.sensor = sensor.clone();
         state.hardware = hardware.clone();
         state.conditions = conditions.clone();
@@ -305,6 +335,14 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
         RunEvent::CaptureCleared { step, key, .. } => {
             let step_state = state.steps.entry(step.clone()).or_default();
             step_state.captures.remove(key);
+            step_state.acknowledged.remove(key);
+        }
+        RunEvent::CaptureAcknowledged { step, key, reason, .. } => {
+            let step_state = state.steps.entry(step.clone()).or_default();
+            if reason.as_deref().is_some_and(|r| r.trim().is_empty()) {
+                return Err(RunError::ReasonRequired("acknowledged"));
+            }
+            step_state.acknowledged.insert(key.clone());
         }
         RunEvent::NoteAdded { step, text, .. } => {
             match step {
@@ -365,6 +403,7 @@ impl RunEvent {
             | RunEvent::CheckboxToggled { at, .. }
             | RunEvent::CaptureRecorded { at, .. }
             | RunEvent::CaptureCleared { at, .. }
+            | RunEvent::CaptureAcknowledged { at, .. }
             | RunEvent::NoteAdded { at, .. }
             | RunEvent::AttachmentAdded { at, .. }
             | RunEvent::StepStatusChanged { at, .. }
@@ -498,6 +537,13 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
         state.operator.as_deref().unwrap_or(""),
         state.site.as_deref().unwrap_or("")
     ));
+    if let Some(plan) = &state.plan {
+        out.push_str(&format!("plan: {plan}\n"));
+        if let Some(case) = &state.case {
+            out.push_str(&format!("case: {case}\n"));
+        }
+        out.push('\n');
+    }
     if let (Some(version), Some(commit)) = (state.sop_version.as_deref(), state.sop_commit.as_deref()) {
         out.push_str(&format!("sop_version: {version}\nsop_commit: {commit}\n"));
     }
@@ -556,7 +602,8 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
         // `done`, which is a judgement. A block with nothing to say is left out.
         let has_result = state.status != StepStatus::Open
             || state.reason.is_some()
-            || !state.captures.is_empty();
+            || !state.captures.is_empty()
+            || !state.acknowledged.is_empty();
         if has_result {
             out.push_str("```yaml result\n");
             out.push_str(&format!("step: {}\n", step.id));
@@ -578,11 +625,28 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
                     out.push_str(&format!("  {key}: {rendered}\n"));
                 }
             }
+            if !state.acknowledged.is_empty() {
+                out.push_str("acknowledged:\n");
+                for key in &state.acknowledged {
+                    out.push_str(&format!("  - {key}\n"));
+                }
+            }
             out.push_str("```\n\n");
         }
         let mut tail = false;
         for note in &state.notes {
-            out.push_str(&format!("> note: {note}\n"));
+            // A note may be multi-line Markdown. Prefixing every line keeps the whole
+            // note inside one blockquote instead of letting the second line escape into
+            // the step's prose.
+            for (i, line) in note.split('\n').enumerate() {
+                if i == 0 {
+                    out.push_str(&format!("> note: {line}\n"));
+                } else if line.trim().is_empty() {
+                    out.push_str(">\n");
+                } else {
+                    out.push_str(&format!("> {line}\n"));
+                }
+            }
             tail = true;
         }
         for attachment in &state.attachments {
@@ -604,7 +668,16 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
     if !state.run_notes.is_empty() {
         out.push_str("## Run notes\n\n");
         for note in &state.run_notes {
-            out.push_str(&format!("- {note}\n"));
+            // Continuation lines are indented so they stay inside the same list item.
+            for (i, line) in note.split('\n').enumerate() {
+                if i == 0 {
+                    out.push_str(&format!("- {line}\n"));
+                } else if line.trim().is_empty() {
+                    out.push('\n');
+                } else {
+                    out.push_str(&format!("  {line}\n"));
+                }
+            }
         }
         out.push('\n');
     }
@@ -640,6 +713,8 @@ mod tests {
             snapshot_sha256: "deadbeef".to_owned(),
             operator: "leo".to_owned(),
             site: "Renfrew 395".to_owned(),
+            plan: None,
+            case: None,
             sensor: None,
             hardware: Vec::new(),
             conditions: BTreeMap::new(),
@@ -851,6 +926,56 @@ mod tests {
 
         assert!(rendered.contains("> note: note\n\n## B"), "one blank line before the next step: {rendered}");
         assert!(!rendered.contains("\n\n\n"), "no doubled blank lines: {rendered}");
+    }
+
+    #[test]
+    fn a_multi_line_step_note_stays_in_one_blockquote() {
+        let mut state = RunState::default();
+        apply(&mut state, &started()).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::NoteAdded {
+                at: "t".into(),
+                step: Some("s".into()),
+                text: "first line\n\n- a list item\nsecond line".into(),
+            },
+        )
+        .unwrap();
+        let steps = vec![RecordStep {
+            id: "s".into(),
+            title: "Warm-up baseline".into(),
+            body: "Prose.".into(),
+            checkbox_count: 0,
+        }];
+
+        let rendered = render_record(&state, &steps);
+
+        assert!(
+            rendered.contains("> note: first line\n>\n> - a list item\n> second line\n"),
+            "every line of the note keeps its blockquote marker: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_multi_line_run_note_stays_in_one_list_item() {
+        let mut state = RunState::default();
+        apply(&mut state, &started()).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::NoteAdded {
+                at: "t".into(),
+                step: None,
+                text: "line one\nline two".into(),
+            },
+        )
+        .unwrap();
+
+        let rendered = render_record(&state, &[]);
+
+        assert!(
+            rendered.contains("## Run notes\n\n- line one\n  line two\n"),
+            "continuation lines are indented under the bullet: {rendered}"
+        );
     }
 
     #[test]

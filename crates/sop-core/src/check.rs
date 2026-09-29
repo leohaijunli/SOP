@@ -164,7 +164,6 @@ pub fn run_front_matter(doc: &Document) -> Diagnostics {
         "operator",
         "site",
         "started",
-        "status",
         "deviations_count",
     ] {
         if !front.contains(key) {
@@ -173,6 +172,14 @@ pub fn run_front_matter(doc: &Document) -> Diagnostics {
                 Some(1),
             );
         }
+    }
+
+    // `status` and `ended` are written together when the run is ended, and are both
+    // absent while it is still in progress. A record on disk mid-run is normal - it is
+    // what crash recovery replays - so an unfinished record is not an error. A record
+    // with one key and not the other was edited by hand.
+    if front.contains("status") != front.contains("ended") {
+        out.error("'status' and 'ended' must be written together", Some(1));
     }
 
     if let Some(value) = front.get("sop_version")
@@ -909,6 +916,41 @@ pub fn checklist_status(doc: &Document) -> Diagnostics {
                 ),
                 Some(1),
             ),
+        }
+    }
+    out
+}
+
+/// A checklist's declared `conditions:` must be well-formed and name valid keys.
+///
+/// The keys are what the start form shows as fields and what a run records, so a typo
+/// here becomes a run that asks for the wrong thing. This is a warning, not an error:
+/// the run still works and an older reader ignores the key (`SPEC-COMPAT.md`).
+pub fn checklist_conditions(doc: &Document) -> Diagnostics {
+    let mut out = Diagnostics::new();
+    if doc.front.get("conditions").is_none() {
+        return out;
+    }
+    if !doc.front.conditions_are_well_formed() {
+        out.warning(
+            "'conditions' must be a key, a list of keys, or a mapping of key to hint",
+            Some(1),
+        );
+        return out;
+    }
+    for condition in doc.front.conditions() {
+        // The key becomes a `key: value` line in the record, so a space or a colon in it
+        // would make the line ambiguous. Otherwise the key is free-form, to match the
+        // `conditions` a run already records.
+        if condition.key.contains(char::is_whitespace) || condition.key.contains(':') {
+            out.warning(
+                format!(
+                    "condition '{}' must not contain spaces or colons; it is written as a \
+                     `key: value` line",
+                    condition.key
+                ),
+                Some(1),
+            );
         }
     }
     out

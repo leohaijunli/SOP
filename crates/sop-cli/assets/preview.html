@@ -98,6 +98,7 @@
   .capture .expected { margin-top: 8px; font-size: 13px; color: var(--warn); }
 
   .prose { max-width: 68ch; }
+  .prose h1 { font-size: 20px; margin: 24px 0 8px; }
   .prose h2 { font-size: 18px; margin: 24px 0 8px; }
   .prose h3 { font-size: 16px; margin: 20px 0 8px; }
   .prose p { margin: 0 0 12px; }
@@ -193,7 +194,7 @@ function inline(text) {
 }
 
 // A deliberately small Markdown subset: enough for the content in this repository, and
-// no more. The desktop app will use a real renderer.
+// no more: fenced code, hr, h1-h4, tables, blockquotes, and lists.
 function markdown(source) {
   const lines = source.split("\n");
   const html = [];
@@ -219,7 +220,7 @@ function markdown(source) {
 
     if (/^\s*(---+|\*\*\*+)\s*$/.test(line)) { html.push("<hr>"); index++; continue; }
 
-    const heading = line.match(/^(#{2,4})\s+(.*)$/);
+    const heading = line.match(/^(#{1,4})\s+(.*)$/);
     if (heading) { html.push(`<h${heading[1].length}>${inline(heading[2])}</h${heading[1].length}>`); index++; continue; }
 
     if (/^\s*\|/.test(line) && /^\s*\|[\s:|-]+\|\s*$/.test(lines[index + 1] || "")) {
@@ -263,7 +264,7 @@ function markdown(source) {
     if (!line.trim()) { index++; continue; }
 
     const paragraph = [];
-    while (index < lines.length && lines[index].trim() && !/^\s*(```|>|[-*+]\s|\d+[.)]\s|\||#{2,4}\s)/.test(lines[index])) {
+    while (index < lines.length && lines[index].trim() && !/^\s*(```|>|[-*+]\s|\d+[.)]\s|\||#{1,4}\s)/.test(lines[index])) {
       paragraph.push(lines[index++]);
     }
     flushParagraph(paragraph);

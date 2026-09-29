@@ -326,9 +326,35 @@ pub fn resolve_checklist(repo: &Repo, checklist: &Loaded) -> ResolvedChecklist {
 }
 
 impl Repo {
+    /// The file a run's `sop` id names today: `checklists/<id>.md`, or a test case under
+    /// `testplan/` whose front matter carries that `sop_id`.
+    ///
+    /// A run started from a test case records the case's `sop_id`, not a path, so every
+    /// reader that has to find the checklist again - the validator, drift, step-id
+    /// resolution - goes through here.
+    pub fn checklist_path(&self, sop_id: &str) -> Option<PathBuf> {
+        let direct = self.root.join("checklists").join(format!("{sop_id}.md"));
+        if direct.is_file() {
+            return Some(direct);
+        }
+        for dir in self.discover().testplan_dirs {
+            for path in markdown_in(&dir) {
+                if path.file_name().is_some_and(|name| name == "plan.md") {
+                    continue;
+                }
+                if let Ok(loaded) = self.load(&path)
+                    && loaded.doc.front.str("sop_id").flatten() == Some(sop_id)
+                {
+                    return Some(path);
+                }
+            }
+        }
+        None
+    }
+
     /// Step ids of a checklist, resolved. Used by run records to check citations.
     pub fn checklist_step_ids(&self, sop_id: &str) -> Option<Vec<String>> {
-        let path = self.root.join("checklists").join(format!("{sop_id}.md"));
+        let path = self.checklist_path(sop_id)?;
         let loaded = self.load(&path).ok()?;
         let resolved = resolve_checklist(self, &loaded);
         Some(

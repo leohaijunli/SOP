@@ -7,6 +7,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   CaptureInput,
   ChecklistEntry,
+  Drift,
   ExportResult,
   Manifest,
   ProcedureChoice,
@@ -114,6 +115,9 @@ export const runRecord = (sop: string, runId: string, event: RunEventInput): Pro
 
 export const runState = (sop: string, runId: string): Promise<RunView> =>
   invoke<RunView>("run_state", { sop, runId });
+
+export const runDrift = (sop: string, runId: string): Promise<Drift> =>
+  invoke<Drift>("run_drift", { sop, runId });
 
 export const runEnd = (sop: string, runId: string, status: string): Promise<RunView> =>
   invoke<RunView>("run_end", { sop, runId, status });

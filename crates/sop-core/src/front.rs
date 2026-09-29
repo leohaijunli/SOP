@@ -4,10 +4,23 @@
 //! unknown keys must be reported and preserved. See `SPEC-COMPAT.md`.
 
 use serde_norway::{Mapping, Value};
+use serde::Serialize;
 
 use crate::error::ParseError;
 
 const DELIMITER: &str = "---";
+
+/// One value a checklist expects the operator to record at run start.
+///
+/// A checklist declares these under `conditions:` so the start form can show a field for
+/// each one instead of a free-text box. `hint` is display-only: an example or a unit, as
+/// an author would write it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConditionDecl {
+    pub key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct FrontMatter {
@@ -65,6 +78,64 @@ impl FrontMatter {
             None => true,
             Some(Value::String(_)) => true,
             Some(Value::Sequence(items)) => items.iter().all(|item| item.is_string()),
+            Some(_) => false,
+        }
+    }
+
+    /// The `conditions:` a checklist declares, in file order.
+    ///
+    /// Three spellings are accepted so an author picks the shape that reads best: a
+    /// sequence of keys (`conditions: [weather, temp_c]`), a mapping of key to hint
+    /// (`conditions: {temp_c: "degrees C"}`), or a single key as a bare string. Anything
+    /// else is ignored here; the validator reports it.
+    pub fn conditions(&self) -> Vec<ConditionDecl> {
+        let mut out = Vec::new();
+        let mut push = |key: &str, hint: Option<&str>| {
+            let key = key.trim();
+            if key.is_empty() {
+                return;
+            }
+            let hint = hint
+                .map(str::trim)
+                .filter(|hint| !hint.is_empty())
+                .map(str::to_owned);
+            out.push(ConditionDecl {
+                key: key.to_owned(),
+                hint,
+            });
+        };
+        match self.get("conditions") {
+            None => {}
+            Some(Value::String(single)) => push(single, None),
+            Some(Value::Sequence(items)) => {
+                for item in items {
+                    if let Some(key) = item.as_str() {
+                        push(key, None);
+                    }
+                }
+            }
+            Some(Value::Mapping(map)) => {
+                for (key, value) in map {
+                    if let Some(key) = key.as_str() {
+                        push(key, value.as_str());
+                    }
+                }
+            }
+            Some(_) => {}
+        }
+        out
+    }
+
+    /// `true` when `conditions:` is present and well-formed: a key, a sequence of keys, or
+    /// a mapping of keys to string hints.
+    pub fn conditions_are_well_formed(&self) -> bool {
+        match self.get("conditions") {
+            None => true,
+            Some(Value::String(_)) => true,
+            Some(Value::Sequence(items)) => items.iter().all(Value::is_string),
+            Some(Value::Mapping(map)) => map
+                .iter()
+                .all(|(key, value)| key.is_string() && value.is_string()),
             Some(_) => false,
         }
     }
@@ -209,4 +280,48 @@ fn needs_quotes(value: &str) -> bool {
     // A plain scalar may not begin with an indicator character: it would change what the
     // line means rather than what it says.
     matches!(value.chars().next(), Some(first) if "-?:,[]{}#&*!|>'\"%@`".contains(first))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn front(body: &str) -> FrontMatter {
+        let text = format!("---\n{body}\n---\n\nBody.");
+        split(&text).unwrap().0
+    }
+
+    #[test]
+    fn conditions_accept_a_list_a_mapping_and_a_bare_key() {
+        let list = front("conditions: [weather, temp_c]");
+        assert_eq!(
+            list.conditions(),
+            vec![
+                ConditionDecl { key: "weather".to_owned(), hint: None },
+                ConditionDecl { key: "temp_c".to_owned(), hint: None },
+            ]
+        );
+        assert!(list.conditions_are_well_formed());
+
+        let mapping = front("conditions:\n  temp_c: degrees C\n  weather: clear/sunny");
+        let parsed = mapping.conditions();
+        assert_eq!(parsed[0].key, "temp_c");
+        assert_eq!(parsed[0].hint.as_deref(), Some("degrees C"));
+        assert_eq!(parsed[1].key, "weather");
+        assert!(mapping.conditions_are_well_formed());
+
+        let single = front("conditions: weather");
+        assert_eq!(single.conditions()[0].key, "weather");
+        assert!(single.conditions_are_well_formed());
+    }
+
+    #[test]
+    fn a_condition_with_no_key_is_dropped_and_a_bad_shape_is_reported() {
+        let blanks = front("conditions: ['', '  ']");
+        assert!(blanks.conditions().is_empty());
+        assert!(blanks.conditions_are_well_formed());
+
+        let bad = front("conditions:\n  - 3\n  - weather");
+        assert!(!bad.conditions_are_well_formed());
+    }
 }

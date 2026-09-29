@@ -1,16 +1,30 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { markdown, text } from "../lib/markdown";
+  import MarkdownEditor from "./MarkdownEditor.svelte";
   import * as api from "../lib/api";
-  import type { Manifest, RunStepView, RunView } from "../lib/types";
+  import type { Drift, Manifest, RunEntry, RunStepView, RunView } from "../lib/types";
 
   let {
     manifest,
     checklist,
+    caseContext,
+    onNextCase,
     onRunUpdate,
   }: {
     manifest: Manifest | null;
     checklist: number;
+    /// The plan/case this run was started from, or null for a directly-opened checklist.
+    caseContext: {
+      planId: string;
+      planTitle: string;
+      caseId: string;
+      caseTitle: string;
+      index: number;
+      total: number;
+      hasNext: boolean;
+    } | null;
+    onNextCase: () => void;
     onRunUpdate: () => void;
   } = $props();
 
@@ -50,14 +64,42 @@
   let equipmentChecked: string[] = $state([]);
   let extraHardware = $state("");
   let conditionsText = $state("");
+  // Values for the conditions this checklist declares, keyed by the declared key. Kept
+  // apart from the free-form box so a declared field and an extra never collide.
+  let declaredValues: Record<string, string> = $state({});
   let message = $state("");
   let isError = $state(false);
+  // A persistent "saved HH:MM:SS", so an operator can tell at a glance that the last
+  // event landed rather than trusting a transient word.
+  let lastSaved = $state<string | null>(null);
+  // Provenance: whether the checklist has changed since this run's snapshot.
+  let drift: Drift | null = $state(null);
 
+  // The conditions the checklist asks for, in file order.
+  const declaredConditions = $derived(
+    (manifest?.checklists[checklist]?.conditions ?? []) as { key: string; hint?: string | null }[]
+  );
+  // Sites to offer: the ones project.md names, plus every site a run was recorded at.
+  const siteOptions = $derived.by(() => {
+    const seen = new Set<string>();
+    for (const value of manifest?.project?.sites ?? []) {
+      const site = api.text(value);
+      if (site) seen.add(site);
+    }
+    for (const entry of manifest?.runs ?? []) {
+      const site = api.text(entry.site);
+      if (site) seen.add(site);
+    }
+    return [...seen].sort();
+  });
   let run = $state<RunView | null>(null);
   let currentStep = $state(0);
   let stepQuery = $state("");
   let noteText = $state("");
-  let noteInput = $state<HTMLInputElement | null>(null);
+  let runNoteText = $state("");
+  // The note editor is a component, so the `n` shortcut holds its instance rather than a
+  // raw textarea: `focus()` is the one method the shortcut needs.
+  let noteInput = $state<{ focus: () => void } | null>(null);
   let capturesBox = $state<HTMLElement | null>(null);
   // Set when the run has ended, so a prominent confirmation is shown over the finished
   // run instead of a small line of text the operator may miss.
@@ -164,6 +206,19 @@
         .map((r) => api.text(r.run_id))
     );
 
+  // Start-button state, computed here so the reason it is disabled is visible rather
+  // than discovered by pressing it and reading an error.
+  const runIdConflict = $derived(runId.trim() !== "" && existingRunIds().has(runId.trim()));
+  const missingFields = $derived(
+    [
+      runId.trim() ? "" : "run id",
+      operator.trim() ? "" : "operator",
+      site.trim() ? "" : "site",
+      isDraft && !overrideReason.trim() ? "override reason" : "",
+    ].filter((field) => field !== "")
+  );
+  const canStart = $derived(missingFields.length === 0 && !runIdConflict);
+
   // The id a run is filed under. `2026-09-28-uas-mag-1001` reads back the date, the model
   // and the unit. With no instrument it falls back to the site, and either way a repeat
   // gets `-2`, `-3` so it never collides with an existing run.
@@ -171,6 +226,17 @@
     const existing = existingRunIds();
     const model = effectiveModel();
     const serial = effectiveSerial();
+    // A case started from a plan carries the case in the id, so two cases of one plan on
+    // the same instrument the same day never read as the same run.
+    const caseId = caseContext ? slug(caseContext.caseId) : "";
+    if (caseId) {
+      const base = [today(), caseId, model ? slug(model) : "", serial ? slug(serial) : ""]
+        .filter((part) => part !== "")
+        .join("-");
+      let candidate = base;
+      for (let i = 2; existing.has(candidate); i++) candidate = `${base}-${i}`;
+      return candidate;
+    }
     if (model || serial) {
       const base = [today(), model ? slug(model) : "", serial ? slug(serial) : ""]
         .filter((part) => part !== "")
@@ -193,6 +259,7 @@
     if (checklist === seeded) return;
     seeded = checklist;
     equipmentChecked = equipment;
+    declaredValues = {};
     extraHardware = "";
     sensorModel = "";
     sensorSerial = "";
@@ -201,6 +268,32 @@
     sensorTouched = false;
     runIdTouched = false;
     editingRunId = false;
+  });
+
+  // When the plan advances to the next case the checklist changes while this component
+  // stays mounted, so a run from the previous case must be dropped rather than shown
+  // against the new one.
+  $effect(() => {
+    if (run && run.sop && run.sop !== sop) {
+      run = null;
+      ended = null;
+    }
+  });
+
+  // Re-check drift whenever the active run changes, so a checklist edited while the run
+  // is open shows as changed rather than silently disagreeing with the snapshot.
+  let driftFor = "";
+  $effect(() => {
+    const id = run?.runId ?? "";
+    if (id === driftFor) return;
+    driftFor = id;
+    drift = null;
+    if (run && id) {
+      void api
+        .runDrift(run.sop, id)
+        .then((next) => (drift = next))
+        .catch(() => (drift = null));
+    }
   });
 
   // Preselect the sensor the checklist names, once the setting has loaded and unless the
@@ -274,7 +367,16 @@
         sensorSerial: serial || null,
         sensorFirmware: sensorFirmware.trim() || null,
         hardware: [...new Set([...equipmentChecked, ...parseLines(extraHardware)])],
-        conditions: parseConditions(conditionsText),
+        // A declared field wins over the same key typed into the free-form box: the
+        // checklist asked for that field explicitly.
+        conditions: {
+          ...parseConditions(conditionsText),
+          ...Object.fromEntries(
+            Object.entries(declaredValues).filter(([, value]) => value.trim() !== "")
+          ),
+        },
+        plan: caseContext ? caseContext.planId : null,
+        case: caseContext ? caseContext.caseId : null,
       });
       currentStep = 0;
       message = `started ${runId.trim()}`;
@@ -290,18 +392,24 @@
   // done in the same keystroke, and two concurrent `run_record` calls could otherwise
   // interleave their appends to the log and leave the view showing the older response.
   let queue: Promise<void> = Promise.resolve();
-  const emit = (event: any): Promise<void> => {
+  // Recording an event rewrites the whole record from the replayed log, so the caller gets
+  // back whether it landed: the note editor keeps the operator's text on a failure rather
+  // than clearing a note that was never written.
+  const emit = (event: any): Promise<boolean> => {
+    let saved = false;
     queue = queue.then(async () => {
       if (!run) return;
       try {
         run = await api.runRecord(run.sop, run.runId, { at: new Date().toISOString(), ...event });
-        message = "saved";
+        message = "";
+        lastSaved = new Date().toLocaleTimeString();
         isError = false;
+        saved = true;
       } catch (e) {
         say(String(e), true);
       }
     });
-    return queue;
+    return queue.then(() => saved);
   };
 
   const setStatus = async (step: RunStepView, status: string): Promise<void> => {
@@ -330,11 +438,31 @@
     await emit({ type: "CaptureRecorded", step: step.id, key, value: value.trim(), unit });
   };
 
-  const addNote = async (step: RunStepView | null): Promise<void> => {
-    const t = noteText.trim();
-    if (!t) return;
-    await emit({ type: "NoteAdded", step: step?.id ?? null, text: t });
-    noteText = "";
+  // The recorded judgement for a value outside the expected range. The tool never judges;
+  // the operator does, and this event is what survives review.
+  const acknowledge = async (step: RunStepView, key: string): Promise<void> => {
+    const reason = prompt("Why is this value acceptable? (optional, recorded)");
+    if (reason === null) return;
+    await emit({ type: "CaptureAcknowledged", step: step.id, key, reason: reason.trim() || null });
+  };
+
+  // Reopen a step that was marked done, skipped, or deviated by mistake. The log is
+  // append-only, so this is a compensating event, not a deletion.
+  const reopen = async (step: RunStepView): Promise<void> => {
+    await emit({
+      type: "StepStatusChanged",
+      step: step.id,
+      status: "open",
+      reason: "reopened after a mis-tap",
+    });
+  };
+
+  // Notes are stored verbatim, so the editor's text goes straight through. A step note
+  // is filed under that step; the run-level note uses `step: null`.
+  const addNote = async (step: RunStepView | null, text: string): Promise<boolean> => {
+    const t = text.trim();
+    if (!t) return false;
+    return emit({ type: "NoteAdded", step: step?.id ?? null, text: t });
   };
 
   // Attach a data file or photo to the run. The shell copies it into the run's logs,
@@ -367,14 +495,22 @@
   // The file name part of a stored path, for a compact label next to the full path.
   const fileName = (path: string): string => path.split(/[\\/]/).pop() ?? path;
 
+  // A short, stable form of a hash or commit for a tooltip or an inline label.
+  const short = (value: string | null): string => (value ? value.slice(0, 8) : "?");
+
   const end = (status: string): Promise<void> => {
-    // A `complete` run must account for every step; ending a run with open steps as
-    // complete writes an invalid record that then blocks every content edit. Require
-    // the operator to finish the steps, or mark the run partial/aborted instead.
+    // A `complete` run must account for every step and cannot contain a skipped one:
+    // both are validation errors (`check::complete_run_coverage`), so ending a run this
+    // way would write a record that then blocks every content edit. A deviation is
+    // allowed - the step happened, just not as written.
     if (status === "complete" && run) {
-      const open = run.steps.filter((s) => !["done", "skipped", "deviated"].includes(s.status));
+      const open = run.steps.filter((s) => !["done", "deviated"].includes(s.status));
       if (open.length > 0) {
-        say(`${open.length} step(s) have no outcome yet; finish or skip them, or end as partial/aborted`, true);
+        say(
+          `${open.length} step(s) are skipped or have no outcome; a complete run cannot ` +
+            `contain those. Finish or deviate them, or end as partial/aborted`,
+          true
+        );
         return Promise.resolve();
       }
     }
@@ -473,6 +609,48 @@
     return text(expected) === value;
   }
 
+  // Seed the start form from a run the same lab took before. Values are only filled
+  // where the operator has not typed, and a declared condition's value goes to its own
+  // field rather than the free-form box.
+  function seedFromRun(previous: RunEntry, m: Manifest): void {
+    if (!operator && text(previous.operator)) operator = text(previous.operator);
+    if (!site && text(previous.site)) site = text(previous.site);
+
+    // An external case is not in the repository manifest's checklists, so the current
+    // checklist's own declarations are merged with the manifest's.
+    const declared = new Set<string>();
+    for (const c of m.checklists.find((c) => text(c.sop_id) === sop)?.conditions ?? []) {
+      declared.add(c.key);
+    }
+    for (const c of declaredConditions) declared.add(c.key);
+    const values = (previous.conditions ?? {}) as Record<string, unknown>;
+    const extra: string[] = [];
+    const fields: Record<string, string> = { ...declaredValues };
+    for (const [key, value] of Object.entries(values)) {
+      const item = text(value);
+      if (!item) continue;
+      if (declared.has(key)) fields[key] = item;
+      else extra.push(`${key}: ${item}`);
+    }
+    declaredValues = fields;
+    if (extra.length && !conditionsText.trim()) conditionsText = extra.join("\n");
+
+    const sensor = previous.sensor;
+    if (sensor && !sensorTouched) {
+      const model = text(sensor.model);
+      const serial = text(sensor.serial);
+      if (model) {
+        sensorModel = model;
+        sensorTouched = true;
+        // A run's instrument joins the picker list, the same way a hand-typed serial
+        // does, so the next run finds it in the menu.
+        void rememberSerial(model, serial);
+      }
+      if (serial) sensorSerial = serial;
+      if (text(sensor.firmware)) sensorFirmware = text(sensor.firmware);
+    }
+  }
+
   onMount(() => {
     // The sensor picker reads a machine setting; a failure leaves the built-in default.
     void api
@@ -482,8 +660,16 @@
         if (value) sensorsText = value;
       })
       .catch(() => {});
-    // Resume the most recent unfinished run of this checklist, if any.
+    // Seed the form from the last run, then resume the most recent unfinished run of
+    // this checklist if there is one. Seeding is why a campaign's operator, site, and
+    // conditions are typed once instead of every run.
     void api.manifest().then(async (m) => {
+      const newestFirst = m.runs
+        .slice()
+        .sort((a, b) => api.text(b.started).localeCompare(api.text(a.started)));
+      const last = newestFirst.find((r) => api.text(r.sop) === sop) ?? newestFirst[0];
+      if (last && !run) seedFromRun(last, m);
+
       const runs = m.runs
         .filter((r) => api.text(r.sop) === sop)
         .sort((a, b) => api.text(b.started).localeCompare(api.text(a.started)));
@@ -509,11 +695,17 @@
   <div class="toolbar">
     <h1 style="margin:0">Run</h1>
     <span class="muted mono">{sop}</span>
+    {#if caseContext}
+      <span class="breadcrumb">
+        {caseContext.planTitle} &middot; case {caseContext.index + 1}/{caseContext.total}: {caseContext.caseTitle}
+      </span>
+    {/if}
     <span class="spacer"></span>
     {#if run}
       <span class="muted">
         {run!.runId} &middot; {run!.operator ?? "?"} &middot; {run!.site ?? "?"}{#if run!.runStatus} &middot; {run!.runStatus}{/if}
       </span>
+      {#if lastSaved}<span class="saved">saved {lastSaved}</span>{/if}
     {/if}
   </div>
 
@@ -528,14 +720,35 @@
         <div>
           <strong>Run {ended.status.toUpperCase()}</strong>
           <span class="ended-id">{ended.runId}</span>
+          {#if caseContext}
+            <span class="ended-id">plan {caseContext.planId} &middot; case {caseContext.index + 1} of {caseContext.total}</span>
+          {/if}
         </div>
       </div>
-      <button class="primary" onclick={() => void newRun()}>Start new run</button>
+      {#if caseContext?.hasNext}
+        <button class="primary" onclick={() => onNextCase()}>
+          Next case: {caseContext.caseTitle} &rarr;
+        </button>
+        <button onclick={() => void newRun()}>Start new run</button>
+      {:else}
+        <button class="primary" onclick={() => void newRun()}>Start new run</button>
+      {/if}
     </div>
   {/if}
 
-  {#if run && (run.sensor || run.hardware.length || Object.keys(run.conditions).length)}
+  {#if run && (run.plan || run.sopVersion || run.sensor || run.hardware.length || Object.keys(run.conditions).length)}
     <p class="muted run-meta">
+      {#if run.plan}<span>plan: {run.plan}{#if run.case} / {run.case}{/if}</span>{/if}
+      {#if run.sopVersion}<span>checklist v{run.sopVersion}{#if run.sopCommit} ({short(run.sopCommit)}){/if}</span>{/if}
+      {#if drift && drift.currentSha256}
+        {#if drift.drifted}
+          <span class="drift-warn" title={`snapshot ${short(drift.snapshotSha256)}; now ${short(drift.currentSha256)}`}>
+            changed since this run started{#if drift.currentVersion} (now v{drift.currentVersion}){/if}
+          </span>
+        {:else}
+          <span title={`snapshot ${short(drift.snapshotSha256)}`}>&#10003; unchanged since start</span>
+        {/if}
+      {/if}
       {#if run.sensor}
         <span>
           sensor: {[run.sensor.model, run.sensor.serial && `serial ${run.sensor.serial}`, run.sensor.firmware && `firmware ${run.sensor.firmware}`]
@@ -557,12 +770,27 @@
   {#if !run}
     <section class="start-panel">
       <h2>Start a run</h2>
+      {#if caseContext}
+        <p class="breadcrumb-plan">
+          Plan <strong>{caseContext.planTitle}</strong> &mdash;
+          case {caseContext.index + 1} of {caseContext.total}:
+          <strong>{caseContext.caseTitle}</strong>
+        </p>
+      {/if}
       {#if isDraft}
         <p class="warn">This checklist is a draft. It cannot start without an override reason.</p>
       {/if}
       <div class="field-row">
         <div class="field"><label for="operator">operator</label><input id="operator" placeholder="your name" bind:value={operator} /></div>
-        <div class="field"><label for="site">site</label><input id="site" placeholder="Renfrew 395" bind:value={site} /></div>
+        <div class="field">
+          <label for="site">site</label>
+          <input id="site" list="site-options" placeholder="Renfrew 395" bind:value={site} />
+          <datalist id="site-options">
+            {#each siteOptions as option (option)}
+              <option value={option}></option>
+            {/each}
+          </datalist>
+        </div>
       </div>
 
       <h3>Instrument</h3>
@@ -653,14 +881,47 @@
         <label for="extra-hardware">additional hardware (one per line)</label>
         <textarea id="extra-hardware" rows="2" placeholder="mag_gcs v0.3.1" bind:value={extraHardware}></textarea>
       </div>
+      {#if declaredConditions.length}
+        <div class="field">
+          <span class="group-label">conditions this checklist records</span>
+          {#each declaredConditions as cond (cond.key)}
+            <div class="condition-field">
+              <label for={`cond-${cond.key}`}>
+                {cond.key}{#if cond.hint}<span class="muted"> &mdash; {cond.hint}</span>{/if}
+              </label>
+              <input
+                id={`cond-${cond.key}`}
+                placeholder={cond.hint ?? "enter value"}
+                value={declaredValues[cond.key] ?? ""}
+                onchange={(e) =>
+                  (declaredValues = {
+                    ...declaredValues,
+                    [cond.key]: (e.currentTarget as HTMLInputElement).value,
+                  })}
+              />
+            </div>
+          {/each}
+        </div>
+      {/if}
       <div class="field">
-        <label for="conditions">conditions (one <span class="mono">key: value</span> per line)</label>
+        <label for="conditions">
+          {declaredConditions.length ? "other conditions" : "conditions"}
+          (one <span class="mono">key: value</span> per line)
+        </label>
         <textarea id="conditions" rows="2" placeholder="weather: clear&#10;temp_c: 12" bind:value={conditionsText}></textarea>
       </div>
+      {#if runIdConflict}
+        <p class="err">
+          a run named <span class="mono">{runId.trim()}</span> already exists for this
+          checklist &mdash; change the run id
+        </p>
+      {:else if missingFields.length}
+        <p class="muted">still needed: {missingFields.join(", ")}</p>
+      {/if}
       <button
         class="primary"
         onclick={() => void start()}
-        disabled={!runId.trim() || !operator.trim() || !site.trim() || (isDraft && !overrideReason.trim())}
+        disabled={!canStart}
       >
         Start run
       </button>
@@ -696,8 +957,8 @@
         </ol>
         <hr class="divider" />
         <button
-          disabled={run!.steps.some((s) => !["done", "skipped", "deviated"].includes(s.status))}
-          title="All steps need an outcome before a run can be marked complete"
+          disabled={run!.steps.some((s) => !["done", "deviated"].includes(s.status))}
+          title="A complete run cannot contain a skipped step or one with no outcome"
           onclick={() => void end("complete")}
         >End: complete</button>
         <button onclick={() => void end("partial")}>End: partial</button>
@@ -749,8 +1010,14 @@
                   {#if cap.value}
                     <div class="muted">recorded: {cap.value}</div>
                   {/if}
-                  {#if cap.value && cap.expected !== null && cap.expected !== undefined && !expectedOk(cap.value, cap.expected)}
-                    <div class="expected">outside the expected range &mdash; acknowledge it</div>
+                  {#if cap.value && cap.expected !== null && cap.expected !== undefined && !expectedOk(cap.value, cap.expected) && !cap.acknowledged}
+                    <div class="expected">
+                      outside the expected range &mdash;
+                      <button type="button" onclick={() => void acknowledge(current, cap.key)}>Acknowledge</button>
+                    </div>
+                  {/if}
+                  {#if cap.acknowledged}
+                    <div class="muted">&#10003; acknowledged by the operator</div>
                   {/if}
                 </div>
               {/each}
@@ -773,6 +1040,9 @@
             <button onclick={() => void setStatus(current, "done")}>Mark done</button>
             <button onclick={() => void setStatus(current, "skipped")}>Skip</button>
             <button onclick={() => void setStatus(current, "deviated")}>Deviate</button>
+            {#if current.status !== "open"}
+              <button onclick={() => void reopen(current)} title="Undo a mis-tapped outcome (recorded as a correction)">Reopen</button>
+            {/if}
             <span class="divider-btn"></span>
             <button onclick={() => void attach(current)}>Attach data / photo</button>
           </div>
@@ -804,13 +1074,49 @@
             </section>
           {/if}
 
-          <div class="field">
-            <label for="step-note">Note for this step</label>
-            <div class="field-row">
-              <input id="step-note" bind:this={noteInput} bind:value={noteText} onkeydown={(e) => { if (e.key === "Enter") void addNote(current); }} />
-              <button onclick={() => void addNote(current)}>Add note</button>
-            </div>
+          {#if current.notes.length}
+            <section class="notes">
+              <h3>Notes on this step ({current.notes.length})</h3>
+              {#each current.notes as note, i (i)}
+                <div class="prose note-body">{@html markdown(note)}</div>
+              {/each}
+            </section>
+          {/if}
+
+          <div class="field note-editor">
+            <label for="step-note">Add a note to this step</label>
+            <MarkdownEditor
+              bind:this={noteInput}
+              value={noteText}
+              placeholder="What did you see or change? Markdown is fine."
+              submitLabel="Add step note"
+              onChange={(next) => (noteText = next)}
+              onSubmit={() => {
+                void addNote(current, noteText).then((saved) => {
+                  if (saved) noteText = "";
+                });
+              }}
+            />
           </div>
+
+          <details class="run-notes" open={run.runNotes.length > 0}>
+            <summary>Run notes ({run.runNotes.length})</summary>
+            {#each run.runNotes as note, i (i)}
+              <div class="prose note-body">{@html markdown(note)}</div>
+            {/each}
+            <MarkdownEditor
+              value={runNoteText}
+              rows={4}
+              placeholder="A note about the whole run: site conditions, anything out of the ordinary…"
+              submitLabel="Add run note"
+              onChange={(next) => (runNoteText = next)}
+              onSubmit={() => {
+                void addNote(null, runNoteText).then((saved) => {
+                  if (saved) runNoteText = "";
+                });
+              }}
+            />
+          </details>
         </article>
       {/if}
     </div>
@@ -825,6 +1131,10 @@
   .exec > .toolbar { padding: 16px 16px 0; margin-bottom: 0; }
   .exec > .err, .exec > .muted { padding: 0 16px; margin: 0 0 8px; }
   .run-meta { display: flex; gap: 16px; flex-wrap: wrap; }
+  .breadcrumb { font-size: 12px; color: var(--muted); }
+  .breadcrumb-plan { color: var(--muted); }
+  .saved { font-family: var(--mono); font-size: 11px; color: var(--ok); }
+  .drift-warn { color: var(--warn); font-weight: 600; }
   .spacer { flex: 1; }
   .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
   /* The form is only four fields, but the window is a full field laptop: let the panel
@@ -839,6 +1149,8 @@
   }
   .equipment { display: flex; flex-wrap: wrap; gap: 4px 16px; }
   .start-panel .group-label { font-size: 12px; color: var(--muted); }
+  .condition-field { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+  .condition-field input { max-width: 28ch; }
   .exec-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 300px minmax(0, 1fr); }
   .exec-layout > nav { overflow: auto; border-right: 1px solid var(--line); }
   .exec-layout > nav button { width: 100%; margin-top: 4px; font-size: 12px; }
@@ -848,6 +1160,17 @@
   .task { display: block; padding: 2px 0; }
   .expected { color: var(--warn); font-size: 12px; margin-top: 6px; }
   .divider-btn { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+  .notes h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .note-body {
+    background: var(--quote); border-left: 3px solid var(--line); border-radius: 6px;
+    padding: 4px 12px; margin: 6px 0;
+  }
+  .note-editor { margin-top: 12px; }
+  .run-notes { margin-top: 16px; }
+  .run-notes summary {
+    cursor: pointer; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--muted); margin-bottom: 6px;
+  }
   .attachments h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
   .attachment { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; padding: 2px 0; font-size: 13px; }
   .attachment .name { font-family: var(--mono); font-size: 12px; }

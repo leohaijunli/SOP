@@ -48,7 +48,7 @@ pub const COMMON_FRONT_KEYS: &[&str] = &[
 
 pub const PROCEDURE_FRONT_KEYS: &[&str] = &["procedure_id"];
 
-pub const CHECKLIST_FRONT_KEYS: &[&str] = &["sop_id", "status", "equipment"];
+pub const CHECKLIST_FRONT_KEYS: &[&str] = &["sop_id", "status", "equipment", "conditions"];
 
 pub const RUN_FRONT_KEYS: &[&str] = &[
     "run_id",
@@ -57,6 +57,8 @@ pub const RUN_FRONT_KEYS: &[&str] = &[
     "sop_commit",
     "operator",
     "site",
+    "plan",
+    "case",
     "started",
     "ended",
     "status",
@@ -78,6 +80,7 @@ pub const PROJECT_FRONT_KEYS: &[&str] = &[
     "started",
     "summary",
     "contact",
+    "sites",
 ];
 
 /// The one file that names the project this repository is for.
@@ -95,7 +98,7 @@ pub const CAPTURE_KEYS: &[&str] = &[
     "key", "label", "type", "unit", "required", "options", "expected", "accept",
 ];
 
-pub const RESULT_KEYS: &[&str] = &["step", "status", "reason", "captures"];
+pub const RESULT_KEYS: &[&str] = &["step", "status", "reason", "captures", "acknowledged"];
 
 /// Whether `key` is understood in the front matter of a file of `kind`.
 pub fn known_front_keys(kind: &str, key: &str) -> bool {

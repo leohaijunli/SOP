@@ -37,6 +37,8 @@ pub struct ProjectEntry {
     pub summary: Option<Json>,
     pub applies_to: Vec<Json>,
     pub tags: Vec<Json>,
+    /// Sites named in `project.md`, offered in the start-a-run form's site field.
+    pub sites: Vec<Json>,
     pub path: String,
     pub body: String,
 }
@@ -92,6 +94,8 @@ pub struct ChecklistEntry {
     pub status: Option<Json>,
     pub applies_to: Vec<Json>,
     pub equipment: Vec<Json>,
+    /// The `conditions:` the checklist declares, for the start-a-run form.
+    pub conditions: Vec<sop_core::front::ConditionDecl>,
     pub path: String,
     pub step_count: usize,
     pub unresolved_includes: Vec<String>,
@@ -105,9 +109,15 @@ pub struct RunEntry {
     pub sop_version: Option<Json>,
     pub operator: Option<Json>,
     pub site: Option<Json>,
+    pub plan: Option<Json>,
+    pub case: Option<Json>,
     pub started: Option<Json>,
     pub status: Option<Json>,
     pub deviations_count: Option<Json>,
+    /// The instrument recorded at start, so a new run can be seeded from the last one.
+    pub sensor: Option<Json>,
+    /// The conditions recorded at start, for the same reason.
+    pub conditions: Option<Json>,
     pub path: String,
     pub step_count: usize,
 }
@@ -142,6 +152,7 @@ pub fn build(repo: &Repo) -> Manifest {
             summary: front.get("summary").map(yaml_to_json),
             applies_to: list_of(front.get("applies_to")),
             tags: list_of(front.get("tags")),
+            sites: list_of(front.get("sites")),
             body: loaded.doc.body.trim_start().to_owned(),
             path: loaded.relpath.clone(),
         })
@@ -181,6 +192,7 @@ pub fn build(repo: &Repo) -> Manifest {
             status: front.get("status").map(yaml_to_json),
             applies_to: list_of(front.get("applies_to")),
             equipment: list_of(front.get("equipment")),
+            conditions: front.conditions(),
             path: loaded.relpath.clone(),
             step_count: resolved.steps.len(),
             unresolved_includes: resolved
@@ -205,6 +217,8 @@ pub fn build(repo: &Repo) -> Manifest {
             sop_version: front.get("sop_version").map(yaml_to_json),
             operator: front.get("operator").map(yaml_to_json),
             site: front.get("site").map(yaml_to_json),
+            plan: front.get("plan").map(yaml_to_json),
+            case: front.get("case").map(yaml_to_json),
             started: front.get("started").map(yaml_to_json),
             status: front.get("status").map(yaml_to_json),
             deviations_count: if front.contains("deviations_count") {
@@ -212,6 +226,8 @@ pub fn build(repo: &Repo) -> Manifest {
             } else {
                 Some(json!(0))
             },
+            sensor: front.get("sensor").map(yaml_to_json),
+            conditions: front.get("conditions").map(yaml_to_json),
             path: loaded.relpath.clone(),
             step_count: loaded.doc.results.len(),
         });

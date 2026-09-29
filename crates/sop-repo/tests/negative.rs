@@ -62,6 +62,11 @@ fn freeze_run_snapshot(root: &Scratch, record: &str) {
 fn cases() -> Vec<Case> {
     vec![
         (
+            "a run with a status but no end time",
+            |root| root.replace_once(WALK_RUN, "ended: 2026-09-24T20:05:00Z\n", ""),
+            "'status' and 'ended' must be written together",
+        ),
+        (
             "missing required front matter key",
             |root| root.replace_once(PROC, "\nversion: 1\n", "\n"),
             "missing required key 'version'",

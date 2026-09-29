@@ -10,6 +10,12 @@ export interface Status {
   institution: string | null;
   git: GitInfo;
   content: ContentCounts;
+  validation: ValidationCounts;
+}
+
+export interface ValidationCounts {
+  errors: number;
+  warnings: number;
 }
 
 export interface GitInfo {
@@ -80,6 +86,7 @@ export interface ProjectEntry {
   summary: unknown;
   applies_to: unknown[];
   tags: unknown[];
+  sites: unknown[];
   path: string;
   body: string;
 }
@@ -121,6 +128,7 @@ export interface ChecklistEntry {
   status: unknown;
   applies_to: unknown[];
   equipment: unknown[];
+  conditions: ConditionDecl[];
   path: string;
   step_count: number;
   unresolved_includes: string[];
@@ -151,11 +159,21 @@ export interface RunEntry {
   sop_version: unknown;
   operator: unknown;
   site: unknown;
+  plan: unknown;
+  case: unknown;
   started: unknown;
   status: unknown;
   deviations_count: unknown;
+  sensor: { model?: unknown; serial?: unknown; firmware?: unknown } | null;
+  conditions: Record<string, unknown> | null;
   path: string;
   step_count: number;
+}
+
+/// A value the checklist asks the operator to record at run start.
+export interface ConditionDecl {
+  key: string;
+  hint?: string | null;
 }
 
 export interface StepEntry {
@@ -214,6 +232,8 @@ export interface RunView {
   runId: string;
   operator: string | null;
   site: string | null;
+  plan: string | null;
+  case: string | null;
   started: string | null;
   ended: string | null;
   runStatus: string | null;
@@ -243,6 +263,8 @@ export interface RunMetaInput {
   sensorFirmware: string | null;
   hardware: string[];
   conditions: Record<string, string>;
+  plan?: string | null;
+  case?: string | null;
 }
 
 export interface RunStepView {
@@ -273,6 +295,7 @@ export interface RunCaptureView {
   options: string[];
   expected: unknown;
   value: string | null;
+  acknowledged: boolean;
 }
 
 export interface RunAttachmentView {
@@ -288,6 +311,7 @@ export type RunEventInput =
   | { type: "CheckboxToggled"; at: string; step: string; index: number; checked: boolean }
   | { type: "CaptureRecorded"; at: string; step: string; key: string; value: string; unit: string | null }
   | { type: "CaptureCleared"; at: string; step: string; key: string; reason: string }
+  | { type: "CaptureAcknowledged"; at: string; step: string; key: string; reason: string | null }
   | { type: "NoteAdded"; at: string; step: string | null; text: string }
   | {
       type: "AttachmentAdded";
@@ -299,6 +323,16 @@ export type RunEventInput =
     }
   | { type: "StepStatusChanged"; at: string; step: string; status: string; reason: string | null }
   | { type: "RunEnded"; at: string; status: string };
+
+/// Whether the checklist a run was started from has changed since its snapshot.
+export interface Drift {
+  startedVersion: string | null;
+  startedCommit: string | null;
+  snapshotSha256: string | null;
+  currentSha256: string | null;
+  currentVersion: string | null;
+  drifted: boolean;
+}
 
 // ---- publishing the working copy --------------------------------------------
 

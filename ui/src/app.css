@@ -132,6 +132,9 @@ article h1 { font-size: 20px; color: var(--ink-bright); margin: 4px 0 8px; }
 .capture .expected { font-size: 12px; color: var(--warn); margin-top: 6px; }
 
 .prose { line-height: 1.6; }
+/* A note or a step body may open with `#`. The h2-h4 defaults are close enough to the
+   surrounding text; h1 is not, so it is sized to sit under the view's own title. */
+.prose h1 { font-size: 18px; color: var(--ink-bright); margin: 10px 0 6px; }
 .prose pre { background: var(--bg-darker); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; overflow: auto; }
 .prose code { font-family: var(--mono); font-size: 13px; }
 .prose table { border-collapse: collapse; width: 100%; margin: 8px 0; }

@@ -97,6 +97,23 @@ fn a_run_starts_opens_and_records_a_result() {
 }
 
 #[test]
+fn a_run_that_has_not_ended_is_not_a_validation_error() {
+    let scratch = Scratch::new("run-in-progress");
+    let repo = scratch.repo();
+    start(&repo, RUN);
+
+    // The record is written at start and rewritten as the run goes, so the file the
+    // operator's own header validates is an unfinished one. That must not read as a
+    // broken record; `status`/`ended` only appear once the run ends.
+    let (failed, report) = scratch.validate();
+    assert!(!failed, "an in-progress run must not be an error:\n{report}");
+    assert!(
+        report.ends_with("0 error(s), 0 warning(s)\n"),
+        "a run that has only started is not a finding yet:\n{report}"
+    );
+}
+
+#[test]
 fn a_run_records_the_instrument_and_conditions_it_was_started_with() {
     let scratch = Scratch::new("run-meta");
     let repo = scratch.repo();
@@ -113,6 +130,8 @@ fn a_run_records_the_instrument_and_conditions_it_was_started_with() {
         }),
         hardware: vec!["mag_gcs v0.3.1".to_owned(), "tripod".to_owned()],
         conditions,
+        plan: Some("uas-mag-calibration".to_owned()),
+        case: Some("heading-error".to_owned()),
     };
     run::start_with_meta(&repo, SOP, "2026-09-25-meta", "leo", "Renfrew 395", Some("test"), &meta)
         .unwrap();
@@ -122,8 +141,19 @@ fn a_run_records_the_instrument_and_conditions_it_was_started_with() {
     assert!(record.contains("sensor:\n  model: GEM GSM-19\n  serial: \"4451233\"\n  firmware: \"7.0\""), "{record}");
     assert!(record.contains("hardware:\n  - mag_gcs v0.3.1\n  - tripod"), "{record}");
     assert!(record.contains("conditions:\n  temp_c: \"12\"\n  weather: clear"), "{record}");
+    assert!(record.contains("plan: uas-mag-calibration\ncase: heading-error"), "{record}");
     // The head restates the instrument for a reader who only opens the record.
     assert!(record.contains("sensor: GEM GSM-19, serial 4451233, firmware 7.0"), "{record}");
+    // The manifest carries the same provenance, so the coverage board can group a run
+    // under its plan and case without opening the record.
+    let manifest = manifest::build(&repo);
+    let entry = manifest
+        .runs
+        .iter()
+        .find(|entry| entry.run_id.as_ref().and_then(|id| id.as_str()) == Some("2026-09-25-meta"))
+        .expect("the started run is in the manifest");
+    assert_eq!(entry.plan.as_ref().and_then(|p| p.as_str()), Some("uas-mag-calibration"));
+    assert_eq!(entry.case.as_ref().and_then(|c| c.as_str()), Some("heading-error"));
 }
 
 #[test]
@@ -508,5 +538,96 @@ fn deleting_every_run_removes_the_history_and_leaves_the_inbox_alone() {
     assert!(
         scratch.path("runs/_inbox/2026-09-24-wind-oscillation.md").is_file(),
         "an observation in the inbox is not run history"
+    );
+}
+
+#[test]
+fn acknowledging_an_out_of_range_capture_is_recorded() {
+    let scratch = Scratch::new("run-acknowledge");
+    let repo = scratch.repo();
+    start(&repo, "2026-09-25-acknowledge");
+    run::record(
+        &repo,
+        SOP,
+        "2026-09-25-acknowledge",
+        &RunEvent::CaptureRecorded {
+            at: "t1".into(),
+            step: "cond-location".into(),
+            key: "session_location".into(),
+            value: "hill top".into(),
+            unit: None,
+        },
+    )
+    .unwrap();
+    run::record(
+        &repo,
+        SOP,
+        "2026-09-25-acknowledge",
+        &RunEvent::CaptureAcknowledged {
+            at: "t2".into(),
+            step: "cond-location".into(),
+            key: "session_location".into(),
+            reason: Some("known offset".into()),
+        },
+    )
+    .unwrap();
+
+    let loaded = run::load(&repo, SOP, "2026-09-25-acknowledge").unwrap();
+    assert!(
+        loaded.state.steps["cond-location"]
+            .acknowledged
+            .contains("session_location"),
+        "the acknowledgement replay reaches the state"
+    );
+    run::end(&repo, SOP, "2026-09-25-acknowledge", "partial").unwrap();
+    let record = scratch.read("runs/ground-walk-survey/2026-09-25-acknowledge.md");
+    assert!(
+        record.contains("acknowledged:\n  - session_location"),
+        "{record}"
+    );
+}
+
+#[test]
+fn drift_reports_whether_the_checklist_changed_since_the_snapshot() {
+    let scratch = Scratch::new("run-drift");
+    let repo = scratch.repo();
+    start(&repo, "2026-09-25-drift");
+
+    let before = run::drift(&repo, SOP, "2026-09-25-drift").unwrap();
+    assert!(before.current_sha256.is_some(), "the checklist resolves today");
+    assert!(!before.drifted, "nothing changed yet");
+
+    // Editing the checklist body makes it resolve to a different snapshot.
+    scratch.append(
+        "checklists/ground-walk-survey.md",
+        "\n\nAn extra paragraph the run did not freeze.\n",
+    );
+    let after = run::drift(&repo, SOP, "2026-09-25-drift").unwrap();
+    assert!(after.drifted, "a changed checklist is reported as drifted");
+}
+
+#[test]
+fn a_run_from_a_testplan_case_resolves_its_checklist_for_validation() {
+    // The app starts cases from `testplan/` by path, and the run records the case's
+    // `sop_id`. The validator has to find that id again - in `testplan/`, not only in
+    // `checklists/` - or every test-case run is reported as an error.
+    let scratch = Scratch::new("run-testplan-validate");
+    let repo = scratch.repo();
+    let case = scratch.path("testplan/preflight/power-on.md");
+    fs::create_dir_all(case.parent().unwrap()).unwrap();
+    fs::write(
+        &case,
+        "---\nkind: checklist\nsop_id: uas-mag-preflight-power-on\ntitle: Power On\nversion: 1\nstatus: active\n---\n\n## Supply\n\n- [ ] Recorded\n",
+    )
+    .unwrap();
+
+    let run_id = "2026-09-28-site-01";
+    run::start(&repo, case.to_str().unwrap(), run_id, "leo", "cfar", None).unwrap();
+    run::end(&repo, "uas-mag-preflight-power-on", run_id, "partial").unwrap();
+
+    let (_, report) = scratch.validate();
+    assert!(
+        !report.contains("does not name an existing checklist"),
+        "a testplan case resolves for validation:\n{report}"
     );
 }

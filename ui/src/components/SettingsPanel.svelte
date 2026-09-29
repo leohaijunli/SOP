@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as api from "../lib/api";
+  import SensorsEditor from "./SensorsEditor.svelte";
 
   // All settings are held locally and written back as one JSON document on Confirm.
   let settings: Record<string, string> = $state({});
@@ -118,13 +119,17 @@
   {#each Object.keys(KEY_DESC) as key (key)}
     <div class="field">
       <label for={key}>{key}</label>
-      <input
-        id={key}
-        type="text"
-        value={settings[key] ?? ""}
-        placeholder="(unset)"
-        onchange={(e) => { settings[key] = (e.currentTarget as HTMLInputElement).value; }}
-      />
+      {#if key === "sensors"}
+        <SensorsEditor value={settings[key] ?? ""} onChange={(next) => (settings[key] = next)} />
+      {:else}
+        <input
+          id={key}
+          type="text"
+          value={settings[key] ?? ""}
+          placeholder="(unset)"
+          onchange={(e) => { settings[key] = (e.currentTarget as HTMLInputElement).value; }}
+        />
+      {/if}
       <span class="desc">{KEY_DESC[key]}</span>
     </div>
   {/each}

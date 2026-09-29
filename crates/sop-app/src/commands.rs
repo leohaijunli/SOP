@@ -15,7 +15,7 @@ use tauri::State;
 use crate::api::{
     CaptureInput, ChecklistItemView, ContentCounts, GitInfo, ProjectField, ProjectView,
     RunAttachmentView, RunCaptureView, RunMetaInput, RunStepView, RunView, SensorView, SettingRow,
-    Status, StepInput, StepPatch,
+    Status, StepInput, StepPatch, ValidationCounts,
 };
 use crate::state::AppState;
 
@@ -571,6 +571,8 @@ pub fn run_start(
             .map(|(key, value)| (key.trim().to_owned(), value.trim().to_owned()))
             .filter(|(key, value)| !key.is_empty() && !value.is_empty())
             .collect(),
+        plan: meta.plan.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty()),
+        case: meta.case.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty()),
     };
     let loaded =
         run::start_with_meta(&repo, &sop, &run_id, &operator, &site, r#override.as_deref(), &meta)
@@ -595,6 +597,13 @@ pub fn run_state(sop: String, run_id: String, state: State<'_, AppState>) -> Rep
     let repo = state.repo()?;
     let loaded = run::load(&repo, &sop, &run_id).map_err(text)?;
     Ok(build_run_view(&loaded, &run_id))
+}
+
+/// Whether the checklist this run was started from has changed since the snapshot.
+#[tauri::command]
+pub fn run_drift(sop: String, run_id: String, state: State<'_, AppState>) -> Reply<run::Drift> {
+    let repo = state.repo()?;
+    run::drift(&repo, &sop, &run_id).map_err(text)
 }
 
 #[tauri::command]
@@ -651,6 +660,8 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
                     options: def.options.clone(),
                     expected: def.expected.clone(),
                     value,
+                    acknowledged: step_state
+                        .is_some_and(|state| state.acknowledged.contains(&def.key)),
                 }
             })
             .collect();
@@ -682,6 +693,8 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
         run_id: run_id.to_owned(),
         operator: state.operator.clone(),
         site: state.site.clone(),
+        plan: state.plan.clone(),
+        case: state.case.clone(),
         started: state.started.clone(),
         ended: state.ended.clone(),
         run_status: state.run_status.clone(),
@@ -844,6 +857,7 @@ pub fn load_external_md(path: String, state: State<'_, AppState>) -> Reply<Optio
     let status = doc.front.str("status").flatten().map(str::to_owned);
     let applies_to = doc.front.string_list("applies_to");
     let equipment = doc.front.string_list("equipment");
+    let conditions = doc.front.conditions();
 
     let steps: Vec<serde_json::Value> = doc
         .steps
@@ -870,6 +884,7 @@ pub fn load_external_md(path: String, state: State<'_, AppState>) -> Reply<Optio
         "status": status,
         "applies_to": applies_to,
         "equipment": equipment,
+        "conditions": conditions,
         "path": path.display().to_string(),
         "step_count": steps.len(),
         "unresolved_includes": [],
@@ -964,6 +979,7 @@ fn build_status(state: &AppState) -> Reply<Status> {
     let front = loaded.as_ref().map(|loaded| &loaded.doc.front);
     let state_git = git::state(repo.root(), &settings.remote);
     let found = repo.discover();
+    let validation = validate::validate_repository(&repo).report;
 
     Ok(Status {
         working_copy: repo.root().display().to_string(),
@@ -993,6 +1009,10 @@ fn build_status(state: &AppState) -> Reply<Status> {
             runs: found.runs.len(),
             help: found.help.len(),
             log_directories: found.log_dirs.len(),
+        },
+        validation: ValidationCounts {
+            errors: validation.error_count(),
+            warnings: validation.warning_count(),
         },
     })
 }

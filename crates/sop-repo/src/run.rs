@@ -81,6 +81,9 @@ pub struct RunMeta {
     pub sensor: Option<SensorIdentity>,
     pub hardware: Vec<String>,
     pub conditions: BTreeMap<String, String>,
+    /// The test plan and case this run came from, when started from `testplan/`.
+    pub plan: Option<String>,
+    pub case: Option<String>,
 }
 
 impl RunMeta {
@@ -359,12 +362,13 @@ pub fn start_with_meta(
 ) -> Result<LoadedRun, RunError> {
     let checklist_path = if Path::new(sop_id).is_file() {
         PathBuf::from(sop_id)
+    } else if let Some(path) = repo.checklist_path(sop_id) {
+        // A run can be started from a `checklists/` file or a `testplan/` case; both are
+        // found by their `sop_id` here.
+        path
     } else {
-        repo.resolve(&format!("checklists/{sop_id}.md"))
-    };
-    if !checklist_path.is_file() {
         return Err(RunError::NoChecklist(sop_id.to_owned()));
-    }
+    };
     let loaded = repo.load(&checklist_path).map_err(RunError::Repo)?;
     let resolved = resolve_checklist(repo, &loaded);
     let status = loaded.doc.front.str("status").flatten();
@@ -409,6 +413,8 @@ pub fn start_with_meta(
         snapshot_sha256,
         operator: operator.to_owned(),
         site: site.to_owned(),
+        plan: meta.plan.clone(),
+        case: meta.case.clone(),
         // Only carry a sensor block that has something in it; an all-blank entry is
         // noise in the log and would render an empty `sensor:` block in the record.
         sensor: meta.sensor.clone().filter(|sensor| !sensor.is_empty()),
@@ -578,6 +584,8 @@ fn run_file_front(state: &RunState, run_id: &str) -> String {
     if let Some(value) = &state.sop_commit { out.push_str(&format!("sop_commit: {value}\n")); }
     if let Some(value) = &state.operator { out.push_str(&format!("operator: {value}\n")); }
     if let Some(value) = &state.site { out.push_str(&format!("site: {value}\n")); }
+    if let Some(value) = &state.plan { out.push_str(&format!("plan: {}\n", scalar(value))); }
+    if let Some(value) = &state.case { out.push_str(&format!("case: {}\n", scalar(value))); }
     if let Some(value) = &state.started { out.push_str(&format!("started: {value}\n")); }
     if let Some(value) = &state.ended { out.push_str(&format!("ended: {value}\n")); }
     if let Some(value) = &state.run_status { out.push_str(&format!("status: {value}\n")); }
@@ -698,6 +706,61 @@ fn run_paths(repo: &Repo, sop_id: &str, run_id: &str) -> [PathBuf; 3] {
         run_dir(repo, sop_id, run_id),
         repo.resolve(&format!("logs/{run_id}")),
     ]
+}
+
+/// Whether the checklist a run was started from has changed since.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Drift {
+    pub started_version: Option<String>,
+    pub started_commit: Option<String>,
+    pub snapshot_sha256: Option<String>,
+    /// The hash of the checklist as it resolves today, or `None` when it cannot be found.
+    pub current_sha256: Option<String>,
+    pub current_version: Option<String>,
+    /// True only when the current checklist resolves and differs from the snapshot.
+    pub drifted: bool,
+}
+
+/// Compare a run's frozen snapshot with the checklist as it resolves now.
+///
+/// The comparison is on the resolved body, the same bytes that were hashed at start, so
+/// an edit to any included procedure counts. A checklist that cannot be found - removed,
+/// or loaded from outside the repository - yields `drifted: false` rather than a guess.
+pub fn drift(repo: &Repo, sop_id: &str, run_id: &str) -> Result<Drift, RunError> {
+    let loaded = load(repo, sop_id, run_id)?;
+    let state = &loaded.state;
+    let key = state.sop.clone().unwrap_or_else(|| run_key(repo, sop_id));
+    let current = find_checklist(repo, &key).and_then(|path| repo.load(&path).ok());
+    let (current_sha256, current_version) = match &current {
+        Some(loaded) => {
+            let resolved = resolve_checklist(repo, loaded);
+            let (text, _) = snapshot_of(&resolved.steps);
+            (
+                Some(sha256_hex(text.as_bytes())),
+                loaded.doc.front.str("version").flatten().map(str::to_owned),
+            )
+        }
+        None => (None, None),
+    };
+    Ok(Drift {
+        started_version: state.sop_version.clone(),
+        started_commit: state.sop_commit.clone(),
+        snapshot_sha256: state.snapshot_sha256.clone(),
+        drifted: current_sha256.is_some() && current_sha256 != state.snapshot_sha256,
+        current_sha256,
+        current_version,
+    })
+}
+
+/// The checklist file a run's `sop` names today: a path, `checklists/<id>.md`, or a test
+/// case under `testplan/` whose front matter carries that `sop_id`.
+fn find_checklist(repo: &Repo, key: &str) -> Option<PathBuf> {
+    let as_path = Path::new(key);
+    if as_path.is_file() {
+        return Some(as_path.to_path_buf());
+    }
+    repo.checklist_path(key)
 }
 
 /// The paths that actually exist for a run, in the order they would be removed.

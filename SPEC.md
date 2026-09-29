@@ -233,6 +233,9 @@ equipment:
   - Total-field magnetometer with 1 Hz logging
   - Non-magnetic tripod
   - GNSS receiver
+conditions:
+  weather: clear, overcast, or rain
+  temp_c: air temperature in degrees C
 ---
 
 Prose shown at the top of the checklist. Scope, prerequisites, what "done" means.
@@ -266,6 +269,13 @@ Required front matter: `kind`, `sop_id`, `title`, `version`, `updated`, `status`
 
 `status` is `draft`, `active`, or `retired`. Only `active` checklists should be used
 for real data collection.
+
+`conditions` is optional. It names the values the operator records at the start of a run,
+so the app shows a field for each instead of one free-text box. It may be a list of keys
+(`conditions: [weather, temp_c]`) or a mapping of key to hint, where the hint is shown as
+a placeholder. The names are the keys the run record's own `conditions` mapping uses
+(section 8); a key must not contain a space or a colon, because it becomes a
+`key: value` line.
 
 ### Include markers
 
@@ -327,13 +337,25 @@ status: done
 captures:
   sigma_nt: 0.08
   duration_s: 300
+acknowledged:
+  - sigma_nt
 ```
 
 Operator prose. Anything unusual goes here.
 ````
 
 Required front matter: `kind`, `run_id`, `sop`, `sop_version`, `operator`, `site`,
-`started`, `status`, `deviations_count`.
+`started`, `deviations_count`.
+
+`ended` and `status` are written together by `sop run end`. Both are absent while the run
+is still in progress: the record exists from the moment the run starts, because it is what
+crash recovery replays, so an unfinished record is valid. A record carrying one of the two
+keys without the other was edited by hand and is reported as an error.
+
+Optional front matter: `plan` and `case`. Both are written when a run is started from a
+test case under `testplan/`, and name the plan directory and the case file stem. They are
+absent on a run started from a checklist directly. They are provenance, not inputs: the
+checklist id in `sop` still decides which snapshot the run replays against.
 
 `run_id` must equal the filename stem, and must be unique repo-wide. Recommended
 form: `<YYYY-MM-DD>-<site-slug>-<sop-slug><NN>`.
@@ -366,6 +388,12 @@ recorded, but the operator gave no outcome for it. It is not the same as `done`,
 a judgement that the step met its acceptance criteria, and a `complete` run may not
 contain one: a run whose steps have no outcome is not complete. A step with neither an
 outcome nor any data is left out of the record rather than written as a placeholder.
+
+`acknowledged` is optional. It lists capture keys whose value was outside the range the
+step declared with `expected`, and that the operator accepted anyway. The tool never
+decides whether a value is acceptable; the acknowledgement is the recorded judgement, so
+a flagged value becomes a decision a reviewer can see rather than a warning that scrolled
+past.
 
 `sensor`, `hardware`, and `conditions` are optional front matter that records what the
 checklist cannot know. The field app fills `sensor` from a list of `model`s and their
@@ -555,7 +583,9 @@ Prose about the campaign.
 Required front matter: `kind`, `project_id`, `title`, `updated`.
 
 Optional: `institution`, `lead`, `started`, `summary`, `contact`, and the common
-`applies_to`, `tags`, `schema`.
+`applies_to`, `tags`, `schema`. `sites` is an optional list of place names the campaign
+works at; the app offers them in the start-a-run site field, alongside sites recorded by
+earlier runs.
 
 ### This is content, not a preference
 

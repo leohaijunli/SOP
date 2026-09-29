@@ -408,3 +408,57 @@ Reasons:
 Cost: three more optional keys and one new invariant to remember, and a record can now be
 "valid but unanswered", which a reader has to notice. Accepted, because the alternative is
 silently dropping the measurements an operator did record - the failure this change fixes.
+
+## D20 - A run record on disk is valid while the run is still open
+
+Decision: `status` and `ended` are written together by `sop run end`, and both are absent
+while the run is in progress. `run_front_matter` requires `status` only when `ended` is
+present, and reports a record that carries one of the two without the other. The
+"run record has no step results" warning applies only to a run that has ended.
+
+Reasons:
+
+- The record file is written when the run starts, because it is what crash recovery
+  replays (`SPEC.md` §8). A rule that made the file invalid the moment it was created
+  turned every live run into a repository-wide validation error: the app's header showed
+  `1 ERROR(S)` from the first second of every run, which trains the operator to ignore
+  the badge that exists to be trusted (review Phase 3).
+- Requiring the pair, rather than dropping the rule, keeps the finished-record contract
+  unchanged: a finished run still declares one of `complete` / `partial` / `aborted`, and
+  a hand-edited record with a status but no end time is still reported.
+- Nothing else keys off the absence. `complete_run_coverage` and its neighbours already
+  guard on `status == complete`, so an unfinished record simply has no complete-only
+  rules applied to it.
+
+Cost: the validator now accepts a record that is genuinely unfinished, so "is this run
+still open?" is answered by `ended` and not by the file's existence. The app already reads
+it that way through `run_state` / `started`. The alternative - writing the record only at
+the end - would give up the recovery story that the log exists for.
+
+## D21 - A note is Markdown, and it stays inside its own block in the record
+
+Decision: notes are stored verbatim, may contain newlines, and are rendered with the same
+small renderer as prose. A step note is written as a blockquote with every line prefixed
+(`> note: first`, then `> second`); a run note is a list item whose continuation lines are
+indented. The editor is a multi-line textarea with a live preview, where `Enter` inserts a
+newline and `Ctrl/Cmd+Enter` saves. The renderer accepts headings `#` through `####`.
+
+Reasons:
+
+- A field note is where the interesting information lands: a few readings, a list of what
+  was changed, a link. One line pushed that detail into the prose or out of the record.
+- The record has to stay valid Markdown for a reader who never opens the app (D1), so the
+  renderer cannot be what holds a multi-line note together. The writer prefixes each line,
+  which is why `a_note_between_steps_leaves_exactly_one_blank_line` still holds and a note
+  cannot leak into the step's prose.
+- `Enter` saves was wrong once notes could be multi-line: a note is typed in paragraphs,
+  and the save key moved to `Ctrl/Cmd+Enter`, matching the run screen's own bindings.
+- `#` was left out of the renderer when only the content tree used it (a file's title is
+  front matter, a step is `##`). Notes are authored text, and `#` is the first thing
+  anyone types. It now renders, and `.prose h1` is sized down so a heading inside a note
+  does not outrank the step title above it.
+
+Cost: a note written by hand (not through the app) has to follow the same per-line rule to
+read back as one block, and the renderer exists in two places -
+`ui/src/lib/markdown.ts` and the JS embedded in `crates/sop-cli/assets/preview.html` - so
+a change to one is a change to both. Unifying them is the obvious next cleanup.

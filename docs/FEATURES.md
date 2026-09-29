@@ -21,6 +21,7 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | The app edits one step at a time | A step list plus the selected step's fields, so the screen scales with the checklist | done |
 | An edit is written to the file that defines the step | A step pulled in by an include is edited in its procedure, not in the checklist that includes it | done |
 | Schema compatibility policy | Written down in `SPEC-COMPAT.md`, so format evolution is a decision and not an accident | done |
+| One small Markdown renderer for prose, help, and notes | `h1`-`h4`, tables, lists (with task items), quotes, fenced code, links; the content tree, the notes, and the preview server show the same subset | done |
 
 ## B. Execution on site
 
@@ -34,13 +35,21 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | Interactive checkboxes | Every toggle is an event | done |
 | Capture entry with unit and expected-range highlight | Operator acknowledges out-of-range values | done |
 | Skips and deviations require a reason | Non-negotiable; this is the audit trail | done |
-| Notes per step and per run | Free text, timestamped | done |
+| Notes per step and per run | Markdown, timestamped; the editor previews and the run screen renders them (D21) | done |
 | Attach a log to a step, or a set to the run | Copied into the run's `logs/` under its own name, hashed, and listed in the record | done |
 | Block starting a `draft` checklist | Override is possible and recorded as an event with a reason | done |
 | Fully offline | The app makes no network calls of its own; publishing hands the push to `git` (D17) | done |
 | Checklist items shown as the author wrote them | The run screen ticks the words in the file, not `Item 1` | done |
 | Keyboard-first operation | Field use is often one-handed and gloved; the run screen binds every key `help/app-basics.md` documents (`space`, `s`, `d`, `n`, `j`, `k`, `enter`, `ctrl+enter`) | done |
 | Resume after a crash | Replay the log; the run reopens in its last consistent state | done |
+| Run a whole test plan | **Run plan** walks the plan's cases in `order`, carries the start configuration from one case to the next, records `plan`/`case`, and offers **Next case**; the plans view shows each case's last run and a **Run next** | done |
+| The start form remembers the last run | Operator, site, sensor, and conditions are seeded from the previous run of the checklist; a value the operator typed is never overwritten | done |
+| Typed fields for the conditions a checklist declares | `conditions:` (a key, a list of keys, or key to hint) becomes one field per key; the free-text box stays as the fallback | done |
+| Site picked, not retyped | Candidates come from `project.md` `sites:` and from earlier runs | done |
+| The `sensors` setting has a structured editor | Add and remove models and serials instead of editing `model: serial, serial; model` by hand | done |
+| The start form refuses to start on a mistake | Run-id collision, missing fields, and a `draft` without an override are shown before **Start** | done |
+| Notes are multi-line Markdown | A step note and a run note each have an editor with a live preview; saved notes render under the step (D21) | done |
+| Reopen a mis-tapped outcome | Done/skip/deviate can be corrected with a compensating event; the log stays append-only and the correction is visible | done |
 
 ## C. Records and audit
 
@@ -57,6 +66,11 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | Checkbox items rendered as the operator left them | The record shows `- [x]` and the item's text, not the template's `- [ ]` (D16) | done |
 | A note survives a step left without an outcome | An unfinished step keeps its notes and attachments; only its result block is absent | done |
 | Captures recorded on a step with no outcome reach the record | A `yaml result` block may omit `status`: the step has data but no outcome, and a `complete` run may not contain one (D19) | done |
+| Where a run came from | `plan` and `case` on the record and on `RunStarted`, written when the run was started from a test case | done |
+| An acknowledgement is part of the record | `acknowledged:` lists the captures the operator accepted despite an out-of-range expectation, and `CaptureAcknowledged` is the event behind it | done |
+| A note is Markdown in the record too | A multi-line note keeps its block: every step-note line is prefixed, run-note continuation lines are indented (D21) | done |
+| Drift between the snapshot and the working copy | The run screen asks `run_drift` and says when the checklist changed after the run started | done |
+| A run in progress is a valid record | `status`/`ended` are written together by `sop run end`; an open run is not a validation error (D20) | done |
 
 ## D. Validation
 
@@ -75,6 +89,8 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | Markdown structural lint | Malformed fences, headings inside steps, mixed-list traps | P1 |
 | Validation in CI on every push and PR | Includes 22 negative tests that must fail | done |
 | Validation available offline in the CLI and the app | So content can be checked at the desk, not only in CI | done |
+| A record on disk mid-run validates | Only an ended record is judged on results, and `status` without `ended` is an error rather than silence (D20) | done |
+| A checklist's `conditions:` is well-formed | A bad shape is a warning, because a run still works and an older reader ignores the key | done |
 
 ## E. Sync and operations
 
@@ -88,6 +104,7 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | Large-log guidance and optional Git LFS | Policy in `docs/LOGS.md` | done |
 | Manifest generation for fast app loading | `dist/manifest.json` | done |
 | Packaged `.deb` and AppImage | Installed deliberately per laptop, no silent updates | done |
+| Header shows git and validation state | Dirty/ahead/behind, the validation counts, and a persistent last-saved time, so the risk is visible before **Export** / **Push** | done |
 
 ## F. Knowledge loop
 
@@ -111,6 +128,7 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | Export run data as CSV | For the processing pipelines in `mag_gcs` and `geomag-uav-survey` | done |
 | Export one run's record as a self-contained document | `sop run export --format markdown --run <id>`, and **Export record** in the app (D16) | done |
 | Site and sensor comparison | The primary axis of a multi-site campaign | P5 |
+| Case-level start from the plan table | Each case's last run (outcome, operator, date, steps) and a **Run next** for the first case that is not complete | done |
 
 ## H. In-app help
 
