@@ -113,6 +113,7 @@ pub struct RunEntry {
     pub case: Option<Json>,
     pub started: Option<Json>,
     pub status: Option<Json>,
+    pub conclusion: Option<Json>,
     pub deviations_count: Option<Json>,
     /// The instrument recorded at start, so a new run can be seeded from the last one.
     pub sensor: Option<Json>,
@@ -221,6 +222,7 @@ pub fn build(repo: &Repo) -> Manifest {
             case: front.get("case").map(yaml_to_json),
             started: front.get("started").map(yaml_to_json),
             status: front.get("status").map(yaml_to_json),
+            conclusion: front.get("conclusion").map(yaml_to_json),
             deviations_count: if front.contains("deviations_count") {
                 front.get("deviations_count").map(yaml_to_json)
             } else {

@@ -61,6 +61,7 @@ fn main() {
             commands::run_start,
             commands::run_record,
             commands::run_state,
+            commands::run_add_step,
             commands::run_drift,
             commands::run_end,
             commands::run_attach,

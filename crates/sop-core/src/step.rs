@@ -408,6 +408,8 @@ pub fn parse_result(info: &str, content: &str, line: usize) -> Result<ResultBloc
         step: as_string(&map, "step"),
         status: as_string(&map, "status"),
         reason: as_string(&map, "reason"),
+        opened_at: as_string(&map, "opened_at"),
+        ended_at: as_string(&map, "ended_at"),
         captures,
         unknown_keys: unknown_keys(&map, crate::vocab::RESULT_KEYS),
     })
@@ -419,6 +421,10 @@ pub struct ResultBlock {
     pub step: Option<String>,
     pub status: Option<String>,
     pub reason: Option<String>,
+    /// When the step was opened and closed, from the run's event log, so the validator
+    /// can check a step's time window (and the data attached to it) without replaying it.
+    pub opened_at: Option<String>,
+    pub ended_at: Option<String>,
     /// The `captures` mapping of a result block, kept for roll-up and export.
     pub captures: Mapping,
     pub unknown_keys: Vec<String>,

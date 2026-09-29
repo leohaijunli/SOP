@@ -1,0 +1,7 @@
+{"type":"RunStarted","at":"2026-09-29T13:08:06Z","sop":"uas-mag-preflight-mount","sop_version":"1","sop_commit":"b74cea4","snapshot_sha256":"a169c21511bf40da1d7ac58cf607294cb152a0142af2fd01e1ee97c10de64d9e","operator":"leo","site":"cfar","plan":"uas-mag-preflight","case":"mount","sensor":{"model":"UAS-MAG"},"hardware":["Bartington UAS-MAG fluxgate","UAV with payload mount","Non-magnetic fasteners"]}
+{"type":"StepOpened","at":"2026-09-29T13:08:06Z","step":"mounting"}
+{"type":"StepStatusChanged","at":"2026-09-29T13:08:07Z","step":"mounting","status":"done","reason":null}
+{"type":"StepOpened","at":"2026-09-29T13:08:07Z","step":"orientation"}
+{"type":"StepStatusChanged","at":"2026-09-29T13:08:08Z","step":"orientation","status":"done","reason":null}
+{"type":"StepStatusChanged","at":"2026-09-29T13:08:09Z","step":"orientation","status":"done","reason":null}
+{"type":"RunEnded","at":"2026-09-29T13:08:13Z","status":"complete"}

@@ -83,6 +83,7 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | A note is Markdown in the record too | A multi-line note keeps its block: every step-note line is prefixed, run-note continuation lines are indented (D21) | done |
 | Drift between the snapshot and the working copy | The run screen asks `run_drift` and says when the checklist changed after the run started | done |
 | A run in progress is a valid record | `status`/`ended` are written together by `sop run end`; an open run is not a validation error (D20) | done |
+| A run carries its own verdict | Ending a run records `conclusion` (`pass` / `fail` / `inconclusive`) and `conclusion_note` - the operator's judgement, separate from `status` and never computed from it - as a `RunConcluded` event (D28) | done |
 
 ## D. Validation
 
@@ -133,7 +134,8 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | Feature | Notes | Priority |
 |---|---|---|
 | Stable step ids comparable across runs | The reason ids are authored rather than execution-assigned | done |
-| Run history by test plan and case | Grouped under the plan and case each run was started from; filter by site, operator, outcome; cases with no runs are shown | done |
+| Run history by test plan and case | Grouped under the plan and case each run was started from; filter by site, operator, sensor, status, conclusion, and "has deviations" | done |
+| Case × sensor coverage matrix | Test Plans shows one "latest run" per case × sensor serial, with the latest conclusion in each cell (3.2) | done |
 | Summary across every test | One markdown document: a coverage row for every case (run or not, with outcome counts) and one row per run with the attached file names | done |
 | Remove a run, or the whole history | **Delete** on a row and **Delete all runs** in the toolbar; the inbox is never touched | done |
 | Capture trend across runs | e.g. noise floor over successive calibrations | P4 |

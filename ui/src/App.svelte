@@ -56,6 +56,7 @@
     if (!planRun) return null;
     const c = planRun.cases[planRun.index];
     if (!c) return null;
+    const hasNext = planRun.index < planRun.cases.length - 1;
     return {
       planId: planRun.planId,
       planTitle: planRun.planTitle,
@@ -63,7 +64,11 @@
       caseTitle: c.title,
       index: planRun.index,
       total: planRun.cases.length,
-      hasNext: planRun.index < planRun.cases.length - 1,
+      hasNext,
+      // The name of the case the run will advance to, not the one now ending, so the
+      // ended-run banner reads "Next case: <the next name>" instead of repeating the
+      // case the operator just finished.
+      nextCaseTitle: hasNext ? planRun.cases[planRun.index + 1].title : null,
     };
   });
 

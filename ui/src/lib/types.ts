@@ -163,6 +163,7 @@ export interface RunEntry {
   case: unknown;
   started: unknown;
   status: unknown;
+  conclusion: unknown;
   deviations_count: unknown;
   sensor: { model?: unknown; serial?: unknown; firmware?: unknown } | null;
   conditions: Record<string, unknown> | null;
@@ -237,6 +238,8 @@ export interface RunView {
   started: string | null;
   ended: string | null;
   runStatus: string | null;
+  conclusion: string | null;
+  conclusionNote: string | null;
   snapshotSha256: string | null;
   sopVersion: string | null;
   sopCommit: string | null;
@@ -245,9 +248,17 @@ export interface RunView {
   hardware: string[];
   conditions: Record<string, string>;
   steps: RunStepView[];
+  addedSteps: RunAddedStepView[];
   runNotes: string[];
   runAttachments: RunAttachmentView[];
   recordPath: string;
+}
+
+/// A step added to a run after it started; not part of the checklist template.
+export interface RunAddedStepView {
+  id: string;
+  title: string;
+  after: string | null;
 }
 
 export interface SensorView {
@@ -302,6 +313,9 @@ export interface RunAttachmentView {
   path: string;
   sha256: string;
   size: number;
+  tMin: string | null;
+  tMax: string | null;
+  rowCount: number | null;
 }
 
 // A run event as the Rust shell deserializes it: variant tag is PascalCase, fields
@@ -322,7 +336,8 @@ export type RunEventInput =
       size: number;
     }
   | { type: "StepStatusChanged"; at: string; step: string; status: string; reason: string | null }
-  | { type: "RunEnded"; at: string; status: string };
+  | { type: "RunEnded"; at: string; status: string }
+  | { type: "RunConcluded"; at: string; conclusion: string; summary: string };
 
 /// Whether the checklist a run was started from has changed since its snapshot.
 export interface Drift {

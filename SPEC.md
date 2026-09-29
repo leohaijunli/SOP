@@ -35,6 +35,10 @@ skipped step invalidates the run.
 
 `status` (on a run) is one of `complete`, `partial`, `aborted`.
 
+`conclusion` (on a run) is one of `pass`, `fail`, `inconclusive`. It is the operator's own
+verdict on the run, distinct from `status`: `complete` means the run was executed,
+`conclusion` is the human judgement, and the tool never derives one from the other.
+
 `status` (on a step result) is one of `done`, `skipped`, `deviated`.
 
 `audience` (on a help page) is one of `operator`, `author`, `maintainer`.
@@ -313,6 +317,8 @@ site: Renfrew 395
 started: 2026-09-24T16:10:00Z
 ended: 2026-09-24T20:05:00Z
 status: complete
+conclusion: pass
+conclusion_note: all readings inside the expected range at this site
 sensor:
   model: GEM GSM-19
   serial: "4451233"
@@ -351,6 +357,23 @@ Required front matter: `kind`, `run_id`, `sop`, `sop_version`, `operator`, `site
 is still in progress: the record exists from the moment the run starts, because it is what
 crash recovery replays, so an unfinished record is valid. A record carrying one of the two
 keys without the other was edited by hand and is reported as an error.
+
+`conclusion` and `conclusion_note` are optional and are written with `ended` and `status`.
+`conclusion` is the operator's own verdict on the run - `pass`, `fail`, or `inconclusive` -
+and `conclusion_note` is the one sentence saying why. They are distinct from `status`
+(section 2): `complete` means the run was executed, `conclusion` is the human judgement,
+and the tool never derives one from the other (D4). Both are written together, so a record
+carrying one without the other was edited by hand and is reported as an error.
+
+`conclusion` and `conclusion_note` are optional front matter recorded by the operator when
+the run ends, in the same `sop run end` call that writes `ended` and `status`. `status`
+(`complete` / `partial` / `aborted`) means the run was executed; `conclusion` is the human
+judgement of the result - one of `pass`, `fail`, or `inconclusive` - and the tool never
+derives one from the other. `conclusion_note` is the one sentence that says why. The two
+are written together (a conclusion without a note is not recorded), and both are absent on
+a run the operator ends without giving a verdict. They are additive, so a reader that
+predates them warns about an unknown front-matter key and leaves the record readable
+(`SPEC-COMPAT.md`).
 
 Optional front matter: `plan` and `case`. Both are written when a run is started from a
 test case under `testplan/`, and name the plan directory and the case file stem. They are

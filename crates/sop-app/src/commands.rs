@@ -21,8 +21,8 @@ use tauri::State;
 
 use crate::api::{
     CaptureInput, ChecklistItemView, ContentCounts, GitInfo, ProjectField, ProjectView,
-    RunAttachmentView, RunCaptureView, RunMetaInput, RunStepView, RunView, SensorView, SettingRow,
-    Status, StepInput, StepPatch, ValidationCounts,
+    RunAddedStepView, RunAttachmentView, RunCaptureView, RunMetaInput, RunStepView, RunView,
+    SensorView, SettingRow, Status, StepInput, StepPatch, ValidationCounts,
 };
 use crate::state::AppState;
 
@@ -613,6 +613,46 @@ pub fn run_state(sop: String, run_id: String, state: State<'_, AppState>) -> Rep
     Ok(build_run_view(&loaded, &run_id))
 }
 
+/// Add a step to a run after it started, so the record can carry a measurement the
+/// checklist did not foresee. The id is generated here (`adhoc-NNN`), never by the
+/// operator (`DESIGN.md` 6.6); the snapshot stays frozen, and the step lives in the event
+/// log, to be merged back into the runtime step list at replay.
+#[tauri::command(async)]
+pub fn run_add_step(
+    sop: String,
+    run_id: String,
+    title: String,
+    after: Option<String>,
+    state: State<'_, AppState>,
+) -> Reply<RunView> {
+    let repo = state.repo()?;
+    let loaded = run::load(&repo, &sop, &run_id).map_err(text)?;
+    let title = title.trim().to_owned();
+    if title.is_empty() {
+        return Err("a step title is required".to_owned());
+    }
+    let event = RunEvent::StepAdded {
+        at: String::new(), // stamped by the tool
+        id: next_adhoc_id(&loaded.state),
+        title,
+        after: after.filter(|id| !id.trim().is_empty()).map(|id| id.trim().to_owned()),
+    };
+    let loaded = run::record(&repo, &sop, &run_id, &event).map_err(text)?;
+    Ok(build_run_view(&loaded, &run_id))
+}
+
+/// The next `adhoc-NNN` id: one past the largest id already added to this run.
+fn next_adhoc_id(state: &sop_core::RunState) -> String {
+    let max = state
+        .added_steps
+        .iter()
+        .filter_map(|step| step.id.strip_prefix("adhoc-"))
+        .filter_map(|number| number.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0);
+    format!("adhoc-{max:03}")
+}
+
 /// Whether the checklist this run was started from has changed since the snapshot.
 #[tauri::command(async)]
 pub fn run_drift(sop: String, run_id: String, state: State<'_, AppState>) -> Reply<run::Drift> {
@@ -621,9 +661,22 @@ pub fn run_drift(sop: String, run_id: String, state: State<'_, AppState>) -> Rep
 }
 
 #[tauri::command(async)]
-pub fn run_end(sop: String, run_id: String, status: String, state: State<'_, AppState>) -> Reply<RunView> {
-    let repo = state.repo()?;
-    let loaded = run::end(&repo, &sop, &run_id, &status).map_err(text)?;
+pub fn run_end(
+    sop: String,
+    run_id: String,
+    status: String,
+    conclusion: Option<String>,
+    conclusion_note: Option<String>,
+    state: State<'_, AppState>,
+) -> Reply<RunView> {
+let repo = state.repo()?;
+    let conclusion = match (conclusion, conclusion_note) {
+        (None, None) => None,
+        (Some(outcome), Some(note)) => Some((outcome, note)),
+        (Some(_), None) => return Err("conclusion requires a conclusion_note".to_owned()),
+        (None, Some(_)) => return Err("conclusion_note requires a conclusion".to_owned()),
+    };
+    let loaded = run::end(&repo, &sop, &run_id, &status, conclusion).map_err(text)?;
     Ok(build_run_view(&loaded, &run_id))
 }
 
@@ -712,6 +765,8 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
         started: state.started.clone(),
         ended: state.ended.clone(),
         run_status: state.run_status.clone(),
+        conclusion: state.conclusion.clone(),
+        conclusion_note: state.conclusion_note.clone(),
         snapshot_sha256: state.snapshot_sha256.clone(),
         sop_version: state.sop_version.clone(),
         sop_commit: state.sop_commit.clone(),
@@ -724,6 +779,15 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
         hardware: state.hardware.clone(),
         conditions: state.conditions.clone(),
         steps,
+        added_steps: state
+            .added_steps
+            .iter()
+            .map(|added| RunAddedStepView {
+                id: added.id.clone(),
+                title: added.title.clone(),
+                after: added.after.clone(),
+            })
+            .collect(),
         run_notes: state.run_notes.clone(),
         run_attachments: state
             .run_attachments
@@ -739,6 +803,9 @@ fn attachment_view(attachment: &sop_core::run::Attachment) -> RunAttachmentView 
         path: attachment.path.clone(),
         sha256: attachment.sha256.clone(),
         size: attachment.size,
+        t_min: attachment.t_min.clone(),
+        t_max: attachment.t_max.clone(),
+        row_count: attachment.row_count,
     }
 }
 

@@ -42,6 +42,8 @@ were not walked; the base station was left logging until pack-down.
 ```yaml result
 step: cond-location
 status: done
+opened_at: 2026-09-24T15:58:00Z
+ended_at: 2026-09-24T16:01:00Z
 captures:
   session_location: Renfrew 395, north field
   nearby_sources: Distribution line along the east boundary, approx 180 m
@@ -52,6 +54,8 @@ captures:
 ```yaml result
 step: cond-environment
 status: done
+opened_at: 2026-09-24T15:59:00Z
+ended_at: 2026-09-24T16:02:00Z
 captures:
   ambient_c: 12
   wind_mps: 3
@@ -63,6 +67,8 @@ captures:
 ```yaml result
 step: cond-reference-instrument
 status: done
+opened_at: 2026-09-24T16:00:00Z
+ended_at: 2026-09-24T16:03:00Z
 captures:
   reference_instrument: none
   reference_last_calibrated: n/a
@@ -73,6 +79,8 @@ captures:
 ```yaml result
 step: walk-briefing
 status: done
+opened_at: 2026-09-24T16:01:00Z
+ended_at: 2026-09-24T16:04:00Z
 captures:
   team_size: 3
   roles: leo operator and record; second walker on GNSS; third on base station
@@ -83,6 +91,8 @@ captures:
 ```yaml result
 step: walk-line-plan
 status: done
+opened_at: 2026-09-24T16:02:00Z
+ended_at: 2026-09-24T16:05:00Z
 captures:
   lines_planned: 9
   lines_completed: 3
@@ -94,6 +104,8 @@ captures:
 ```yaml result
 step: poweron-supply
 status: done
+opened_at: 2026-09-24T16:03:00Z
+ended_at: 2026-09-24T16:06:00Z
 captures:
   battery_v: 12.4
   supply_source: internal-battery
@@ -104,6 +116,8 @@ captures:
 ```yaml result
 step: poweron-boot
 status: done
+opened_at: 2026-09-24T16:04:00Z
+ended_at: 2026-09-24T16:07:00Z
 captures:
   firmware_version: "7.0"
 ```
@@ -113,6 +127,8 @@ captures:
 ```yaml result
 step: poweron-self-test
 status: done
+opened_at: 2026-09-24T16:05:00Z
+ended_at: 2026-09-24T16:08:00Z
 captures:
   self_test_result: ok
 ```
@@ -122,6 +138,8 @@ captures:
 ```yaml result
 step: poweron-clock
 status: done
+opened_at: 2026-09-24T16:06:00Z
+ended_at: 2026-09-24T16:09:00Z
 captures:
   clock_offset_s: 0.0
 ```
@@ -131,6 +149,8 @@ captures:
 ```yaml result
 step: hygiene-person
 status: done
+opened_at: 2026-09-24T16:07:00Z
+ended_at: 2026-09-24T16:10:00Z
 ```
 
 ## hygiene-equipment
@@ -138,6 +158,8 @@ status: done
 ```yaml result
 step: hygiene-equipment
 status: done
+opened_at: 2026-09-24T16:08:00Z
+ended_at: 2026-09-24T16:11:00Z
 ```
 
 ## hygiene-separation
@@ -145,6 +167,8 @@ status: done
 ```yaml result
 step: hygiene-separation
 status: done
+opened_at: 2026-09-24T16:09:00Z
+ended_at: 2026-09-24T16:12:00Z
 captures:
   nearest_vehicle_m: 120
   nearest_structure_m: 180
@@ -155,6 +179,8 @@ captures:
 ```yaml result
 step: hygiene-record
 status: done
+opened_at: 2026-09-24T16:10:00Z
+ended_at: 2026-09-24T16:13:00Z
 ```
 
 Vehicle remained parked at the gate, 120 m from the nearest line. No movement during
@@ -165,6 +191,8 @@ the survey.
 ```yaml result
 step: recon-access
 status: done
+opened_at: 2026-09-24T16:11:00Z
+ended_at: 2026-09-24T16:14:00Z
 captures:
   landowner_contact: Site contact, mobile, on file
   access_notes: Gate at the north end, unlocked
@@ -175,6 +203,8 @@ captures:
 ```yaml result
 step: recon-hazards
 status: done
+opened_at: 2026-09-24T16:12:00Z
+ended_at: 2026-09-24T16:15:00Z
 captures:
   hazards: Distribution line along the east boundary; two fence lines; wet ground at the south end
 ```
@@ -184,6 +214,8 @@ captures:
 ```yaml result
 step: recon-cleanliness
 status: done
+opened_at: 2026-09-24T16:13:00Z
+ended_at: 2026-09-24T16:16:00Z
 captures:
   worst_gradient_nt: 38
   worst_gradient_location: Line 6, midpoint, near the buried field drain
@@ -194,6 +226,8 @@ captures:
 ```yaml result
 step: recon-grid
 status: done
+opened_at: 2026-09-24T16:14:00Z
+ended_at: 2026-09-24T16:17:00Z
 captures:
   line_spacing_m: 20
   station_spacing_m: 0.5
@@ -206,6 +240,8 @@ captures:
 ```yaml result
 step: recon-reference
 status: done
+opened_at: 2026-09-24T16:15:00Z
+ended_at: 2026-09-24T16:18:00Z
 captures:
   reference_station_id: REF-395-A
 ```
@@ -215,6 +251,8 @@ captures:
 ```yaml result
 step: base-site
 status: done
+opened_at: 2026-09-24T16:16:00Z
+ended_at: 2026-09-24T16:19:00Z
 captures:
   base_distance_to_road_m: 300
   base_lat_deg: 48.5694
@@ -226,6 +264,8 @@ captures:
 ```yaml result
 step: base-install
 status: done
+opened_at: 2026-09-24T16:17:00Z
+ended_at: 2026-09-24T16:20:00Z
 captures:
   sensor_height_m: 1.0
 ```
@@ -235,6 +275,8 @@ captures:
 ```yaml result
 step: base-logging
 status: done
+opened_at: 2026-09-24T16:18:00Z
+ended_at: 2026-09-24T16:21:00Z
 captures:
   base_sample_rate_hz: 1
   base_start_time: 2026-09-24T15:45:00Z
@@ -247,6 +289,8 @@ Started 15 minutes before the first line.
 ```yaml result
 step: base-verify
 status: done
+opened_at: 2026-09-24T16:19:00Z
+ended_at: 2026-09-24T16:22:00Z
 captures:
   first_min_sigma_nt: 0.06
 ```
@@ -256,6 +300,8 @@ captures:
 ```yaml result
 step: gnss-datum
 status: done
+opened_at: 2026-09-24T16:20:00Z
+ended_at: 2026-09-24T16:23:00Z
 captures:
   datum: WGS84
   height_reference: ellipsoidal
@@ -266,6 +312,8 @@ captures:
 ```yaml result
 step: gnss-fix
 status: done
+opened_at: 2026-09-24T16:21:00Z
+ended_at: 2026-09-24T16:24:00Z
 captures:
   fix_type: rtk-fixed
   satellites: 18
@@ -277,6 +325,8 @@ captures:
 ```yaml result
 step: gnss-height
 status: done
+opened_at: 2026-09-24T16:22:00Z
+ended_at: 2026-09-24T16:25:00Z
 captures:
   antenna_height_m: 2.05
 ```
@@ -286,6 +336,8 @@ captures:
 ```yaml result
 step: warmup-thermal
 status: done
+opened_at: 2026-09-24T16:23:00Z
+ended_at: 2026-09-24T16:26:00Z
 captures:
   warmup_min: 22
   ambient_c: 12
@@ -296,6 +348,8 @@ captures:
 ```yaml result
 step: warmup-stability
 status: done
+opened_at: 2026-09-24T16:24:00Z
+ended_at: 2026-09-24T16:27:00Z
 captures:
   drift_nt_per_min: 0.05
   stability_min: 8
@@ -306,6 +360,8 @@ captures:
 ```yaml result
 step: log-config
 status: done
+opened_at: 2026-09-24T16:25:00Z
+ended_at: 2026-09-24T16:28:00Z
 captures:
   log_path: logs/2026-09-24-renfrew-walk01/mag_raw.csv
   sample_rate_hz: 1
@@ -318,6 +374,8 @@ captures:
 ```yaml result
 step: log-write-test
 status: done
+opened_at: 2026-09-24T16:26:00Z
+ended_at: 2026-09-24T16:29:00Z
 captures:
   test_file_bytes: 2048
 ```
@@ -327,6 +385,8 @@ captures:
 ```yaml result
 step: log-disk-space
 status: done
+opened_at: 2026-09-24T16:27:00Z
+ended_at: 2026-09-24T16:30:00Z
 captures:
   free_disk_gb: 26.5
 ```
@@ -336,6 +396,8 @@ captures:
 ```yaml result
 step: testline-select
 status: done
+opened_at: 2026-09-24T16:28:00Z
+ended_at: 2026-09-24T16:31:00Z
 captures:
   test_line_id: L1
 ```
@@ -345,6 +407,8 @@ captures:
 ```yaml result
 step: testline-before
 status: done
+opened_at: 2026-09-24T16:29:00Z
+ended_at: 2026-09-24T16:32:00Z
 captures:
   before_mean_nt: 52641.3
   before_sigma_nt: 4.8
@@ -355,6 +419,8 @@ captures:
 ```yaml result
 step: testline-after
 status: skipped
+opened_at: 2026-09-24T16:30:00Z
+ended_at: 2026-09-24T16:33:00Z
 reason: Session ended early; repeat pass not walked
 ```
 
@@ -366,6 +432,8 @@ the main limitation of this dataset.
 ```yaml result
 step: testline-note
 status: done
+opened_at: 2026-09-24T16:31:00Z
+ended_at: 2026-09-24T16:34:00Z
 ```
 
 Single clear anomaly near station 40, amplitude roughly 12 nT above background, about
@@ -376,6 +444,8 @@ Single clear anomaly near station 40, amplitude roughly 12 nT above background, 
 ```yaml result
 step: walk-pace
 status: done
+opened_at: 2026-09-24T16:32:00Z
+ended_at: 2026-09-24T16:35:00Z
 captures:
   target_pace_mps: 0.5
   observed_pace_mps: 0.55
@@ -386,6 +456,8 @@ captures:
 ```yaml result
 step: walk-height
 status: done
+opened_at: 2026-09-24T16:33:00Z
+ended_at: 2026-09-24T16:36:00Z
 captures:
   sensor_height_m: 1.0
 ```
@@ -397,6 +469,8 @@ Sensor carried on a fixed-length staff at 1.0 m, matching the base station heigh
 ```yaml result
 step: walk-direction
 status: done
+opened_at: 2026-09-24T16:34:00Z
+ended_at: 2026-09-24T16:37:00Z
 captures:
   line_azimuth_deg: 0
 ```
@@ -406,6 +480,8 @@ captures:
 ```yaml result
 step: walk-offline
 status: done
+opened_at: 2026-09-24T16:35:00Z
+ended_at: 2026-09-24T16:38:00Z
 ```
 
 ## walk-log
@@ -413,6 +489,8 @@ status: done
 ```yaml result
 step: walk-log
 status: done
+opened_at: 2026-09-24T16:36:00Z
+ended_at: 2026-09-24T16:39:00Z
 captures:
   line_id: L1, L2, L3
   start_station: 0
@@ -426,6 +504,8 @@ L1 to L3 complete. L4 not started.
 ```yaml result
 step: midcheck-reference
 status: done
+opened_at: 2026-09-24T16:37:00Z
+ended_at: 2026-09-24T16:40:00Z
 captures:
   reference_station_id: REF-395-A
   reference_value_nt: 52694.1
@@ -440,6 +520,8 @@ variation over the same interval.
 ```yaml result
 step: midcheck-base
 status: done
+opened_at: 2026-09-24T16:38:00Z
+ended_at: 2026-09-24T16:41:00Z
 captures:
   base_gap_count: 0
   base_still_running: true
@@ -450,6 +532,8 @@ captures:
 ```yaml result
 step: midcheck-power
 status: done
+opened_at: 2026-09-24T16:39:00Z
+ended_at: 2026-09-24T16:42:00Z
 captures:
   battery_v: 11.7
   free_disk_gb: 26.4
@@ -462,6 +546,8 @@ Projected to roughly 10 hours of remaining runtime, above the session requiremen
 ```yaml result
 step: midcheck-gnss
 status: done
+opened_at: 2026-09-24T16:40:00Z
+ended_at: 2026-09-24T16:43:00Z
 captures:
   fix_type: rtk-fixed
 ```
@@ -471,6 +557,8 @@ captures:
 ```yaml result
 step: packdown-stop
 status: done
+opened_at: 2026-09-24T16:41:00Z
+ended_at: 2026-09-24T16:44:00Z
 ```
 
 ## packdown-backup
@@ -478,6 +566,8 @@ status: done
 ```yaml result
 step: packdown-backup
 status: done
+opened_at: 2026-09-24T16:42:00Z
+ended_at: 2026-09-24T16:45:00Z
 captures:
   backup_primary: workstation /data/field-sop/2026-09-24-renfrew-walk01
   backup_secondary: USB drive FIELDDATA-01
@@ -488,6 +578,8 @@ captures:
 ```yaml result
 step: packdown-attach
 status: done
+opened_at: 2026-09-24T16:43:00Z
+ended_at: 2026-09-24T16:46:00Z
 captures:
   logs_attached: 2
   hash_mismatch: false
@@ -498,6 +590,8 @@ captures:
 ```yaml result
 step: packdown-closeout
 status: done
+opened_at: 2026-09-24T16:44:00Z
+ended_at: 2026-09-24T16:47:00Z
 captures:
   run_status: partial
 ```
@@ -507,6 +601,8 @@ captures:
 ```yaml result
 step: walk-session-closeout
 status: done
+opened_at: 2026-09-24T16:45:00Z
+ended_at: 2026-09-24T16:48:00Z
 ```
 
 Three of nine lines completed. L4 to L9 not walked. The test line was not repeated, so

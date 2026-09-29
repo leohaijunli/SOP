@@ -239,11 +239,119 @@ fn seed_steps_from_snapshot(
     Ok((shapes, defs))
 }
 
+/// Fold steps added mid-run into the runtime step list, each after the step it named.
+///
+/// The snapshot is frozen at start, so an added step has no definition there; this makes
+/// one up (its title, no captures or prose) so the execution view shows it and the record
+/// can cite it. Inserting after the anchor step keeps the on-screen order matching the
+/// order the operator added them, and an `after` of `None` (or a missing anchor) appends.
+fn merge_added_steps(defs: &mut Vec<ResolvedStepDef>, added: &[sop_core::run::AddedStep]) {
+    for step in added {
+        let anchor = step
+            .after
+            .as_deref()
+            .and_then(|target| defs.iter().position(|existing| existing.id == target));
+        let at = anchor.map_or(defs.len(), |index| index + 1);
+        defs.insert(
+            at,
+            ResolvedStepDef {
+                id: step.id.clone(),
+                title: step.title.clone(),
+                prose: String::new(),
+                severity: None,
+                kind: None,
+                captures: Vec::new(),
+            },
+        );
+    }
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     let digest = hasher.finalize();
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// A time cell in a data file, normalised to a whole number of UTC seconds since the epoch.
+///
+/// Accepts a plain integer (epoch seconds) or an ISO-8601 timestamp with an optional
+/// fractional second and an optional `Z` / `±HH:MM` offset. The tool's own timestamps are
+/// `YYYY-MM-DDTHH:MM:SSZ`; anything else is reduced to that shape first so the same parser
+/// places instrument data and notebook events on the same line.
+fn parse_time_cell(cell: &str) -> Option<i64> {
+    let cell = cell.trim();
+    if cell.is_empty() {
+        return None;
+    }
+    if let Ok(epoch) = cell.parse::<i64>() {
+        return Some(epoch);
+    }
+    let mut s = cell.to_ascii_uppercase().replace(' ', "T");
+    // Drop a fractional second: `16:03:00.250Z` -> `16:03:00Z`.
+    if let Some(dot) = s.find('.') {
+        let len = s.len();
+        let end = s[dot + 1..].find(|c| c == 'Z' || c == '+' || c == '-').map_or(len, |n| dot + 1 + n);
+        s.replace_range(dot..end, "");
+    }
+    // Convert a trailing offset to a signed number of seconds.
+    let offset_secs = s
+        .find(|c| c == '+' || c == '-')
+        .filter(|pos| *pos > 10)
+        .and_then(|pos| {
+            let (core, off) = s.split_at(pos);
+            let sign = if off.starts_with('+') { 1i64 } else { -1i64 };
+            let body = &off[1..];
+            let h: i64 = body.get(..2)?.parse().ok()?;
+            let m: i64 = body.get(3..5)?.parse().ok()?;
+            s = core.to_owned();
+            Some(sign * (h * 3600 + m * 60))
+        })
+        .unwrap_or(0);
+    if s.ends_with('Z') {
+        s.pop();
+    }
+    if !s.ends_with('Z') {
+        s.push('Z');
+    }
+    let base = sop_core::timestamp::epoch_seconds(&s)?;
+    Some(base - offset_secs)
+}
+
+/// The first and last timestamp in a CSV, and how many rows carry one, when a column
+/// looks like a time column (`timestamp*` / `time*` / `utc*` / `gps_time*`) and every
+/// value in it parses. `None` when the file does not carry such a column, or any value
+/// in it fails - the tool does not guess, it just skips the time information.
+fn csv_time_range(bytes: &[u8]) -> Option<(String, String, u64)> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let mut lines = text.lines();
+    let header = lines.next()?.trim();
+    let columns: Vec<&str> = header.split(',').map(str::trim).collect();
+    let index = columns
+        .iter()
+        .position(|name| {
+            let lower = name.to_ascii_lowercase();
+            lower.starts_with("timestamp")
+                || lower.starts_with("time")
+                || lower.starts_with("utc")
+                || lower.starts_with("gps_time")
+        })?;
+    let mut first: Option<i64> = None;
+    let mut last: Option<i64> = None;
+    let mut rows = 0u64;
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let cell = trimmed.split(',').nth(index)?.trim();
+        let epoch = parse_time_cell(cell)?;
+        first = Some(first.map_or(epoch, |seen| seen.min(epoch)));
+        last = Some(epoch);
+        rows += 1;
+    }
+    let (f, l) = (first?, last?);
+    Some((sop_core::timestamp::rfc3339_from_epoch(f), sop_core::timestamp::rfc3339_from_epoch(l), rows))
 }
 
 fn now() -> String {
@@ -323,7 +431,7 @@ pub fn load(repo: &Repo, sop_id: &str, run_id: &str) -> Result<LoadedRun, RunErr
     let snapshot_text = repo
         .read_text(&snapshot_path)
         .map_err(RunError::Repo)?;
-    let (seed, defs) = seed_steps_from_snapshot(&snapshot_text)?;
+    let (seed, mut defs) = seed_steps_from_snapshot(&snapshot_text)?;
 
     let mut state = RunState::default();
     for step in &seed {
@@ -353,6 +461,10 @@ pub fn load(repo: &Repo, sop_id: &str, run_id: &str) -> Result<LoadedRun, RunErr
     for event in &events {
         sop_core::run::apply(&mut state, event).map_err(RunError::Core)?;
     }
+
+    // Steps added mid-run are not in the snapshot; fold them into the runtime step list so
+    // the execution view shows them and the record's coverage can accept them.
+    merge_added_steps(&mut defs, &state.added_steps);
 
     Ok(LoadedRun {
         state,
@@ -495,11 +607,30 @@ pub fn start_with_meta(
 /// The event is appended to `events.jsonl` (see [`append_event`]); the rendered
 /// `record.md` is a convenience, rebuilt from the log afterwards and never the truth.
 pub fn record(repo: &Repo, sop_id: &str, run_id: &str, event: &RunEvent) -> Result<LoadedRun, RunError> {
+    record_events(repo, sop_id, run_id, std::slice::from_ref(event))
+}
+
+/// Append one or more events as a batch: validate them all against the current state,
+/// append them all to the log, then regenerate the record once.
+fn record_events(
+    repo: &Repo,
+    sop_id: &str,
+    run_id: &str,
+    events: &[RunEvent],
+) -> Result<LoadedRun, RunError> {
     let loaded = load(repo, sop_id, run_id)?;
     let mut next = loaded.state.clone();
-    sop_core::run::apply(&mut next, event).map_err(RunError::Core)?;
+    // The tool's clock is the authority: the renderer sends no timestamp, and any it
+    // might send is overwritten here so the run's time line is one consistent clock.
+    let mut stamped: Vec<RunEvent> = events.to_vec();
+    for event in &mut stamped {
+        event.stamp(now());
+        sop_core::run::apply(&mut next, event).map_err(RunError::Core)?;
+    }
 
-    append_event(&loaded.events_path, event)?;
+    for event in &stamped {
+        append_event(&loaded.events_path, event)?;
+    }
 
     let reloaded = load(repo, sop_id, run_id)?;
     write_record(&reloaded)?;
@@ -558,11 +689,21 @@ pub fn attach(
         })?;
     }
 
+    // The data's own time span, when the file carries a parseable time column. Best-effort:
+    // a file with no such column, or one value that does not parse, simply omits the fields.
+    let (t_min, t_max, row_count) = match csv_time_range(&bytes) {
+        Some((min, max, rows)) => (Some(min), Some(max), Some(rows)),
+        None => (None, None, None),
+    };
+
     let attachment = sop_core::run::Attachment {
         // Repository-relative, so the record reads and resolves the same in any clone.
         path: repo.relpath(&dest),
         sha256: digest,
         size: bytes.len() as u64,
+        t_min,
+        t_max,
+        row_count,
     };
     let event = RunEvent::AttachmentAdded {
         at: now(),
@@ -570,6 +711,9 @@ pub fn attach(
         path: attachment.path.clone(),
         sha256: attachment.sha256.clone(),
         size: attachment.size,
+        t_min: attachment.t_min.clone(),
+        t_max: attachment.t_max.clone(),
+        row_count: attachment.row_count,
     };
     record(repo, sop_id, run_id, &event)?;
     Ok(attachment)
@@ -620,6 +764,10 @@ fn run_file_front(state: &RunState, run_id: &str) -> String {
     if let Some(value) = &state.started { out.push_str(&format!("started: {value}\n")); }
     if let Some(value) = &state.ended { out.push_str(&format!("ended: {value}\n")); }
     if let Some(value) = &state.run_status { out.push_str(&format!("status: {value}\n")); }
+    if let Some(value) = &state.conclusion { out.push_str(&format!("conclusion: {value}\n")); }
+    if let Some(value) = &state.conclusion_note {
+        out.push_str(&format!("conclusion_note: {}\n", scalar(value)));
+    }
     if let Some(sensor) = &state.sensor
         && !sensor.is_empty()
     {
@@ -648,20 +796,39 @@ fn run_file_front(state: &RunState, run_id: &str) -> String {
     }
     // The data files, as a machine-readable list (`SPEC.md` section 9). The body restates
     // them for a reader; this is the copy the validator re-checks, so an edited or missing
-    // file is caught rather than trusted.
-    let attachments: Vec<&Attachment> = state
-        .steps
-        .values()
-        .flat_map(|step| step.attachments.iter())
-        .chain(state.run_attachments.iter())
-        .collect();
+    // file is caught rather than trusted. Each entry names the step it was attached to,
+    // when it was, so the validator can check the data overlaps the step's time window.
+    let mut attachments: Vec<(&str, &Attachment)> = Vec::new();
+    for (step_id, step) in &state.steps {
+        for attachment in &step.attachments {
+            attachments.push((step_id.as_str(), attachment));
+        }
+    }
+    for attachment in &state.run_attachments {
+        attachments.push(("", attachment));
+    }
     if !attachments.is_empty() {
         out.push_str("logs:\n");
-        for attachment in attachments {
+        for (step_id, attachment) in attachments {
             out.push_str(&format!("  - path: {}\n", scalar(&attachment.path)));
+            if !step_id.is_empty() {
+                out.push_str(&format!("    step: {}\n", scalar(step_id)));
+            }
             out.push_str(&format!("    sha256: {}\n", scalar(&attachment.sha256)));
             out.push_str(&format!("    size: {}\n", attachment.size));
+            if let Some(min) = &attachment.t_min {
+                out.push_str(&format!("    t_min: {}\n", scalar(min)));
+            }
+            if let Some(max) = &attachment.t_max {
+                out.push_str(&format!("    t_max: {}\n", scalar(max)));
+            }
+            if let Some(rows) = attachment.row_count {
+                out.push_str(&format!("    row_count: {rows}\n"));
+            }
         }
+    }
+    if !state.added_steps.is_empty() {
+        out.push_str(&format!("added_steps: {}\n", state.added_steps.len()));
     }
     out.push_str(&format!("deviations_count: {}\n", state.deviations()));
     out.push_str("---\n\n");
@@ -686,12 +853,30 @@ fn run_record_text(state: &RunState, steps: &[RecordStep], run_id: &str) -> Stri
 }
 
 /// End the run, writing the human record file next to the run directory.
-pub fn end(repo: &Repo, sop_id: &str, run_id: &str, status: &str) -> Result<LoadedRun, RunError> {
-    let event = RunEvent::RunEnded {
+///
+/// `conclusion` is the operator's own verdict on the run - one of `pass`, `fail`,
+/// `inconclusive` - and `conclusion_note` the one-sentence summary they write with it.
+/// Both are optional and additive: ending a run without them records the same `RunEnded`
+/// event as before this field existed, so an older caller still ends a run the old way.
+pub fn end(
+    repo: &Repo,
+    sop_id: &str,
+    run_id: &str,
+    status: &str,
+    conclusion: Option<(String, String)>,
+) -> Result<LoadedRun, RunError> {
+    let mut events = vec![RunEvent::RunEnded {
         at: now(),
         status: status.to_owned(),
-    };
-    let loaded = record(repo, sop_id, run_id, &event)?;
+    }];
+    if let Some((outcome, summary)) = conclusion {
+        events.push(RunEvent::RunConcluded {
+            at: now(),
+            conclusion: outcome,
+            summary,
+        });
+    }
+    let loaded = record_events(repo, sop_id, run_id, &events)?;
     let text = run_record_text(&loaded.state, &loaded.steps, run_id);
     atomic::write(&loaded.record_file, &text).map_err(|error| RunError::Io {
         path: loaded.record_file.clone(),

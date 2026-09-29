@@ -171,6 +171,12 @@ enum RunAction {
         run_id: String,
         /// complete, partial, or aborted.
         status: String,
+        /// The operator's verdict: pass, fail, or inconclusive.
+        #[arg(long, value_name = "CONCLUSION")]
+        conclusion: Option<String>,
+        /// The one-sentence summary that goes with --conclusion.
+        #[arg(long, value_name = "NOTE")]
+        note: Option<String>,
     },
     /// Roll up every deviation across a checklist's runs: which steps keep going wrong.
     Deviations {
@@ -719,10 +725,25 @@ fn run_run(repo: Option<PathBuf>, action: RunAction) -> ExitCode {
                 })
                 .map_err(|error| error.to_string())
         }
-        RunAction::End { sop, run_id, status } => {
-            run::end(&repo, &sop, &run_id, &status)
+RunAction::End { sop, run_id, status, conclusion, note } => {
+            match (conclusion, note) {
+                (None, None) => {
+                    run::end(&repo, &sop, &run_id, &status, None)
+                        .map(|_| println!("ended {run_id} ({status})"))
+                        .map_err(|error| error.to_string())
+                }
+                (Some(outcome), Some(summary)) => run::end(
+                    &repo,
+                    &sop,
+                    &run_id,
+                    &status,
+                    Some((outcome, summary)),
+                )
                 .map(|_| println!("ended {run_id} ({status})"))
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string()),
+                (Some(_), None) => Err("--conclusion requires --note".to_owned()),
+                (None, Some(_)) => Err("--note requires --conclusion".to_owned()),
+            }
         }
         RunAction::Deviations { sop } => run_deviations(&repo, &sop)
             .map(|count| println!("{count} deviation(s) across {sop}")),

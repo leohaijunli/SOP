@@ -1,14 +1,18 @@
 ---
 kind: run
-run_id: 2026-09-28-cfar-01
+run_id: 2026-09-29-heading-error-uas-mag
 sop: heading-error
 sop_version: 1
-sop_commit: 94dae4d
+sop_commit: b74cea4
 operator: leo
 site: cfar
-started: 2026-09-28T23:44:16Z
-ended: 2026-09-28T23:44:22Z
+plan: uas-mag-preflight
+case: heading-error
+started: 2026-09-29T13:07:55Z
+ended: 2026-09-29T13:08:03Z
 status: complete
+sensor:
+  model: UAS-MAG
 hardware:
   - Bartington UAS-MAG fluxgate
   - Non-magnetic rotation table
@@ -16,15 +20,27 @@ hardware:
 deviations_count: 0
 ---
 
-# Run heading-error (2026-09-28T23:44:16Z)
+# Run heading-error (2026-09-29T13:07:55Z)
 
 operator: leo
 
 site: cfar
 
+plan: uas-mag-preflight
+case: heading-error
+
 sop_version: 1
-sop_commit: 94dae4d
+sop_commit: b74cea4
+sensor: UAS-MAG
 hardware: Bartington UAS-MAG fluxgate, Non-magnetic rotation table, Azimuth marks
+
+## Timeline
+
+| Step | Title | Start (UTC) | End (UTC) | Status | Duration |
+|------|-------|-------------|-----------|--------|----------|
+| mount | Mount | 13:07:55Z | 13:07:57Z | done | 2s |
+| rotate | Rotate | 13:07:57Z | 13:07:57Z | done | 0s |
+| result | Result | 13:07:57Z | 13:07:59Z | done | 2s |
 
 ## Mount
 
@@ -35,6 +51,8 @@ hardware: Bartington UAS-MAG fluxgate, Non-magnetic rotation table, Azimuth mark
 ```yaml result
 step: mount
 status: done
+opened_at: "2026-09-29T13:07:55Z"
+ended_at: "2026-09-29T13:07:57Z"
 ```
 
 ## Rotate
@@ -46,6 +64,8 @@ status: done
 ```yaml result
 step: rotate
 status: done
+opened_at: "2026-09-29T13:07:57Z"
+ended_at: "2026-09-29T13:07:57Z"
 ```
 
 ## Result
@@ -56,6 +76,8 @@ status: done
 ```yaml result
 step: result
 status: done
+opened_at: "2026-09-29T13:07:57Z"
+ended_at: "2026-09-29T13:07:59Z"
 ```
 
 

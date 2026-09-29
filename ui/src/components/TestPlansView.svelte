@@ -49,10 +49,37 @@
 
   const lastRun = (sopId: string): RunEntry | null => runsFor(sopId)[0] ?? null;
 
-  const runLabel = (r: RunEntry | null): string => {
-    if (!r) return "not run";
-    return text(r.status) || "in progress";
+  // The sensor serial a run was recorded with, or a placeholder when it was not recorded.
+  // The coverage matrix is case x sensor, so a run without a sensor still needs a column
+  // to live in ("none"): it is a real part of the record, not a gap in the grid.
+  const sensorKey = (r: RunEntry): string => {
+    const serial = r.sensor?.serial;
+    if (serial !== undefined && serial !== null && String(serial).trim() !== "") return String(serial);
+    const model = r.sensor?.model;
+    if (model !== undefined && model !== null && String(model).trim() !== "") return String(model);
+    return "none";
   };
+
+  // The distinct sensor columns, in the order the runs first appear across the plan's
+  // cases. A stable order keeps the grid from jumping as a new run is added.
+  const sensorColumns: string[] = $derived(
+    (() => {
+      if (!plan) return [];
+      const seen: string[] = [];
+      for (const c of plan.cases) {
+        for (const r of runsFor(c.sop_id)) {
+          const key = sensorKey(r);
+          if (!seen.includes(key)) seen.push(key);
+        }
+      }
+      return seen;
+    })()
+  );
+
+  // The latest run of one case on one sensor, or null. This is the "latest conclusion"
+  // the matrix cell shows - the most recent judgement, not the whole history.
+  const lastOnSensor = (c: TestCase, sensor: string): RunEntry | null =>
+    runsFor(c.sop_id).find((r) => sensorKey(r) === sensor) ?? null;
 
   // The case a "Run next" should open: the first one whose latest run is not complete.
   const nextCase = (p: TestPlan): TestCase | null =>
@@ -170,26 +197,37 @@
           {#if !plan.cases.length}
             <p class="empty">no test cases in this plan yet &mdash; use "Add case"</p>
           {:else}
-            <table>
+            <table class="matrix">
               <thead>
-                <tr><th>order</th><th>case</th><th>steps</th><th>runs</th><th>last run</th><th>status</th><th></th></tr>
+                <tr>
+                  <th>case</th>
+                  {#each sensorColumns as s}
+                    <th class="mono" title="sensor serial">{s}</th>
+                  {/each}
+                  <th>last run</th>
+                  <th></th>
+                </tr>
               </thead>
               <tbody>
                 {#each plan.cases as c (c.path)}
                   {@const runs = runsFor(c.sop_id)}
                   {@const last = runs[0] ?? null}
                   <tr>
-                    <td class="mono">{c.order}</td>
                     <td>
                       <span class="title">{text(c.title) || c.id}</span>
                       <span class="mono muted">{c.id}</span>
                     </td>
-                    <td class="mono">{c.step_count}</td>
-                    <td class="mono">{runs.length}</td>
-                    <td class="mono" title={last ? text(last.started) : ""}>{last ? localDay(last.started) : "\u2014"}</td>
-                    <td>
-                      <span class="state {last ? (text(last.status) || "open") : "none"}">{runLabel(last)}</span>
-                      {#if last && text(last.operator)}<span class="muted">{text(last.operator)}</span>{/if}
+                    {#each sensorColumns as s}
+                      {@const cell = lastOnSensor(c, s)}
+                      <td class="cell" title={cell ? `${text(cell.started)} · ${text(cell.operator) ?? ""}` : ""}>
+                        <span class="verdict {cell ? String(cell.conclusion ?? "") : "none"}">
+                          {cell ? String(cell.conclusion ?? "in progress") : "\u2014"}
+                        </span>
+                      </td>
+                    {/each}
+                    <td class="mono" title={last ? text(last.started) : ""}>
+                      {last ? localDay(last.started) : "\u2014"}
+                      <span class="muted">{runs.length} run(s)</span>
                     </td>
                     <td class="actions">
                       <button class="primary" onclick={() => start(c)}>Start</button>
@@ -222,13 +260,15 @@
   td.mono { font-family: var(--mono); font-size: 12px; }
   .title { display: block; }
   .muted { display: block; font-size: 11px; }
-  .state {
+  .cell { text-align: center; }
+  .verdict {
     display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px;
     font-family: var(--mono); border: 1px solid var(--line); color: var(--muted);
   }
-  .state.complete { color: var(--ok); border-color: var(--ok); }
-  .state.partial { color: var(--warn); border-color: var(--warn); }
-  .state.aborted { color: var(--critical); border-color: var(--critical); }
+  .verdict.pass { color: var(--ok); border-color: var(--ok); }
+  .verdict.fail { color: var(--critical); border-color: var(--critical); }
+  .verdict.inconclusive { color: var(--warn); border-color: var(--warn); }
+  .verdict.none { color: var(--muted); border-color: var(--line); font-style: italic; }
   .actions { white-space: nowrap; }
   .actions button { font-size: 12px; margin-right: 4px; }
 </style>

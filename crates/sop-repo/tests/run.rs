@@ -82,7 +82,7 @@ fn a_run_starts_opens_and_records_a_result() {
     assert!(step.checkboxes[0]);
     assert_eq!(step.captures["session_location"].value, "hill top");
 
-    run::end(&repo, SOP, RUN, "complete").unwrap();
+    run::end(&repo, SOP, RUN, "complete", None).unwrap();
     assert!(
         scratch
             .path("runs/ground-walk-survey/2026-09-25-test-run.md")
@@ -135,7 +135,7 @@ fn a_run_records_the_instrument_and_conditions_it_was_started_with() {
     };
     run::start_with_meta(&repo, SOP, "2026-09-25-meta", "leo", "Renfrew 395", Some("test"), &meta)
         .unwrap();
-    run::end(&repo, SOP, "2026-09-25-meta", "partial").unwrap();
+    run::end(&repo, SOP, "2026-09-25-meta", "partial", None).unwrap();
 
     let record = scratch.read("runs/ground-walk-survey/2026-09-25-meta.md");
     assert!(record.contains("sensor:\n  model: GEM GSM-19\n  serial: \"4451233\"\n  firmware: \"7.0\""), "{record}");
@@ -201,7 +201,7 @@ fn a_complete_run_cannot_leave_a_step_with_no_outcome() {
         },
     )
     .unwrap();
-    run::end(&repo, SOP, "2026-09-25-no-outcome", "complete").unwrap();
+    run::end(&repo, SOP, "2026-09-25-no-outcome", "complete", None).unwrap();
 
     let (failed, report) = scratch.validate();
     assert!(failed, "a complete run with an unanswered step must not validate:\n{report}");
@@ -393,7 +393,7 @@ fn the_rendered_record_matches_the_events() {
         },
     )
     .unwrap();
-    run::end(&repo, SOP, run_id, "partial").unwrap();
+    run::end(&repo, SOP, run_id, "partial", None).unwrap();
 
     let record = scratch.read("runs/ground-walk-survey/2026-09-25-cc/record.md");
     assert!(record.contains("status: deviated"), "{record}");
@@ -430,7 +430,7 @@ fn the_record_carries_the_checkbox_items_as_the_operator_left_them() {
         },
     )
     .unwrap();
-    run::end(&repo, SOP, RUN, "partial").unwrap();
+    run::end(&repo, SOP, RUN, "partial", None).unwrap();
 
     let text = run::record_text(&repo, SOP, RUN).unwrap();
     assert!(
@@ -465,7 +465,7 @@ fn a_record_without_a_run_directory_is_read_from_the_file() {
 
     // A run the app recorded still comes back re-rendered from its own log.
     start(&repo, RUN);
-    run::end(&repo, SOP, RUN, "partial").unwrap();
+    run::end(&repo, SOP, RUN, "partial", None).unwrap();
     assert_eq!(
         run::record_document(&repo, SOP, RUN).unwrap(),
         run::record_text(&repo, SOP, RUN).unwrap()
@@ -479,7 +479,7 @@ fn deleting_a_run_removes_its_paths_and_leaves_every_other_run_alone() {
     let scratch = Scratch::new("run-delete");
     let repo = scratch.repo();
     start(&repo, RUN);
-    run::end(&repo, SOP, RUN, "partial").unwrap();
+    run::end(&repo, SOP, RUN, "partial", None).unwrap();
     let record = format!("runs/{SOP}/{RUN}.md");
     let dir = format!("runs/{SOP}/{RUN}");
     assert!(scratch.path(&record).is_file());
@@ -538,7 +538,7 @@ fn a_run_started_from_a_file_path_is_filed_under_the_checklists_sop_id() {
 
     let run_id = "2026-09-28-site-01";
     run::start(&repo, external.to_str().unwrap(), run_id, "leo", "cfar", None).unwrap();
-    run::end(&repo, "uas-mag-preflight-power-on", run_id, "complete").unwrap();
+    run::end(&repo, "uas-mag-preflight-power-on", run_id, "complete", None).unwrap();
 
     assert!(scratch.path("runs/uas-mag-preflight-power-on").is_dir());
     assert!(
@@ -594,7 +594,7 @@ fn an_attachment_is_saved_under_its_own_name_and_listed_in_the_record() {
     let held = run::load(&repo, SOP, RUN).unwrap().state.step("cond-location").unwrap().attachments.len();
     assert_eq!(held, 2, "two files were attached, so two are recorded");
 
-    run::end(&repo, SOP, RUN, "partial").unwrap();
+    run::end(&repo, SOP, RUN, "partial", None).unwrap();
     let record = scratch.read(&format!("runs/{SOP}/{RUN}.md"));
     assert!(record.contains("logs:\n"), "the data files are listed in the record:\n{record}");
     assert!(record.contains(&format!("path: {}\n", attachment.path)), "{record}");
@@ -614,7 +614,7 @@ fn deleting_every_run_removes_the_history_and_leaves_the_inbox_alone() {
     let scratch = Scratch::new("run-delete-all");
     let repo = scratch.repo();
     start(&repo, RUN);
-    run::end(&repo, SOP, RUN, "partial").unwrap();
+    run::end(&repo, SOP, RUN, "partial", None).unwrap();
 
     let found = run::all_runs(&repo);
     assert!(
@@ -675,7 +675,7 @@ fn acknowledging_an_out_of_range_capture_is_recorded() {
             .contains("session_location"),
         "the acknowledgement replay reaches the state"
     );
-    run::end(&repo, SOP, "2026-09-25-acknowledge", "partial").unwrap();
+    run::end(&repo, SOP, "2026-09-25-acknowledge", "partial", None).unwrap();
     let record = scratch.read("runs/ground-walk-survey/2026-09-25-acknowledge.md");
     assert!(
         record.contains("acknowledged:\n  - session_location"),
@@ -719,11 +719,164 @@ fn a_run_from_a_testplan_case_resolves_its_checklist_for_validation() {
 
     let run_id = "2026-09-28-site-01";
     run::start(&repo, case.to_str().unwrap(), run_id, "leo", "cfar", None).unwrap();
-    run::end(&repo, "uas-mag-preflight-power-on", run_id, "partial").unwrap();
+    run::end(&repo, "uas-mag-preflight-power-on", run_id, "partial", None).unwrap();
 
     let (_, report) = scratch.validate();
     assert!(
         !report.contains("does not name an existing checklist"),
         "a testplan case resolves for validation:\n{report}"
     );
+}
+
+#[test]
+fn a_run_ended_with_a_conclusion_records_it_in_front_matter_and_body() {
+    let scratch = Scratch::new("run-conclusion");
+    let repo = scratch.repo();
+    start(&repo, "2026-09-25-conclusion");
+    run::end(
+        &repo,
+        SOP,
+        "2026-09-25-conclusion",
+        "partial",
+        Some(("inconclusive".to_owned(), "mains noise drifted all afternoon".to_owned())),
+    )
+    .unwrap();
+
+    let record = scratch.read("runs/ground-walk-survey/2026-09-25-conclusion.md");
+    assert!(record.contains("conclusion: inconclusive"), "{record}");
+    assert!(
+        record.contains("conclusion_note: mains noise drifted all afternoon"),
+        "{record}"
+    );
+    // The record body restates the verdict for a reader who never opens the front matter.
+    assert!(record.contains("\nconclusion: inconclusive\n"), "{record}");
+
+    // The validator accepts a run whose conclusion and note travel together.
+    let (failed, report) = scratch.validate();
+    assert!(!failed, "a concluded run must validate:\n{report}");
+
+    // The manifest carries the verdict, so the coverage board can colour a cell without
+    // opening the record.
+    let manifest = manifest::build(&repo);
+    let entry = manifest
+        .runs
+        .iter()
+        .find(|entry| entry.run_id.as_ref().and_then(|id| id.as_str()) == Some("2026-09-25-conclusion"))
+        .expect("the concluded run is in the manifest");
+    assert_eq!(entry.conclusion.as_ref().and_then(|c| c.as_str()), Some("inconclusive"));
+}
+
+#[test]
+fn a_recorded_event_is_stamped_with_the_tools_clock_not_the_senders() {
+    let scratch = Scratch::new("stamp-at");
+    let repo = scratch.repo();
+    start(&repo, RUN);
+
+    // The renderer sends a stale time; the tool's clock must win.
+    run::record(
+        &repo,
+        SOP,
+        RUN,
+        &RunEvent::StepOpened {
+            at: "1999-01-01T00:00:00Z".into(),
+            step: "cond-location".into(),
+        },
+    )
+    .unwrap();
+    let loaded = run::load(&repo, SOP, RUN).unwrap();
+    let opened = loaded.state.step("cond-location").unwrap().opened_at.clone().expect("opened");
+    assert!(
+        opened.starts_with("2026") || opened.starts_with("2025") || opened.starts_with("2024"),
+        "the opened time is the tool's clock, not the sender's: {opened}"
+    );
+    assert_ne!(opened, "1999-01-01T00:00:00Z");
+}
+
+#[test]
+fn a_closed_step_renders_its_window_in_the_record_and_csv() {
+    let scratch = Scratch::new("timeline");
+    let repo = scratch.repo();
+    start(&repo, RUN);
+    run::record(&repo, SOP, RUN, &RunEvent::StepOpened { at: "2026-09-25T12:00:00Z".into(), step: "cond-location".into() }).unwrap();
+    run::record(&repo, SOP, RUN, &RunEvent::StepStatusChanged { at: "2026-09-25T12:03:15Z".into(), step: "cond-location".into(), status: "done".into(), reason: None }).unwrap();
+    run::end(&repo, SOP, RUN, "complete", None).unwrap();
+
+    let record = scratch.read("runs/ground-walk-survey/2026-09-25-test-run/record.md");
+    assert!(record.contains("## Timeline"), "{record}");
+    assert!(record.contains("cond-location"), "{record}");
+    // The window is recorded in the step's result block and rendered in the timeline.
+    assert!(record.contains("opened_at:"), "{record}");
+    assert!(record.contains("ended_at:"), "{record}");
+
+    let loaded = run::load(&repo, SOP, RUN).unwrap();
+    let csv = sop_core::run::timeline_csv(&loaded.state, &loaded.steps);
+    assert!(csv.starts_with("step,title,start_utc,end_utc,status,duration\n"), "{csv}");
+    assert!(csv.contains("cond-location"), "{csv}");
+}
+
+#[test]
+fn attaching_a_csv_with_a_time_column_records_its_range() {
+    let scratch = Scratch::new("attach-range");
+    let repo = scratch.repo();
+    start(&repo, RUN);
+    let csv = "timestamp_utc,field_nt\n\
+               2026-09-25T12:00:00Z,1.2\n\
+               2026-09-25T12:00:01Z,1.3\n\
+               2026-09-25T12:00:02Z,1.4\n";
+    scratch.write("data.csv", csv);
+
+    let attachment = run::attach(&repo, SOP, RUN, None, &scratch.path("data.csv")).unwrap();
+    assert_eq!(attachment.t_min.as_deref(), Some("2026-09-25T12:00:00Z"));
+    assert_eq!(attachment.t_max.as_deref(), Some("2026-09-25T12:00:02Z"));
+    assert_eq!(attachment.row_count, Some(3));
+
+    let loaded = run::load(&repo, SOP, RUN).unwrap();
+    assert_eq!(loaded.state.run_attachments[0].row_count, Some(3));
+    run::end(&repo, SOP, RUN, "complete", None).unwrap();
+    let record = scratch.read("runs/ground-walk-survey/2026-09-25-test-run.md");
+    assert!(record.contains("t_min:"), "{record}");
+}
+
+#[test]
+fn attaching_a_file_with_no_time_column_omits_the_range() {
+    let scratch = Scratch::new("attach-no-range");
+    let repo = scratch.repo();
+    start(&repo, RUN);
+    scratch.write("photo.jpg", "not a table\n");
+    let attachment = run::attach(&repo, SOP, RUN, None, &scratch.path("photo.jpg")).unwrap();
+    assert_eq!(attachment.t_min, None);
+    assert_eq!(attachment.row_count, None);
+}
+
+#[test]
+fn a_step_added_mid_run_appears_in_the_view_and_the_record() {
+    let scratch = Scratch::new("step-added");
+    let repo = scratch.repo();
+    start(&repo, RUN);
+    run::record(
+        &repo,
+        SOP,
+        RUN,
+        &RunEvent::StepAdded {
+            at: "2026-09-25T12:00:00Z".into(),
+            id: "adhoc-001".into(),
+            title: "Extra line".into(),
+            after: Some("cond-location".into()),
+        },
+    )
+    .unwrap();
+    run::record(&repo, SOP, RUN, &RunEvent::StepOpened { at: "2026-09-25T12:00:00Z".into(), step: "adhoc-001".into() }).unwrap();
+    run::record(&repo, SOP, RUN, &RunEvent::StepStatusChanged { at: "2026-09-25T12:01:00Z".into(), step: "adhoc-001".into(), status: "done".into(), reason: None }).unwrap();
+    run::end(&repo, SOP, RUN, "complete", None).unwrap();
+
+    let loaded = run::load(&repo, SOP, RUN).unwrap();
+    assert_eq!(loaded.state.added_steps.len(), 1);
+    // The execution view's step list gained the added step, placed after its anchor.
+    let index = loaded.defs.iter().position(|def| def.id == "adhoc-001").unwrap();
+    assert_eq!(loaded.defs[index - 1].id, "cond-location");
+
+    let record = scratch.read("runs/ground-walk-survey/2026-09-25-test-run.md");
+    assert!(record.contains("Steps added during the run"), "{record}");
+    assert!(record.contains("adhoc-001"), "{record}");
+    assert!(record.contains("added_steps: 1"), "the record counts the added steps: {record}");
 }

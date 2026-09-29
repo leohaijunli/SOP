@@ -23,6 +23,9 @@
   let siteFilter = $state("");
   let operatorFilter = $state("");
   let statusFilter = $state("");
+  let sensorFilter = $state("");
+  let hasDevFilter = $state(false);
+  let conclusionFilter = $state("");
   let message = $state("");
   let isError = $state(false);
   let busy = $state("");
@@ -40,7 +43,19 @@
       .finally(() => (plansLoaded = true));
   });
 
-  const filtering = $derived(Boolean(siteFilter || operatorFilter || statusFilter));
+  const filtering = $derived(
+    Boolean(
+      siteFilter || operatorFilter || statusFilter || sensorFilter || hasDevFilter || conclusionFilter
+    )
+  );
+
+  const sensorOf = (r: RunEntry): string => {
+    const serial = r.sensor?.serial;
+    if (serial !== undefined && serial !== null && String(serial).trim() !== "") return String(serial);
+    const model = r.sensor?.model;
+    if (model !== undefined && model !== null && String(model).trim() !== "") return String(model);
+    return "";
+  };
 
   const filtered: RunEntry[] = $derived(
     (manifest?.runs ?? [])
@@ -48,6 +63,9 @@
         if (siteFilter && text(r.site) !== siteFilter) return false;
         if (operatorFilter && text(r.operator) !== operatorFilter) return false;
         if (statusFilter && text(r.status) !== statusFilter) return false;
+        if (sensorFilter && sensorOf(r) !== sensorFilter) return false;
+        if (conclusionFilter && String(r.conclusion ?? "") !== conclusionFilter) return false;
+        if (hasDevFilter && Number(r.deviations_count) === 0) return false;
         return true;
       })
       .sort((a, b) => text(b.started).localeCompare(text(a.started)))
@@ -66,6 +84,7 @@
 
   const sites: string[] = $derived(options((r) => text(r.site)));
   const operators: string[] = $derived(options((r) => text(r.operator)));
+  const sensors: string[] = $derived(options(sensorOf));
 
   type CaseGroup = { key: string; title: string; sop: string; runs: RunEntry[] };
   type PlanGroup = { id: string; title: string; cases: CaseGroup[] };
@@ -210,8 +229,10 @@
         <th>run id</th>
         <th>started</th>
         <th>site</th>
+        <th>sensor</th>
         <th>operator</th>
         <th>outcome</th>
+        <th>conclusion</th>
         <th>deviations</th>
         <th></th>
       </tr>
@@ -222,8 +243,16 @@
           <td class="mono">{text(r.run_id)}</td>
           <td title={text(r.started)}>{localDateTime(r.started)}</td>
           <td>{text(r.site)}</td>
+          <td class="mono">{sensorOf(r) || "\u2014"}</td>
           <td>{text(r.operator)}</td>
           <td><span class="badge {text(r.status)}">{text(r.status) || "in progress"}</span></td>
+          <td>
+            {#if r.conclusion}
+              <span class="badge {String(r.conclusion)}">{String(r.conclusion)}</span>
+            {:else}
+              <span class="muted">\u2014</span>
+            {/if}
+          </td>
           <td>{text(r.deviations_count)}</td>
           <td class="actions">
             <button disabled={busy !== ""} onclick={() => void exportRun(r)}>
@@ -278,6 +307,19 @@
       <option value="partial">partial</option>
       <option value="aborted">aborted</option>
     </select>
+    <select bind:value={sensorFilter}>
+      <option value="">All sensors</option>
+      {#each sensors as s (s)}
+        <option value={s}>{s}</option>
+      {/each}
+    </select>
+    <select bind:value={conclusionFilter}>
+      <option value="">Any conclusion</option>
+      <option value="pass">pass</option>
+      <option value="fail">fail</option>
+      <option value="inconclusive">inconclusive</option>
+    </select>
+    <label class="check"><input type="checkbox" bind:checked={hasDevFilter} /> has deviations</label>
   </div>
 
   {#if !filtered.length}
@@ -344,4 +386,8 @@
   .badge.complete { color: var(--ok); }
   .badge.partial { color: var(--warn); }
   .badge.aborted { color: var(--critical); }
+  .badge.pass { color: var(--ok); }
+  .badge.fail { color: var(--critical); }
+  .badge.inconclusive { color: var(--warn); }
+  .filters .check { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
 </style>

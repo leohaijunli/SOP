@@ -113,6 +113,8 @@ pub struct RunView {
     pub started: Option<String>,
     pub ended: Option<String>,
     pub run_status: Option<String>,
+    pub conclusion: Option<String>,
+    pub conclusion_note: Option<String>,
     pub snapshot_sha256: Option<String>,
     pub sop_version: Option<String>,
     pub sop_commit: Option<String>,
@@ -121,9 +123,20 @@ pub struct RunView {
     pub hardware: Vec<String>,
     pub conditions: BTreeMap<String, String>,
     pub steps: Vec<RunStepView>,
+    /// Steps added to this run after it started, in the order they were added.
+    pub added_steps: Vec<RunAddedStepView>,
     pub run_notes: Vec<String>,
     pub run_attachments: Vec<RunAttachmentView>,
     pub record_path: String,
+}
+
+/// A step added mid-run, shown so the operator can see it was not part of the template.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunAddedStepView {
+    pub id: String,
+    pub title: String,
+    pub after: Option<String>,
 }
 
 /// The instrument as the start panel entered it and the view displays it.
@@ -207,6 +220,11 @@ pub struct RunAttachmentView {
     pub path: String,
     pub sha256: String,
     pub size: u64,
+    /// The data's own time span and row count, when the attached file carried a parseable
+    /// time column; `None` when it did not.
+    pub t_min: Option<String>,
+    pub t_max: Option<String>,
+    pub row_count: Option<u64>,
 }
 
 /// A whole step, as the "add step" form sends it.

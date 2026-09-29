@@ -32,6 +32,11 @@ pub const CHECKLIST_STATUS: &[&str] = &["draft", "active", "retired"];
 
 pub const RUN_STATUS: &[&str] = &["complete", "partial", "aborted"];
 
+/// The operator's own verdict on the run. Distinct from `RUN_STATUS`: `complete` means
+/// the run was executed, `conclusion` is the human judgement (pass / fail / inconclusive),
+/// and the tool never derives one from the other (`DECISIONS.md` D4).
+pub const RUN_CONCLUSION: &[&str] = &["pass", "fail", "inconclusive"];
+
 pub const RESULT_STATUS: &[&str] = &["done", "skipped", "deviated"];
 
 /// Front matter keys understood for every file kind.
@@ -62,6 +67,8 @@ pub const RUN_FRONT_KEYS: &[&str] = &[
     "started",
     "ended",
     "status",
+    "conclusion",
+    "conclusion_note",
     "sensor",
     "hardware",
     "conditions",
@@ -98,7 +105,15 @@ pub const CAPTURE_KEYS: &[&str] = &[
     "key", "label", "type", "unit", "required", "options", "expected", "accept",
 ];
 
-pub const RESULT_KEYS: &[&str] = &["step", "status", "reason", "captures", "acknowledged"];
+pub const RESULT_KEYS: &[&str] = &[
+    "step",
+    "status",
+    "reason",
+    "opened_at",
+    "ended_at",
+    "captures",
+    "acknowledged",
+];
 
 /// Whether `key` is understood in the front matter of a file of `kind`.
 pub fn known_front_keys(kind: &str, key: &str) -> bool {
@@ -133,6 +148,15 @@ pub fn is_valid_capture_key(value: &str) -> bool {
         _ => return false,
     }
     chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Whether a step id names a step added mid-run (`adhoc-NNN`).
+///
+/// The tool generates these; the operator never types one. A step added to a run is not
+/// part of the checklist it was started from, so a record may cite one that its snapshot
+/// does not contain (`DESIGN.md` 6.6).
+pub fn is_added_step_id(id: &str) -> bool {
+    id.starts_with("adhoc-")
 }
 
 /// `YYYY-MM-DD`, loosely: shape and ranges checked, not the calendar.

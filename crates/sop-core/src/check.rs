@@ -9,9 +9,9 @@ use crate::document::Document;
 use crate::link::{self, Link};
 use crate::step::{Capture, CaptureType, Expected, Step};
 use crate::vocab::{
-    APPLIES_TO, CAPTURE_TYPES, CHECKLIST_STATUS, HELP_AUDIENCE, RESULT_STATUS, RUN_STATUS,
-    SEVERITIES, STEP_KINDS, SUPPORTED_SCHEMA, is_iso_date, is_valid_capture_key, is_valid_id,
-    known_front_keys,
+    APPLIES_TO, CAPTURE_TYPES, CHECKLIST_STATUS, HELP_AUDIENCE, RESULT_STATUS, RUN_CONCLUSION,
+    RUN_STATUS, SEVERITIES, STEP_KINDS, SUPPORTED_SCHEMA, is_added_step_id, is_iso_date,
+    is_valid_capture_key, is_valid_id, known_front_keys,
 };
 
 /// Front matter keys this build does not understand.
@@ -202,6 +202,29 @@ pub fn run_front_matter(doc: &Document) -> Diagnostics {
             Some(1),
         ),
         None => {}
+    }
+
+    // A conclusion is the operator's own verdict, so it only makes sense on a finished
+    // run, and it is written with the one-sentence note that says why. A record with a
+    // verdict but no end, or a verdict without a note, was edited by hand.
+    if front.contains("conclusion") || front.contains("conclusion_note") {
+        if !front.contains("status") {
+            out.error("'conclusion' requires the run to be ended", Some(1));
+        }
+        match front.get("conclusion").and_then(|value| value.as_str()) {
+            Some(conclusion) if RUN_CONCLUSION.contains(&conclusion) => {}
+            Some(other) => out.error(
+                format!(
+                    "'conclusion' must be one of {}; found '{other}'",
+                    RUN_CONCLUSION.join(", ")
+                ),
+                Some(1),
+            ),
+            None => out.error("'conclusion' is required alongside 'conclusion_note'", Some(1)),
+        }
+        if front.get("conclusion_note").and_then(|value| value.as_str()).is_none_or(str::is_empty) {
+            out.error("'conclusion_note' must be a one-sentence summary", Some(1));
+        }
     }
 
     // `sensor`, `hardware`, and `conditions` are the run's instrument and environment.
@@ -761,6 +784,9 @@ pub fn run_results(
 
         match result.step.as_deref() {
             None => out.error("result has no 'step'", Some(result.line)),
+            // A step added mid-run (`adhoc-NNN`) is legal even though it is not in the
+            // checklist the run was started from; it lives only in the event log.
+            Some(id) if is_added_step_id(id) => seen.push(id),
             Some(id) if !checklist_step_ids.iter().any(|known| known == id) => citation.report(
                 &mut out,
                 format!("result references step '{id}', which is not in checklist '{sop}'"),
@@ -870,6 +896,98 @@ pub fn complete_run_coverage(
         }
     }
     out
+}
+
+/// A step that ended (done / skipped / deviated) must record when it was opened. Without a
+/// `StepOpened` there is no start to its window, so the timeline cannot place it; the step
+/// was likely recorded by an older build, which is a warning rather than an error.
+pub fn missing_step_opened(doc: &Document) -> Diagnostics {
+    let mut out = Diagnostics::new();
+    for result in &doc.results {
+        if result.opened_at.is_none()
+            && matches!(result.status.as_deref(), Some("done" | "skipped" | "deviated"))
+        {
+            out.warning(
+                format!(
+                    "step '{}' ended as '{}' but has no 'opened_at'; it was never opened, so its time window is unknown",
+                    result.step.as_deref().unwrap_or("<unknown>"),
+                    result.status.as_deref().unwrap_or("")
+                ),
+                Some(result.line),
+            );
+        }
+    }
+    out
+}
+
+/// A window whose end precedes its start is a clock that went backwards. The times are not
+/// to be trusted, so this is an error rather than a soft warning.
+pub fn time_regression(doc: &Document) -> Diagnostics {
+    let mut out = Diagnostics::new();
+    for result in &doc.results {
+        let (Some(opened), Some(ended)) = (result.opened_at.as_deref(), result.ended_at.as_deref()) else {
+            continue;
+        };
+        match (
+            crate::timestamp::epoch_seconds(opened),
+            crate::timestamp::epoch_seconds(ended),
+        ) {
+            (Some(a), Some(b)) if b < a => out.error(
+                format!(
+                    "step '{}' ends at {ended}, before it opened at {opened}; the clock went backwards",
+                    result.step.as_deref().unwrap_or("<unknown>")
+                ),
+                Some(result.line),
+            ),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// A log with a recorded time range must overlap the run it was attached to, or the step
+/// it was attached to. A file from the wrong day is the usual cause.
+pub fn log_overlap(doc: &Document) -> Diagnostics {
+    let mut out = Diagnostics::new();
+    let run_start = doc.front.str("started").flatten().and_then(crate::timestamp::epoch_seconds);
+    let run_end = doc.front.str("ended").flatten().and_then(crate::timestamp::epoch_seconds);
+    let logs: Vec<&serde_norway::Value> = match doc.front.get("logs") {
+        Some(serde_norway::Value::Sequence(items)) => items.iter().collect(),
+        Some(other) => vec![other],
+        None => Vec::new(),
+    };
+    for entry in logs {
+        let Some(map) = entry.as_mapping() else { continue };
+        let (Some(t_min), Some(t_max)) = (
+            map.get("t_min").and_then(|v| v.as_str()).and_then(crate::timestamp::epoch_seconds),
+            map.get("t_max").and_then(|v| v.as_str()).and_then(crate::timestamp::epoch_seconds),
+        ) else { continue };
+        let name = map.get("path").and_then(|v| v.as_str()).unwrap_or("<log>");
+        // The window to overlap: the step it was attached to, else the run itself.
+        let window = map
+            .get("step")
+            .and_then(|v| v.as_str())
+            .and_then(|step| step_window(doc, step))
+            .or_else(|| run_start.zip(run_end));
+        let Some((start, end)) = window else { continue };
+        if t_max < start || t_min > end {
+            out.warning(
+                format!(
+                    "log '{name}' covers {t_min}..{t_max}, which does not overlap the {start}..{end} window of what it was attached to; it may be the wrong file"
+                ),
+                None,
+            );
+        }
+    }
+    out
+}
+
+/// A step's window as the record states it, by step id.
+fn step_window(doc: &Document, step: &str) -> Option<(i64, i64)> {
+    let result = doc.results.iter().find(|r| r.step.as_deref() == Some(step))?;
+    let opened = crate::timestamp::epoch_seconds(result.opened_at.as_deref()?)?;
+    let ended = crate::timestamp::epoch_seconds(result.ended_at.as_deref()?)?;
+    Some((opened, ended))
 }
 
 /// An id in front matter must match the filename, and must be a valid id.

@@ -199,7 +199,7 @@ fn cases() -> Vec<Case> {
             |root| {
                 freeze_run_snapshot(root, CAL_RUN);
                 let text = root.read(CAL_RUN);
-                let block = "## hygiene-person\n\n```yaml result\nstep: hygiene-person\nstatus: done\n```\n\n";
+                let block = "## hygiene-person\n\n```yaml result\nstep: hygiene-person\nstatus: done\nopened_at: 2026-09-24T16:53:00Z\nended_at: 2026-09-24T16:56:00Z\n```\n\n";
                 assert!(
                     text.contains(block),
                     "fixture drifted: hygiene-person result block"

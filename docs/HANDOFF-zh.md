@@ -5,15 +5,16 @@
 是 `docs/FEATURES.md`，本批的评审与路线图是 `docs/REVIEW-engineer-workflow.md`（Phase 1–5，
 Phase 6/7 为建议）。中文操作教程在 `docs/USAGE-zh.md`。
 
-> 上一批两个提交（`4766953` Phase 1–3 + note 编辑器，`d0f37cc` Markdown 渲染器 Rust 化）
-> 都已推送到 `origin/main`。**当前这一批（Batch 1：数据安全 + 录入正确）见 §0**。工作副本
-> 里未提交的只剩 `runs/` 下 App 正在生成/删除的 run，**不要顺手提交**。上一版交接
-> （D15–D19 那一批）在历史里：`git show 94dae4d:docs/HANDOFF-zh.md`。
+> 上一批三个提交（`4766953` Phase 1–3 + note 编辑器，`d0f37cc` Markdown 渲染器 Rust 化，
+> `b74cea4` Batch 2：现场可用性）都已推送到 `origin/main`。**当前这一批（Batch 3：
+> 追踪价值）见 §0**。工作副本里未提交的只剩 `runs/` 下 App 正在生成/删除的 run，**不要顺手提交**。
+> 上一版交接（Batch 2）在历史里：`git show b74cea4:docs/HANDOFF-zh.md`。
 
-## 0. 最近两批（Batch 1：数据安全 + 录入正确；Batch 2：现场可用性）
+## 0. 最近三批（Batch 1：数据安全 + 录入正确；Batch 2：现场可用性；Batch 3：追踪价值）
 
-按 `docs/ROADMAP.md` 的 P0→P1→P2 顺序做的。**Batch 1 做完了 0.2 / 0.3 / 0.4 / 1.1–1.4；
-Batch 2 做完了 2.1–2.6**。0.1 需要真机，留在这里（§0.5）。Batch 2 的改动在 §0.6–§0.12。
+按 `docs/ROADMAP.md` 的 P0→P1→P2→P3 顺序做的。**Batch 1 做完了 0.2 / 0.3 / 0.4 / 1.1–1.4；
+Batch 2 做完了 2.1–2.6；Batch 3 做完了 3.1–3.3**（并捎带 4.1 里把结论词表放进 core）。0.1 需要真机，
+留在这里（§0.5）。Batch 3 的改动在 §0.13–§0.15。
 
 ### Batch 1
 
@@ -130,6 +131,45 @@ Batch 2 做完了 2.1–2.6**。0.1 需要真机，留在这里（§0.5）。Bat
   三个"管理"视图当前激活时下拉标题高亮。
 - 相关中文文档（`docs/USAGE-zh.md`）里 "点工具栏 Project / Settings" 已改成
   "Manage ▾ → …"。
+
+### 0.13 一次 run 的结论（ROADMAP 3.1）
+
+- **记录格式（增量式，schema 仍为 1）**：`runs/<sop>/<run>.md` 的 front matter 新增可选的
+  `conclusion`（`pass` / `fail` / `inconclusive`）和 `conclusion_note`（一句话）；事件日志新增
+  `RunConcluded { at, conclusion, summary }`。旧日志（没有这条事件）照常回放，旧 reader
+  对未知 front matter 键警告并保留（`SPEC-COMPAT.md` 已登记）。
+- **语义**：`status`（`complete`/`partial`/`aborted`）只表示"跑完了"；`conclusion` 是操作员
+  自己给的判定，工具从不算出它（D4，新 D28）。`conclusion` 与 `conclusion_note` 成对出现，
+  且都要在 `status`/`ended` 之后——校验器按"成对 + 已结束"检查（`sop_core::check` 的
+  `run_front_matter`）。
+- **词表**：`vocab.rs` 新增 `RUN_CONCLUSION`，命令/CLI/API/manifest 全链路上带。
+- **CLI**：`sop run end <sop> <run> <status> [--conclusion X --note "…"]`；`--conclusion`
+  与 `--note` 必须成对。
+- **窗口**：结束 run 的确认条确认后，先问 verdict（`pass`/`fail`/`inconclusive` 一键选），
+  再写一句原因；两个都取消/留空则照旧结束（结论是"offer"，不强求）。`api.runEnd` 带
+  `conclusion` / `conclusionNote`。
+- 测试：`sop_core` 的 3 条（结论须在结束之后、词表 + 必须有一句、记录正文回显）；`sop-repo`
+  1 条集成（front matter + 正文 + 校验通过 + manifest 带结论）。
+
+### 0.14 覆盖矩阵（ROADMAP 3.2）
+
+- `TestPlansView.svelte` 的表格从"每个 case 一行状态"改成 **case × sensor serial** 矩阵：
+  每列是一个序列号（没记 sensor 的 run 归入 `none` 列），每个格子里是该 case + 该序列号的
+  **最近一次 run 的结论**（`pass`/`fail`/`inconclusive`/`in progress`/`—`）。列顺序按 run
+  出现顺序稳定生成，避免新增一条 run 时格子跳位。
+- manifest 的 `RunEntry` 新增 `conclusion`，让看板不用打开记录就能给格子着色。
+
+### 0.15 历史过滤（ROADMAP 3.3 的前半）
+
+- `HistoryView.svelte` 的过滤从 site/operator/outcome 扩到 **sensor serial / conclusion /
+  仅看有偏差（has deviations）**；表格新增 sensor 列和 conclusion 徽章。**并排比较同一 case
+  的多次 run、随时间看趋势**这一半留到后面 batch（ROADMAP 3.3 已注明）。
+
+### 0.16 文档同步
+
+- `SPEC.md`（§2 词表 + §8 run 记录）、`SPEC-COMPAT.md` 变更表、`docs/ROADMAP.md`（3.1–3.3 标
+  done，进度段更新）、`docs/DECISIONS.md`（D28）、`docs/FEATURES.md`（C/G 段新增三行）、
+  `docs/USAGE-zh.md`（结束 run 先问结论）都已更新。
 
 ## 1. 当前状态
 

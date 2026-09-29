@@ -408,6 +408,12 @@ fn check_run(
         );
     }
 
+    // Time windows: a closed step needs a start, an end before its start is a clock that
+    // went backwards, and an attached log has to overlap the window it was attached to.
+    report.extend(path, check::missing_step_opened(doc));
+    report.extend(path, check::time_regression(doc));
+    report.extend(path, check::log_overlap(doc));
+
     // A run that has just started has no results yet, and that is the normal state of a
     // record on disk mid-run. Only a finished run with nothing recorded is worth a
     // second look.

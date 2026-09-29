@@ -1,0 +1,8 @@
+{"type":"RunStarted","at":"2026-09-29T13:07:55Z","sop":"heading-error","sop_version":"1","sop_commit":"b74cea4","snapshot_sha256":"85bedad687d98229e020bc9646194fa4d6973abb07a27aea44289e76681f4f8a","operator":"leo","site":"cfar","plan":"uas-mag-preflight","case":"heading-error","sensor":{"model":"UAS-MAG"},"hardware":["Bartington UAS-MAG fluxgate","Non-magnetic rotation table","Azimuth marks"]}
+{"type":"StepOpened","at":"2026-09-29T13:07:55Z","step":"mount"}
+{"type":"StepStatusChanged","at":"2026-09-29T13:07:57Z","step":"mount","status":"done","reason":null}
+{"type":"StepOpened","at":"2026-09-29T13:07:57Z","step":"rotate"}
+{"type":"StepStatusChanged","at":"2026-09-29T13:07:57Z","step":"rotate","status":"done","reason":null}
+{"type":"StepOpened","at":"2026-09-29T13:07:57Z","step":"result"}
+{"type":"StepStatusChanged","at":"2026-09-29T13:07:59Z","step":"result","status":"done","reason":null}
+{"type":"RunEnded","at":"2026-09-29T13:08:03Z","status":"complete"}

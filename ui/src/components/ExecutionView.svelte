@@ -30,6 +30,7 @@
       index: number;
       total: number;
       hasNext: boolean;
+      nextCaseTitle: string | null;
     } | null;
     onNextCase: () => void;
     onRunUpdate: () => void;
@@ -123,6 +124,10 @@
   // A pending request to end the run. Ending is not undoable, so the first press only
   // arms this and the second confirms.
   let endPending = $state<string | null>(null);
+  // Adding a step mid-run: title plus the step to insert after (empty means the end).
+  let addingStep = $state(false);
+  let newStepTitle = $state("");
+  let newStepAfter = $state("");
   // The reason prompt in flight, if any. A promise keeps the call sites readable
   // (`const reason = await ask(...)`) while the UI is a component, not a browser dialog.
   let promptRequest = $state<{
@@ -624,10 +629,40 @@
     // Queued with the events, so ending cannot overtake a capture still being written.
     queue = queue.then(async () => {
       if (!run) return;
+      // The operator's own verdict on the run, recorded after it ends (`DECISIONS.md` D4).
+      // `status` says the run was executed; `conclusion` is the human judgement - pass,
+      // fail, or inconclusive - and the tool never derives one from the other. The
+      // conclusion is offered, never forced: a run may be left without one.
+      let conclusion: string | null = null;
+      let conclusionNote: string | null = null;
+      const outcome = await ask({
+        title: "What is your conclusion for this run?",
+        message:
+          `Ending the run as ${status}. Now record your own judgement of the result - ` +
+          "pass, fail, or inconclusive. The tool never decides this for you.",
+        label: "One sentence saying why",
+        choices: ["pass", "fail", "inconclusive"],
+        optional: true,
+        submitLabel: "Skip conclusion",
+        placeholder: "e.g. all values inside the expected range",
+      });
+      if (outcome === "pass" || outcome === "fail" || outcome === "inconclusive") {
+        const note = await ask({
+          title: `Why ${outcome}?`,
+          message: "The one-sentence reason is written into the record and cannot be left out.",
+          label: "Reason",
+          submitLabel: "Record conclusion",
+          placeholder: "e.g. within tolerance at this site",
+        });
+        if (note !== null && note.trim() !== "") {
+          conclusion = outcome;
+          conclusionNote = note.trim();
+        }
+      }
       try {
-        run = await api.runEnd(run.sop, run.runId, status);
+        run = await api.runEnd(run.sop, run.runId, status, conclusion, conclusionNote);
         ended = { status, runId: run.runId };
-        message = `ended ${run.runId} (${status})`;
+        message = `ended ${run.runId} (${status})${conclusion ? `, concluded ${conclusion}` : ""}`;
         isError = false;
         onRunUpdate();
       } catch (e) {
@@ -693,6 +728,36 @@
       (empty ?? fields[0])?.focus();
     });
   });
+
+  // Landing on a step opens it: a `StepOpened` event marks the start of its time window,
+  // which the timeline renders. Emitting it on the first visit keeps the window honest;
+  // a later revisit reopens the step, moving the start forward.
+  let lastOpenedStep = $state<string | null>(null);
+  $effect(() => {
+    if (!run || !current) return;
+    if (current.status === "open" && current.id !== lastOpenedStep) {
+      lastOpenedStep = current.id;
+      void emit({ type: "StepOpened", step: current.id });
+    }
+  });
+
+  // Add a step to the run: the shell generates the id, so the operator only names it.
+  const addStep = async (): Promise<void> => {
+    if (!run) return;
+    const title = newStepTitle.trim();
+    if (!title) return;
+    try {
+      run = await api.runAddStep(run.sop, run.runId, title, newStepAfter || null);
+      addingStep = false;
+      newStepTitle = "";
+      newStepAfter = "";
+      message = `added step ${run.runId}`;
+      isError = false;
+      onRunUpdate();
+    } catch (e) {
+      say(String(e), true);
+    }
+  };
 
   // The keyboard contract in `help/app-basics.md`: field use is one-handed, so every
   // action on the run screen has a key. `F1` and `/` belong to the shell, so they are
@@ -950,6 +1015,9 @@
         <div>
           <strong>Run {ended.status.toUpperCase()}</strong>
           <span class="ended-id">{ended.runId}</span>
+          {#if run?.conclusion}
+            <span class="ended-id">concluded {run.conclusion}{#if run.conclusionNote}: {run.conclusionNote}{/if}</span>
+          {/if}
           {#if caseContext}
             <span class="ended-id">plan {caseContext.planId} &middot; case {caseContext.index + 1} of {caseContext.total}</span>
           {/if}
@@ -957,7 +1025,7 @@
       </div>
       {#if caseContext?.hasNext}
         <button class="primary" onclick={() => onNextCase()}>
-          Next case: {caseContext.caseTitle} &rarr;
+          Next case: {caseContext.nextCaseTitle ?? caseContext.caseTitle} &rarr;
         </button>
         <button onclick={() => void newRun()}>Start new run</button>
       {:else}
@@ -1228,6 +1296,27 @@
         {/if}
         <button onclick={() => requestEnd("partial")}>End: partial</button>
         <button onclick={() => requestEnd("aborted")}>End: aborted</button>
+        <hr class="divider" />
+        {#if addingStep}
+          <div class="add-step">
+            <label for="new-step-title">title</label>
+            <input id="new-step-title" bind:value={newStepTitle} placeholder="e.g. extra cross-line" />
+            <label for="new-step-after">insert after</label>
+            <select id="new-step-after" bind:value={newStepAfter}>
+              <option value="">(end of checklist)</option>
+              {#each run!.steps as s (s.id)}
+                <option value={s.id}>{s.title}</option>
+              {/each}
+            </select>
+            <div class="add-step-actions">
+              <button class="primary" onclick={() => void addStep()} disabled={!newStepTitle.trim()}>Add step</button>
+              <button onclick={() => (addingStep = false)}>Cancel</button>
+            </div>
+            <p class="muted">The step is given an id by the tool and recorded in the event log; it is not part of the checklist template.</p>
+          </div>
+        {:else}
+          <button onclick={() => (addingStep = true)}>Add step</button>
+        {/if}
       </nav>
 
       {#if current}
@@ -1478,6 +1567,11 @@
   }
   .end-confirm strong { text-transform: uppercase; }
   .divider-btn { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+  .add-step { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; }
+  .add-step label { display: block; font-size: 12px; color: var(--muted); margin: 4px 0 2px; }
+  .add-step input, .add-step select { width: 100%; box-sizing: border-box; }
+  .add-step-actions { display: flex; gap: 8px; margin-top: 8px; }
+  .add-step p { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
   .notes h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
   .note-body {
     background: var(--quote); border-left: 3px solid var(--line); border-radius: 6px;

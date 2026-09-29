@@ -15,9 +15,9 @@ supersedes both as the list of what is left.
 
 Invariants: no database, no change of UI framework, and Markdown plus event sourcing stays.
 
-Progress: **batches 1 and 2 are merged** - 0.2, 0.3, 0.4, 1.1-1.4, and 2.1-2.6 are done
-(they carry a `done` mark below). 0.1 has no code to change but still needs a real Ubuntu
-machine, so it stays open. Next is P3, starting with 3.1 (a run conclusion).
+Progress: **batches 1, 2 and 3 are merged** - 0.2, 0.3, 0.4, 1.1-1.4, 2.1-2.6, and
+3.1-3.3 are done (they carry a `done` mark below). 0.1 has no code to change but still
+needs a real Ubuntu machine, so it stays open. Next is 3.4 and 3.5, with 4.1 alongside.
 
 ## P0 - Data safety
 
@@ -59,9 +59,9 @@ together.
 
 | # | Item | Notes |
 |---|---|---|
-| 3.1 | **A run conclusion** | At the end of a run the operator records pass / fail / inconclusive plus one sentence. `complete` means executed, not passed; the judgement stays human (D4). |
-| 3.2 | **Coverage matrix** | Test Plans shows one "latest run" per case; it should be case × sensor serial (× site) with the latest conclusion in each cell. |
-| 3.3 | **History filters and comparison** | Filter by sensor/serial, date range, has deviations, has acknowledgements; compare runs of one case side by side; capture trends over time. |
+| 3.1 `done` | **A run conclusion** | Ending a run records the operator's verdict - `pass` / `fail` / `inconclusive` plus one sentence - as `conclusion` / `conclusion_note` on the record and a `RunConcluded` event. `complete` means executed, not passed; the judgement stays human (D4). |
+| 3.2 `done` | **Coverage matrix** | Test Plans now shows one "latest run" per case × sensor serial, with the latest conclusion in each cell. |
+| 3.3 `done` | **History filters** | Filter by site, operator, sensor serial, status, conclusion, and "has deviations". Side-by-side run comparison of one case remains for a later batch. |
 | 3.4 | **Deviation loop** | On a step: "deviated in M of the last N runs", with a jump into Edit and a prefilled reason. |
 | 3.5 | **`outputs:` declaration** | A checklist declares the files it should produce, so `complete` means the data was collected. Touches `SPEC.md`, the validator, and the record. |
 
@@ -82,5 +82,5 @@ together.
 
 1. **Batch 1:** 0.1, 0.4, 1.1-1.3, and 0.2 + 0.3 started.
 2. **Batch 2:** 2.1-2.4, then 1.4, 2.5, 2.6.
-3. **Batch 3:** 3.1-3.3, alongside 4.1.
+3. **Batch 3:** 3.1-3.3, alongside 4.1 (done).
 4. **Batch 4:** 3.4, 3.5, 4.2-4.5.

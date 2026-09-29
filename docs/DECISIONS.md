@@ -602,3 +602,31 @@ Reasons:
 Cost: a setting that genuinely needs changing every run is one tap further. The Manage
 group hides three views the operator rarely needs, and none of them had a one-key shortcut
 to lose.
+
+## D28 - A run carries a verdict, separate from its status
+
+Decision: ending a run records the operator's own verdict - `pass`, `fail`, or
+`inconclusive` plus a one-sentence note - as `conclusion` / `conclusion_note` in the run
+record and a `RunConcluded` event. `status` (`complete` / `partial` / `aborted`) keeps
+meaning "the run was executed"; `conclusion` is the human judgement)Skip. The two are
+never derived from each other. The verdict is offered, never forced: a run can be ended
+without one.
+
+Reasons:
+
+- `complete` answers "did the run happen", not "did it go well". A completed run can be a
+  failure (all steps executed, the instrument out of spec). Before this, the only place
+  that distinction lived was a note nobody was forced to write. The coverage matrix
+  (3.2) and History filters (3.3) now read a cell the operator actually committed to.
+- Keeping it human is D4 applied to the run as a whole: the tool records `pass` /
+  `fail` / `inconclusive` because the operator says so, and never computes it from the
+  step results. A verdict derived from the steps would inherit every threshold the tool
+  does not own.
+- It is additive (a new event type, two optional front-matter keys), so a record written
+  before it exists reads unchanged and a run ended without one is still a valid record.
+  `conclusion` and `conclusion_note` are written together, like `status` and `ended`.
+
+Cost: ending a run now asks two more questions (verdict, then one sentence). The verdict
+is a one-tap choice; the sentence can be skipped by backing out, and skipping ends the run
+exactly as before. The alternative - a verdict computed from step status - is the D4 line
+the whole repository exists not to cross.

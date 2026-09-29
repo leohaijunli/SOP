@@ -14,7 +14,7 @@ fn the_summary_covers_every_test_case_and_every_run() {
     // A run whose checklist id a test case claims.
     run::start(&repo, "ground-walk-survey", "2026-09-28-site-01", "leo", "cfar", Some("test"))
         .unwrap();
-    run::end(&repo, "ground-walk-survey", "2026-09-28-site-01", "partial").unwrap();
+    run::end(&repo, "ground-walk-survey", "2026-09-28-site-01", "partial", None).unwrap();
 
     // The testcase repository: one plan, one case that has been run and one that has not.
     let cases = Scratch::empty("summary-cases");

@@ -1,19 +1,13 @@
 ---
-kind: checklist
-sop_id: uas-mag-preflight-gnss
-title: GNSS Lock and Time Sync
-order: 30
-version: 1
-status: active
-equipment:
-  - RTK GNSS base and rover
-  - UAS-MAG fluxgate
-  - Field laptop
+kind: snapshot
 ---
 
-Confirm the sensor is position- and time-tagged correctly before the payload logs start.
-
 ## Satellite fix  2
+
+```yaml step
+id: satellite-fix--2
+kind: check
+```
 
 - [ ] Fixed or float fix available
 - [ ] Enough satellites for the planned accuracy
@@ -21,6 +15,12 @@ Confirm the sensor is position- and time-tagged correctly before the payload log
 
 ## Time sync
 
+```yaml step
+id: time-sync
+kind: check
+```
+
 - [ ] Sensor clock synced to GNSS time
 - [ ] Clock offset within the survey's timing tolerance
 - [ ] Offset recorded in milliseconds
+
