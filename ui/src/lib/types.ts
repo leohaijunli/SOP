@@ -306,6 +306,7 @@ export interface RunStepView {
   reason: string | null;
   checklist: ChecklistItemView[];
   captures: RunCaptureView[];
+  outputs: string[];
   notes: string[];
   attachments: RunAttachmentView[];
 }

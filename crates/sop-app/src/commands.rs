@@ -784,6 +784,7 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
             reason: step_state.and_then(|s| s.reason.clone()),
             checklist,
             captures,
+            outputs: def.outputs.clone(),
             notes: step_state.map(|s| s.notes.clone()).unwrap_or_default(),
             attachments: step_state
                 .map(|state| state.attachments.iter().map(attachment_view).collect())

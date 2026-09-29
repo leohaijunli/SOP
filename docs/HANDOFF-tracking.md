@@ -35,6 +35,13 @@
   - 测试：`an_ended_run_seals_its_event_log_hash_into_the_record`。
   - 剩余：可选的 push 时 RFC 3161 时间戳（需联网，离线后补；git 提交时间不可信）。
 
+- **4. 步骤级 `outputs:` 声明**。
+  - `yaml step` 块新增可选 `outputs`（文件列表，如 `mag_raw.csv`）；解析进 `Step.outputs`，经 `ResolvedStepDef` 暴露到执行视图。
+  - 前端每步显示「Declared outputs」：已附着的打 ✓，缺失的标 ⚠ not attached。
+  - 校验器 `declared_outputs_present`：`complete` run 缺一个已声明输出即报错（"done" 与 "数据收齐" 一致）。
+  - 测试：core 2 个 + SPEC 文档。
+  - 剩余：authoring 编辑器可编辑 `outputs` 字段（可后续加）。
+
 - **6. 动态加步骤**。
   - `StepAdded` 事件（id 由 Rust 生成 `adhoc-NNN`，`next_adhoc_id`）；快照冻结不变；`RunState.added_steps` 记录。
   - `sop-repo::load` 重放后用 `merge_added_steps` 把 adhoc 步骤按 `after` 折叠进运行时 `defs`，执行视图与覆盖检查都能看见。
@@ -45,7 +52,6 @@
 
 ## 待办（未做 / 下一步）
 
-- **4. 步骤级 `outputs:` 声明**（改 SPEC/校验器/记录；与 2 互补，检查文件有没有 + 时间对不对）。
 - **7. 同一用例跨 run 对比**（历史视图加表 + 导出 CSV；校准类趋势）。
 - **8. 日志文件名自动生成**（附加时按 run 元数据给建议名）。
 - **5 的剩余**：可选的 push 时 RFC 3161 时间戳。

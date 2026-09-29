@@ -106,6 +106,8 @@ pub struct ResolvedStepDef {
     pub severity: Option<String>,
     pub kind: Option<String>,
     pub captures: Vec<CaptureDef>,
+    /// Files this step is declared to produce (e.g. `mag_raw.csv`).
+    pub outputs: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -236,6 +238,7 @@ fn seed_steps_from_snapshot(
             severity: step.severity.clone(),
             kind: step.key.as_ref().map(|key| key.as_str().to_owned()),
             captures,
+            outputs: step.outputs.clone(),
         });
     }
     Ok((shapes, defs))
@@ -263,6 +266,7 @@ fn merge_added_steps(defs: &mut Vec<ResolvedStepDef>, added: &[sop_core::run::Ad
                 severity: None,
                 kind: None,
                 captures: Vec::new(),
+                outputs: Vec::new(),
             },
         );
     }

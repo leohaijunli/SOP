@@ -898,6 +898,58 @@ pub fn complete_run_coverage(
     out
 }
 
+fn basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// A `complete` run must have each file each step declares it produces, attached to that
+/// step. "Done" and "data collected" are the same thing here (`item 4`).
+pub fn declared_outputs_present(
+    doc: &Document,
+    checklist_outputs: &[(String, Vec<String>)],
+) -> Diagnostics {
+    let mut out = Diagnostics::new();
+    if doc.front.str("status").flatten() != Some("complete") {
+        return out;
+    }
+    let logs: Vec<&serde_norway::Value> = match doc.front.get("logs") {
+        Some(serde_norway::Value::Sequence(items)) => items.iter().collect(),
+        Some(other) => vec![other],
+        None => Vec::new(),
+    };
+    let basename = basename;
+    for (step_id, declared) in checklist_outputs {
+        if declared.is_empty() {
+            continue;
+        }
+        let attached: Vec<String> = logs
+            .iter()
+            .filter_map(|entry| {
+                let map = entry.as_mapping()?;
+                if map.get("step").and_then(|v| v.as_str()) != Some(step_id.as_str()) {
+                    return None;
+                }
+                Some(map.get("path").and_then(|v| v.as_str())?.to_owned())
+            })
+            .collect();
+        let missing: Vec<String> = declared
+            .iter()
+            .filter(|output| !attached.iter().any(|path| basename(path) == **output))
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            out.error(
+                format!(
+                    "run is 'complete' but step '{step_id}' has no attached output for: {}",
+                    missing.join(", ")
+                ),
+                Some(1),
+            );
+        }
+    }
+    out
+}
+
 /// A step that ended (done / skipped / deviated) must record when it was opened. Without a
 /// `StepOpened` there is no start to its window, so the timeline cannot place it; the step
 /// was likely recorded by an older build, which is a warning rather than an error.
@@ -1072,4 +1124,31 @@ pub fn checklist_conditions(doc: &Document) -> Diagnostics {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn doc(text: &str) -> Document {
+        Document::parse(text).unwrap()
+    }
+
+    #[test]
+    fn a_complete_run_without_a_declared_output_is_an_error() {
+        let record = "---\nkind: run\nrun_id: r\nsop: s\nstatus: complete\nstarted: 2026-09-25T12:00:00Z\ndeviations_count: 0\nlogs:\n  - path: runs/s/2026-09-25-r/logs/other.csv\n    step: s1\n    sha256: \"a\"\n---\n";
+        let document = doc(record);
+        let outputs = vec![("s1".to_owned(), vec!["mag_raw.csv".to_owned()])];
+        let diags = declared_outputs_present(&document, &outputs);
+        assert_eq!(diags.error_count(), 1);
+    }
+
+    #[test]
+    fn a_declared_output_that_is_attached_passes() {
+        let record = "---\nkind: run\nrun_id: r\nsop: s\nstatus: complete\nstarted: 2026-09-25T12:00:00Z\ndeviations_count: 0\nlogs:\n  - path: runs/s/2026-09-25-r/logs/mag_raw.csv\n    step: s1\n    sha256: \"a\"\n---\n";
+        let document = doc(record);
+        let outputs = vec![("s1".to_owned(), vec!["mag_raw.csv".to_owned()])];
+        let diags = declared_outputs_present(&document, &outputs);
+        assert!(diags.error_count() == 0, "{diags:?}");
+    }
 }

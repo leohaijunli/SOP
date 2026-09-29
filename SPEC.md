@@ -135,6 +135,8 @@ id: static-noise            # required, unique
 kind: measure               # required
 severity: critical          # optional, default normal
 deprecated: false           # optional
+outputs:                    # optional files this step should produce
+  - mag_raw.csv
 captures:                   # optional list of values the operator records
   - key: sigma_nt
     label: Static noise (1 sigma)
@@ -142,6 +144,10 @@ captures:                   # optional list of values the operator records
     unit: nT
     required: true
 ```
+
+`outputs` lists the files this step is declared to produce. A `complete` run is only
+trustworthy when each declared output is attached to its step, which the validator checks
+against the run's `logs:` (`item 4`).
 
 Capture `type` is one of `text`, `number`, `integer`, `bool`, `select`, `datetime`,
 `duration`, `attach`.

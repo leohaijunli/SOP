@@ -1488,6 +1488,22 @@
           </div>
           <p class="muted">Skips and deviations require a reason; it is written into the record.</p>
 
+          {#if current.outputs.length}
+            <section class="outputs">
+              <h3>Declared outputs</h3>
+              {#each current.outputs as declared (declared)}
+                <div class="output">
+                  {#if current.attachments.some((a) => a.path.endsWith("/" + declared) || a.path.endsWith(declared))}
+                    <span class="ok">&#10003; {declared}</span>
+                  {:else}
+                    <span class="missing">&#9888; {declared} &mdash; not attached</span>
+                  {/if}
+                </div>
+              {/each}
+              <p class="muted">This step declares these files; a complete run is only trustworthy when each is attached.</p>
+            </section>
+          {/if}
+
           {#if current.attachments.length}
             <section class="attachments">
               <h3>Data saved for this step ({current.attachments.length})</h3>
@@ -1659,6 +1675,11 @@
     letter-spacing: .08em; color: var(--muted); margin-bottom: 6px;
   }
   .attachments h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .outputs h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .outputs .output { padding: 2px 0; font-size: 13px; font-family: var(--mono); }
+  .outputs .ok { color: var(--ok); }
+  .outputs .missing { color: var(--warn); }
+  .outputs p { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
   .attachment { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; padding: 2px 0; font-size: 13px; }
   .attachment .name { font-family: var(--mono); font-size: 12px; }
   .attachment .where { flex-basis: 100%; font-family: var(--mono); font-size: 11px; word-break: break-all; }

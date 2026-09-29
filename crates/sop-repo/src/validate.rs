@@ -408,6 +408,11 @@ fn check_run(
         );
     }
 
+    // A `complete` run must have collected each file its steps declare (`item 4`).
+    if let Some(outputs) = sop.and_then(|name| repo.run_snapshot_step_outputs(name, &stem)) {
+        report.extend(path, check::declared_outputs_present(doc, &outputs));
+    }
+
     // Time windows: a closed step needs a start, an end before its start is a clock that
     // went backwards, and an attached log has to overlap the window it was attached to.
     report.extend(path, check::missing_step_opened(doc));

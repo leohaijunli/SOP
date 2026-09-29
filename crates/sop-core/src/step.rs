@@ -163,6 +163,10 @@ pub struct Step {
     pub severity: Option<String>,
     pub deprecated: bool,
     pub captures: Vec<Capture>,
+    /// Files this step is declared to produce (e.g. `mag_raw.csv`). `complete` means the
+    /// run's record is only trustworthy when each declared output is present as an
+    /// attachment, so the validator checks them against the run's `logs:`.
+    pub outputs: Vec<String>,
     pub unknown_keys: Vec<String>,
     /// Every key written in the mapping, including ones whose value is null.
     pub present: Vec<String>,
@@ -384,6 +388,7 @@ pub fn parse_step(
         severity: as_string(&map, "severity"),
         deprecated: as_bool(&map, "deprecated").unwrap_or(false),
         captures,
+        outputs: string_sequence(&map, "outputs"),
         unknown_keys: unknown_keys(&map, STEP_KEYS),
         present: present_keys(&map),
         raw: map,

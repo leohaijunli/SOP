@@ -210,6 +210,8 @@ pub struct RunStepView {
     /// The step's checkbox items as frozen at run start, each with its tick state.
     pub checklist: Vec<ChecklistItemView>,
     pub captures: Vec<RunCaptureView>,
+    /// Files this step is declared to produce (e.g. `mag_raw.csv`).
+    pub outputs: Vec<String>,
     pub notes: Vec<String>,
     /// The data files attached to this step, in the order they were attached.
     pub attachments: Vec<RunAttachmentView>,

@@ -134,6 +134,7 @@ impl Document {
                     severity: Some("normal".to_owned()),
                     deprecated: false,
                     captures: Vec::new(),
+                    outputs: Vec::new(),
                     unknown_keys: Vec::new(),
                     present: vec!["id".to_owned(), "kind".to_owned()],
                     title: Some(heading.title.clone()),

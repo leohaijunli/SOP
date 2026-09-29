@@ -389,4 +389,25 @@ impl Repo {
                 .collect(),
         )
     }
+
+    /// The files each snapshot step declares it should produce, `(step id, outputs)`.
+    ///
+    /// The validator uses this to check a `complete` run actually collected each declared
+    /// output as an attachment; a checklist edit after the run must not change the answer.
+    pub fn run_snapshot_step_outputs(&self, sop_id: &str, run_id: &str) -> Option<Vec<(String, Vec<String>)>> {
+        let path = self
+            .root
+            .join("runs")
+            .join(sop_id)
+            .join(run_id)
+            .join("snapshot.md");
+        let text = self.read_text(&path).ok()?;
+        let doc = Document::parse(&text).ok()?;
+        Some(
+            doc.steps
+                .iter()
+                .filter_map(|step| step.id.clone().map(|id| (id, step.outputs.clone())))
+                .collect(),
+        )
+    }
 }
