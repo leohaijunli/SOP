@@ -23,6 +23,16 @@
     onView: (v: string) => void;
     onToggleHelp: () => void;
   } = $props();
+
+  // The manage views are behind one more tap on purpose: none of them should be reachable
+  // by a mis-tap on a run screen held in a gloved hand.
+  let manageOpen = $state(false);
+  const manageViews = ["authoring", "project", "settings"];
+
+  const choose = (next: string): void => {
+    manageOpen = false;
+    onView(next);
+  };
 </script>
 
 <header>
@@ -60,14 +70,18 @@
     {/if}
     <span class="spacer"></span>
     <span class="toolbar nav">
+      <button class:primary={view === "testplans"} onclick={() => onView("testplans")}>Test Plans</button>
       <button class:primary={view === "run"} onclick={() => onView("run")}>Run</button>
       <button class:primary={view === "history"} onclick={() => onView("history")}>History</button>
       <button class:primary={view === "browse"} onclick={() => onView("browse")}>Browse</button>
-        <button class:primary={view === "testplans"} onclick={() => onView("testplans")}>Test Plans</button>
-      <button class:primary={view === "authoring"} onclick={() => onView("authoring")}>Edit</button>
-      <button class:primary={view === "project"} onclick={() => onView("project")}>Project</button>
-      <button class:primary={view === "settings"} onclick={() => onView("settings")}>Settings</button>
-      <span class="divider-btn"></span>
+      <details class="manage" bind:open={manageOpen}>
+        <summary class:active={manageViews.includes(view)}>Manage</summary>
+        <div class="menu">
+          <button class:primary={view === "authoring"} onclick={() => choose("authoring")}>Edit SOP</button>
+          <button class:primary={view === "project"} onclick={() => choose("project")}>Project</button>
+          <button class:primary={view === "settings"} onclick={() => choose("settings")}>Settings</button>
+        </div>
+      </details>
     </span>
   </div>
   <div class="header-tools">
@@ -91,7 +105,21 @@
   }
   .toolbar { display: flex; gap: 6px; align-items: center; }
   .toolbar button { font-size: 12px; padding: 4px 10px; }
-  .divider-btn { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+  .manage { position: relative; }
+  .manage summary {
+    list-style: none; cursor: pointer; font-size: 12px; padding: 4px 10px;
+    border: 1px solid var(--line); border-radius: 4px; color: var(--ink); user-select: none;
+  }
+  .manage summary::-webkit-details-marker { display: none; }
+  .manage summary::after { content: " \25be"; color: var(--muted); }
+  .manage[open] summary, .manage summary.active { border-color: var(--accent); }
+  .manage .menu {
+    position: absolute; right: 0; top: calc(100% + 4px); z-index: 10;
+    display: flex; flex-direction: column; gap: 4px; padding: 6px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  }
+  .manage .menu button { text-align: left; white-space: nowrap; }
   button.active { border-color: var(--accent); }
   .badge {
     font-size: 11px; font-family: var(--mono); padding: 2px 8px; border-radius: 10px;

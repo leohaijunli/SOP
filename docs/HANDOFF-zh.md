@@ -1,7 +1,7 @@
 # 交接说明（中文）
 
 本文件记录**刚提交的这一批**改动、验证到什么程度、以及下一步怎么走。格式的权威
-说明是 `SPEC.md`，设计取舍编号索引是 `docs/DECISIONS.md`（Batch 1–2 补到 D26），功能优先级表
+说明是 `SPEC.md`，设计取舍编号索引是 `docs/DECISIONS.md`（Batch 1–2 补到 D27），功能优先级表
 是 `docs/FEATURES.md`，本批的评审与路线图是 `docs/REVIEW-engineer-workflow.md`（Phase 1–5，
 Phase 6/7 为建议）。中文操作教程在 `docs/USAGE-zh.md`。
 
@@ -13,7 +13,7 @@ Phase 6/7 为建议）。中文操作教程在 `docs/USAGE-zh.md`。
 ## 0. 最近两批（Batch 1：数据安全 + 录入正确；Batch 2：现场可用性）
 
 按 `docs/ROADMAP.md` 的 P0→P1→P2 顺序做的。**Batch 1 做完了 0.2 / 0.3 / 0.4 / 1.1–1.4；
-Batch 2 做完了 2.1–2.4**。0.1 需要真机，留在这里（§0.5）。Batch 2 的改动在 §0.6–§0.9。
+Batch 2 做完了 2.1–2.6**。0.1 需要真机，留在这里（§0.5）。Batch 2 的改动在 §0.6–§0.12。
 
 ### Batch 1
 
@@ -112,6 +112,25 @@ Batch 2 做完了 2.1–2.4**。0.1 需要真机，留在这里（§0.5）。Bat
 `record.md` 时共用一个临时文件，后一个 `rename` 报 "No such file"（`concurrent_writers`
 测试先过了一次，再跑就红——正是竞态）。临时名现在带进程号和自增计数（见 D23 末尾）。
 
+### 0.11 开始表单折叠（ROADMAP 2.5）
+
+- 表单上只留必填的 run id / operator / site；仪器、设备、条件、附加硬件收进
+  `<details class="more">`，摘要读作 `Same as last run: <machine>: …
+  · N equipment · M conditions`（`inheritedSummary` 这个 `$derived` 现算）。
+- 切换 checklist 时重跑 seeding（`untrack` 包住，避免自触发）：从该 checklist 自己上一次
+  run 回填，并决定这行是折叠还是展开；没有历史可沿用就自动展开。
+- 草稿 checklist 的 override reason 保持在折叠之外，因为它每次都必须填。
+- `newRun()`（"Start new run"）会重跑同一段 seeding，摘要行跟着刷新。
+
+### 0.12 导航重排（ROADMAP 2.6）
+
+- `ui/src/App.svelte` 的初始 `view` 从 `"run"` 改成 `"testplans"`——默认落在 Test Plans。
+- `Header.svelte` 顶栏顺序改成 **Test Plans / Run / History / Browse**；**Edit SOP /
+  Project / Settings** 收进右侧的 **Manage ▾** `<details>` 下拉，点击后自动收起。
+  三个"管理"视图当前激活时下拉标题高亮。
+- 相关中文文档（`docs/USAGE-zh.md`）里 "点工具栏 Project / Settings" 已改成
+  "Manage ▾ → …"。
+
 ## 1. 当前状态
 
 ```
@@ -127,8 +146,9 @@ git                         上一批已推送；Batch 1 见 §0，提交后一�
 **Batch 1–2 的验证边界**：Rust 侧（append / fsync / 并发 / git 超时）有测试；前端
 `capture.ts` / `dates.ts` 是纯函数但没有前端测试框架（`npm install` 装不了 vitest，见 §4），
 只过了 `svelte-check`。**应用内改变（模态、自动前进、恢复列表、异步命令）没有在真实
-窗口里点过**，`cargo check`/`npm run check`/`build` 只能保证类型和编译。真机三件事见 §0.5，
-另外建议按 §5 的清单把运行页完整走一遍。
+窗口里点过**（导航重排、开始表单折叠同样如此），`cargo check`/`npm run check`/`build`
+只能保证类型和编译。真机三件事见 §0.5，另外建议按 §5 的清单把运行页和导航完整走一遍：
+启动落在 Test Plans、Manage 下拉、以及开始表单的 "Same as last run: …" 这一行。
 
 **验证到哪一步**：Rust 侧全部有测试；前端只有 `svelte-check` + `build` 的静态验证，
 **没有在运行中的窗口里点过**。接手第一件事建议 `REBUILD_UI=1 ./run-app.sh`，按 §5 的

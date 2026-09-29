@@ -580,3 +580,25 @@ Reasons:
 Cost: a modal is more code than `prompt`, and auto-advance is a small surprise the first
 time (a jump to another checklist, or wrapping to the first open step). The alternative -
 leaving the operator to hunt for their place on a glare-washed screen - is worse.
+
+## D27 - The start form folds, and the bar lands on the day's work
+
+Decision: the start form keeps only run id, operator, and site visible; the instrument,
+equipment, and conditions fold into a `<details>` whose summary reads "Same as last run:
+…". The window opens on Test Plans, the navigation bar is Test Plans / Run / History /
+Browse, and Edit / Project / Settings live behind a "Manage" dropdown.
+
+Reasons:
+
+- A run's identity is who, where, and which run. The instrument and conditions are almost
+  always the same as the last run of the same checklist, so they are a review, not a
+  form to fill. Folding them removes the fields a gloved hand can change by accident, and
+  the one-line summary still shows what is being carried. It opens by itself when there
+  is nothing to inherit.
+- The first thing a session does is choose what to run, not edit a checklist. Landing on
+  Test Plans means the run screen and the content editor are both one deliberate tap
+  away, and the editor cannot be reached by a mis-tap while holding the laptop.
+
+Cost: a setting that genuinely needs changing every run is one tap further. The Manage
+group hides three views the operator rarely needs, and none of them had a one-key shortcut
+to lose.

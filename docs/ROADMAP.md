@@ -15,9 +15,9 @@ supersedes both as the list of what is left.
 
 Invariants: no database, no change of UI framework, and Markdown plus event sourcing stays.
 
-Progress: **batches 1 and 2 are merged** - 0.2, 0.3, 0.4, 1.1-1.4, and 2.1-2.4 are done
+Progress: **batches 1 and 2 are merged** - 0.2, 0.3, 0.4, 1.1-1.4, and 2.1-2.6 are done
 (they carry a `done` mark below). 0.1 has no code to change but still needs a real Ubuntu
-machine, so it stays open. Next up is 2.5-2.6, then P3.
+machine, so it stays open. Next is P3, starting with 3.1 (a run conclusion).
 
 ## P0 - Data safety
 
@@ -50,8 +50,8 @@ together.
 | 2.2 `done` | **Commands must not block the window** `[verify]` | Every command carries `#[tauri::command(async)]` (Tauri's blocking thread pool); git commands have a kill-deadline (15s local, 30s network); startup skips the pull when `navigator.onLine` is false. |
 | 2.3 `done` | **Progress and navigation** | A "N / M done" bar; marking done advances to the next open step; opening a step focuses its first empty capture; the End:complete blocker is spelled out with a jump button. |
 | 2.4 `done` | **A global list of unfinished runs** | The start form lists every in-progress run across checklists; resuming one on another checklist switches to it through the shell. |
-| 2.5 | **Collapse the start form** | Only run id, operator, and site are required; the rest folds into a "same as last time: …" line. |
-| 2.6 | **Reorder navigation** | Land on Test Plans; order plan / run / history; move Edit, Project, and Settings under "Manage" so a field tap cannot change the SOP. |
+| 2.5 `done` | **Collapse the start form** | Run id / operator / site stay visible; instrument, equipment, and conditions fold under "Same as last run: …" (re-seeded per checklist, opened when there is no history). |
+| 2.6 `done` | **Reorder navigation** | Lands on Test Plans; the bar is Test Plans / Run / History / Browse; Edit / Project / Settings sit behind a "Manage" dropdown. |
 | 2.7 | **Multi-file attachments and a size warning** | One file per dialog today; add multi-select, drag and drop, and a total-size warning per run. |
 | 2.8 | **Emit `StepOpened`** | The event type exists and the window never writes it. One line buys per-step timing. |
 

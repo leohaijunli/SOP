@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { htmlOf } from "../lib/md.svelte";
   import { text } from "../lib/text";
   import { localDateTime } from "../lib/dates";
@@ -64,6 +64,9 @@
   let operator = $state("");
   let site = $state("");
   let overrideReason = $state("");
+  // True once a previous run of this checklist has pre-filled the form, so the instrument
+  // and conditions can start folded and the operator only reviews an inherited line.
+  let sawPreviousRun = $state(false);
   // The instrument is picked from a list rather than typed: `sensors` is a machine
   // setting, seeded with the models the lab owns, so a run id and a record only ever
   // carry a name the operator chose from the same menu.
@@ -300,16 +303,30 @@
   $effect(() => {
     if (checklist === seeded) return;
     seeded = checklist;
-    equipmentChecked = equipment;
-    declaredValues = {};
-    extraHardware = "";
-    sensorModel = "";
-    sensorSerial = "";
-    customModel = "";
-    customSerial = "";
-    sensorTouched = false;
-    runIdTouched = false;
-    editingRunId = false;
+    // The seeding reads and writes a lot of form state; `untrack` keeps this effect
+    // reacting only to the checklist changing, not to the values it just wrote.
+    untrack(() => {
+      equipmentChecked = equipment;
+      declaredValues = {};
+      extraHardware = "";
+      sensorModel = "";
+      sensorSerial = "";
+      customModel = "";
+      customSerial = "";
+      sensorTouched = false;
+      runIdTouched = false;
+      editingRunId = false;
+      // Point the folded section at this checklist's own last run, and open it when
+      // there is nothing to inherit.
+      const m = manifest;
+      const last = m
+        ? (m.runs ?? [])
+            .filter((entry) => api.text(entry.sop) === sop)
+            .sort((a, b) => api.text(b.started).localeCompare(api.text(a.started)))[0]
+        : undefined;
+      sawPreviousRun = Boolean(last);
+      if (last && m) seedFromRun(last, m);
+    });
   });
 
   // When the plan advances to the next case the checklist changes while this component
@@ -811,7 +828,10 @@
         .slice()
         .sort((a, b) => api.text(b.started).localeCompare(api.text(a.started)));
       const last = newestFirst.find((r) => api.text(r.sop) === sop) ?? newestFirst[0];
-      if (last && !run) seedFromRun(last, m);
+      if (last && !run) {
+        seedFromRun(last, m);
+        sawPreviousRun = true;
+      }
 
       const runs = m.runs
         .filter((r) => api.text(r.sop) === sop)
@@ -835,6 +855,25 @@
   // left open somewhere else used to be invisible unless its checklist happened to be
   // the one on screen.
   const unfinished = $derived((manifest?.runs ?? []).filter((entry) => !api.text(entry.status)));
+
+  // One line describing what the folded part of the start form is carrying, so the
+  // operator can see it is a repeat without opening it.
+  const inheritedSummary = $derived(
+    (() => {
+      const parts: string[] = [];
+      const model = usingOtherModel() ? customModel : sensorModel;
+      const serial = usingOtherModel() || sensorSerial === "__new__" ? customSerial : sensorSerial;
+      if (model || serial) parts.push([model, serial].filter(Boolean).join(" "));
+      if (equipmentChecked.length) parts.push(`${equipmentChecked.length} equipment`);
+      const conditions =
+        Object.values(declaredValues).filter((value) => (value ?? "").trim()).length +
+        conditionsText.split("\n").filter((line) => line.trim()).length;
+      if (conditions) parts.push(`${conditions} condition${conditions === 1 ? "" : "s"}`);
+      const extra = extraHardware.split("\n").filter((line) => line.trim()).length;
+      if (extra) parts.push(`${extra} extra hardware`);
+      return parts.join(" \u00b7 ");
+    })()
+  );
 
   const loadRun = async (sopId: string, id: string): Promise<void> => {
     try {
@@ -988,6 +1027,28 @@
       {#if isDraft}
         <p class="warn">This checklist is a draft. It cannot start without an override reason.</p>
       {/if}
+      <div class="field">
+        <label for="run-id">run id</label>
+        {#if editingRunId}
+          <div class="field-row">
+            <input id="run-id" bind:value={runId} oninput={() => (runIdTouched = true)} />
+            {#if runIdTouched}
+              <button type="button" onclick={() => { runIdTouched = false; editingRunId = false; }}>Use suggested</button>
+            {/if}
+          </div>
+        {:else}
+          <div class="field-row">
+            <code class="id-preview">{runId || "…"}</code>
+            <button type="button" onclick={() => (editingRunId = true)}>Change</button>
+          </div>
+        {/if}
+        <span class="desc">
+          Filed as <span class="mono">runs/{sop}/{runId || "…"}/</span>, beside this
+          checklist's other runs. The name is built from the date and the instrument so a
+          run reads back what it was taken with; change it only if you want your own.
+        </span>
+      </div>
+
       <div class="field-row">
         <div class="field"><label for="operator">operator</label><input id="operator" placeholder="your name" bind:value={operator} /></div>
         <div class="field">
@@ -1001,7 +1062,23 @@
         </div>
       </div>
 
-      <h3>Instrument</h3>
+      {#if isDraft}
+        <div class="field">
+          <label for="override-reason">override reason (required to start a draft)</label>
+          <input id="override-reason" bind:value={overrideReason} />
+        </div>
+      {/if}
+
+      <details class="more" open={!sawPreviousRun}>
+        <summary>
+          {#if inheritedSummary}
+            Same as last run: <span class="mono">{inheritedSummary}</span>
+          {:else}
+            Instrument, equipment, and conditions
+          {/if}
+        </summary>
+
+        <h3>Instrument</h3>
       <div class="field-row">
         <div class="field">
           <label for="sensor-model">sensor model</label>
@@ -1036,35 +1113,6 @@
         <div class="field"><label for="sensor-firmware">firmware</label><input id="sensor-firmware" placeholder="optional" bind:value={sensorFirmware} /></div>
       </div>
       <span class="desc">The list comes from the <span class="mono">sensors</span> setting, and a serial entered here is added to it.</span>
-
-      <div class="field">
-        <label for="run-id">run id</label>
-        {#if editingRunId}
-          <div class="field-row">
-            <input id="run-id" bind:value={runId} oninput={() => (runIdTouched = true)} />
-            {#if runIdTouched}
-              <button type="button" onclick={() => { runIdTouched = false; editingRunId = false; }}>Use suggested</button>
-            {/if}
-          </div>
-        {:else}
-          <div class="field-row">
-            <code class="id-preview">{runId || "…"}</code>
-            <button type="button" onclick={() => (editingRunId = true)}>Change</button>
-          </div>
-        {/if}
-        <span class="desc">
-          Filed as <span class="mono">runs/{sop}/{runId || "…"}/</span>, beside this
-          checklist's other runs. The name is built from the date and the instrument so a
-          run reads back what it was taken with; change it only if you want your own.
-        </span>
-      </div>
-
-      {#if isDraft}
-        <div class="field">
-          <label for="override-reason">override reason (required to start a draft)</label>
-          <input id="override-reason" bind:value={overrideReason} />
-        </div>
-      {/if}
 
       <h3>Equipment and conditions</h3>
       {#if equipment.length}
@@ -1118,6 +1166,7 @@
         </label>
         <textarea id="conditions" rows="2" placeholder="weather: clear&#10;temp_c: 12" bind:value={conditionsText}></textarea>
       </div>
+      </details>
       {#if runIdConflict}
         <p class="err">
           a run named <span class="mono">{runId.trim()}</span> already exists for this
@@ -1404,6 +1453,13 @@
   .unfinished ul { list-style: none; margin: 6px 0 0; padding: 0; }
   .unfinished li { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; padding: 4px 0; }
   .unfinished button { font-size: 12px; }
+  .more { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+  .more > summary {
+    cursor: pointer; font-size: 12px; color: var(--muted); list-style-position: inside;
+    padding: 2px 0;
+  }
+  .more > summary:hover { color: var(--ink); }
+  .more[open] > summary { margin-bottom: 10px; color: var(--ink); }
   .condition-field { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
   .condition-field input { max-width: 28ch; }
   .exec-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 300px minmax(0, 1fr); }

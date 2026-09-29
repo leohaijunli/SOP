@@ -46,6 +46,8 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | The window never blocks on a command | Every Tauri command runs on the blocking thread pool; `git` has a kill-deadline, and startup skips the pull when offline | done |
 | Progress and navigation | A "N / M done" bar; marking done advances to the next open step; a step focuses its first empty capture; the complete-run blocker is named with a jump button | done |
 | Unfinished runs are visible everywhere | The start form lists every in-progress run in the working copy, across checklists, and resuming one switches to its checklist | done |
+| The start form asks only what is required | Run id, operator, and site are visible; the instrument, equipment, and conditions fold into a "Same as last run: …" line | done |
+| Field-safe navigation | The window lands on Test Plans, orders the bar plan / run / history / browse, and keeps Edit, Project, and Settings behind a Manage dropdown | done |
 | Expected range shown before entry | A capture with an `expected` value shows "expected -5 … +5 nT" while it is still empty | done |
 | Numeric captures are typed | `number`/`integer` captures render a numeric input; a value that is not a number is called out, not silently accepted | done |
 | Required captures are a reminder | Marking a step done counts the empty `required` captures, asks for a reason, and records it; the operator can always continue | done |

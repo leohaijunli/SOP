@@ -238,12 +238,15 @@ field-sop &
 
 ### 视图切换
 
-顶部工具栏有四个视图按钮：**Run / Edit / Project / Settings**，以及两个开关 **Steps**（左栏步骤
-显隐）和 **Help**（右侧帮助面板，F1 切换）。
+窗口**默认落在 Test Plans**（早上先挑今天要跑什么，而不是先改内容）。顶部工具栏顺序是
+**Test Plans / Run / History / Browse**；改内容、改项目、改设置收在右侧的 **Manage ▾**
+下拉里（**Edit SOP / Project / Settings**）——现场误触一下不会改到 SOP。
+
+Browse 视图下还有两个开关 **Steps**（左栏步骤显隐）和 **Help**（右侧帮助面板，F1 切换）。
 
 ### 1. Run 视图（运行/浏览）
 
-默认视图，即操作员照着做的那一屏：
+从 Test Plans 点 Run，或者从计划里的 Start / Run next 进入，即操作员照着做的那一屏：
 
 - **左栏**：选 checklist（下拉）+ 过滤框 + 步骤列表。每个步骤前的圆点颜色是 severity
   （info 蓝 / normal 亮 / critical 红）。
@@ -284,13 +287,13 @@ step**。然后保存 → 切回 Run 视图，左栏就能看到新步骤。改�
 
 ### 3. Project 视图（项目身份）
 
-点工具栏 **Project** 进入。显示 `project.md` 的路径和每个字段，直接改值后点 Save。
+点工具栏 **Manage ▾ → Project** 进入。显示 `project.md` 的路径和每个字段，直接改值后点 Save。
 写入同样先校验再落盘；改成非法值会被拒绝并报错。字段下方的说明文字解释了这个项目名
 "是内容不是偏好"的设计。
 
 ### 4. Settings 视图（应用设置）
 
-点工具栏 **Settings** 进入：
+点工具栏 **Manage ▾ → Settings** 进入：
 
 - **Working copy**：输入路径点 **Open** 打开另一个 field-sop 仓库；选择会被记住，
   下次启动落在上次所在仓库。
@@ -791,3 +794,7 @@ conditions:
   点 **Resume** 就接着做；如果那条 run 属于别的 checklist，界面会先切过去。
 - **原因输入**：Skip / Deviate / Acknowledge / 空必填项提醒都弹应用内的对话框，常用理由
   是一个按钮点一下，也可以在文本框里自己写；`Enter` 提交，`Shift+Enter` 换行，`Esc` 取消。
+- **开始表单折叠（Batch 2）**：表单上只留必填的 **run id / operator / site**；
+  仪器、设备、条件和附加硬件收在 **Same as last run: …** 一行里——从这次 checklist 的
+  上一次 run 回填，一行摘要写明沿用了什么。没有历史可沿用（或换了 checklist）时这行会
+  自动展开，标题变成 "Instrument, equipment, and conditions"。要改就点开它。

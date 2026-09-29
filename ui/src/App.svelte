@@ -28,7 +28,8 @@
   // They are not part of the repository, so they are merged back in after every manifest
   // refresh and would otherwise be lost whenever the view changes.
   let externalChecklists: ChecklistEntry[] = $state([]);
-  let view: View = $state("run");
+  // Land on Test Plans: the morning starts by picking what to run, not by editing content.
+  let view: View = $state("testplans");
   let helpOpen = $state(true);
   // Steps are always enabled on the Browse view; there is no toggle for them.
   const showSteps = true;
