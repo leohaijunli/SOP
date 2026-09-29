@@ -1,6 +1,6 @@
 # Handoff — 记录对齐 / 跟踪价值（下一会话从这里接起）
 
-> 本会话按「建议的落地顺序」实现了 base + 1 + 2 + 6 + 3 + 5(events 封存) + timeline 导出，并把 4/7/8 与杂项记录在案。
+> 本会话按「建议的落地顺序」实现了 base + 1 + 2 + 3 + 4 + 5(events 封存) + 6 + 7(数据层) + 8 + timeline 导出 + next-case 修复，并把 5(RFC3161)/History 表/authoring outputs 编辑器列入待办。
 > 写入时间：2026-09-29。所有 Rust 测试通过（18 suites, 0 fail），`svelte-check` 0 error，UI build 通过。已 push 到 origin/main。
 
 ## 已完成（本会话）
