@@ -844,6 +844,7 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
             .map(attachment_view)
             .collect(),
         record_path: loaded.record_path.display().to_string(),
+        suggested_log_name: Some(run::suggest_log_name(&loaded, "")),
     }
 }
 

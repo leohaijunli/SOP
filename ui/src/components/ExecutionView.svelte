@@ -1479,6 +1479,9 @@
             {/if}
             <span class="divider-btn"></span>
             <button onclick={() => void attach(current)}>Attach data / photo</button>
+            {#if run?.suggestedLogName}
+              <span class="muted" title="Recommended by LOGS.md naming">&#128196; {run.suggestedLogName}</span>
+            {/if}
             <button onclick={() => void mark()} title="Drop a timestamped, labelled marker (m)">Mark <span class="key">m</span></button>
             {#if run?.markers.length}
               <button onclick={() => (showMarkers = !showMarkers)} title="Show the markers dropped this run">

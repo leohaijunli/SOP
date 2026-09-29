@@ -131,6 +131,9 @@ pub struct RunView {
     pub run_notes: Vec<String>,
     pub run_attachments: Vec<RunAttachmentView>,
     pub record_path: String,
+    /// A suggested name for the next data file to attach (`LOGS.md` naming), or `None`
+    /// when the run has no site/date to name it from.
+    pub suggested_log_name: Option<String>,
 }
 
 /// The instrument's clock as recorded at run start.

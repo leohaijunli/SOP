@@ -254,6 +254,7 @@ export interface RunView {
   runNotes: string[];
   runAttachments: RunAttachmentView[];
   recordPath: string;
+  suggestedLogName: string | null;
 }
 
 /// The instrument's clock as recorded at run start.
