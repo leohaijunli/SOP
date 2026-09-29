@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import * as api from "../lib/api";
   import { text } from "../lib/api";
+  import { localDateTime } from "../lib/dates";
   import type { Manifest, RunEntry, TestPlan } from "../lib/types";
 
   let {
@@ -219,7 +220,7 @@
       {#each rows as r (text(r.run_id))}
         <tr>
           <td class="mono">{text(r.run_id)}</td>
-          <td>{text(r.started)}</td>
+          <td title={text(r.started)}>{localDateTime(r.started)}</td>
           <td>{text(r.site)}</td>
           <td>{text(r.operator)}</td>
           <td><span class="badge {text(r.status)}">{text(r.status) || "in progress"}</span></td>

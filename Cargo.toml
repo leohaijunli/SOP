@@ -6,7 +6,8 @@ members = ["crates/sop-core", "crates/sop-repo", "crates/sop-cli", "crates/sop-a
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-rust-version = "1.88"
+# `File::lock` (the per-run event-log lock) entered std in 1.89.
+rust-version = "1.89"
 
 [workspace.dependencies]
 sop-core = { path = "crates/sop-core" }

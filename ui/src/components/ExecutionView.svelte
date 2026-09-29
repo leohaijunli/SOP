@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { htmlOf } from "../lib/md.svelte";
   import { text } from "../lib/text";
+  import { expectsNumber, expectedHint, expectedOk, formatProblem, missingRequired } from "../lib/capture";
   import MarkdownEditor from "./MarkdownEditor.svelte";
   import * as api from "../lib/api";
   import type { Drift, Manifest, RunEntry, RunStepView, RunView } from "../lib/types";
@@ -105,6 +106,9 @@
   // Set when the run has ended, so a prominent confirmation is shown over the finished
   // run instead of a small line of text the operator may miss.
   let ended = $state<{ status: string; runId: string } | null>(null);
+  // A pending request to end the run. Ending is not undoable, so the first press only
+  // arms this and the second confirms.
+  let endPending = $state<string | null>(null);
 
   // Clear the finished-run confirmation and go back to the start-a-run form, re-seeded
   // from the checklist rather than left as the finished run left it.
@@ -499,22 +503,39 @@
   // A short, stable form of a hash or commit for a tooltip or an inline label.
   const short = (value: string | null): string => (value ? value.slice(0, 8) : "?");
 
-  const end = (status: string): Promise<void> => {
+  // Ending cannot be undone, so a press first arms a confirmation bar and only a second
+  // press writes the event. `blockedReason` is the `complete` coverage check, kept so the
+  // confirmation bar can explain why that status is not offered.
+  const blockedReason = $derived(
+    (() => {
+      if (!run) return null;
+      const open = run.steps.filter((s) => !["done", "deviated"].includes(s.status));
+      if (open.length === 0) return null;
+      return `${open.length} step(s) are skipped or have no outcome; a complete run cannot ` +
+        `contain those. Finish or deviate them, or end as partial/aborted`;
+    })()
+  );
+
+  const requestEnd = (status: string): void => {
     // A `complete` run must account for every step and cannot contain a skipped one:
     // both are validation errors (`check::complete_run_coverage`), so ending a run this
     // way would write a record that then blocks every content edit. A deviation is
     // allowed - the step happened, just not as written.
-    if (status === "complete" && run) {
-      const open = run.steps.filter((s) => !["done", "deviated"].includes(s.status));
-      if (open.length > 0) {
-        say(
-          `${open.length} step(s) are skipped or have no outcome; a complete run cannot ` +
-            `contain those. Finish or deviate them, or end as partial/aborted`,
-          true
-        );
-        return Promise.resolve();
-      }
+    if (status === "complete" && blockedReason) {
+      say(blockedReason, true);
+      return;
     }
+    endPending = status;
+  };
+
+  const cancelEnd = (): void => {
+    endPending = null;
+  };
+
+  const confirmEnd = (): Promise<void> => {
+    const status = endPending;
+    endPending = null;
+    if (!status) return Promise.resolve();
     // Queued with the events, so ending cannot overtake a capture still being written.
     queue = queue.then(async () => {
       if (!run) return;
@@ -531,23 +552,47 @@
     return queue;
   };
 
+  // Finishing a step. Done is not a verdict on the data, so a required capture that is
+  // still empty is a reminder, not a block: the operator confirms and the reason (the
+  // list of empty fields) is written with the status. A manual entry still wins.
+  const markDone = async (step: RunStepView): Promise<void> => {
+    const missing = missingRequired(step.captures);
+    let reason: string | null = null;
+    if (missing.length) {
+      const typed = prompt(
+        `${missing.length} required capture(s) are empty: ${missing.join(", ")}. ` +
+          `Finish anyway? Add a reason to record (blank cancels):`
+      );
+      if (!typed) return;
+      reason = `done with ${missing.length} required capture(s) empty (${missing.join(", ")}): ${typed.trim()}`;
+    }
+    await emit({ type: "StepStatusChanged", step: step.id, status: "done", reason });
+  };
+
   // The keyboard contract in `help/app-basics.md`: field use is one-handed, so every
   // action on the run screen has a key. `F1` and `/` belong to the shell, so they are
-  // left alone here; `ctrl+enter` finishes the run from inside a field, where the
-  // operator's hands usually are.
+  // left alone here. `ctrl+enter` asks to finish the run, but only when the focus is not
+  // in a field - inside the note editor it must insert a newline, and a stray chord must
+  // not end a run that cannot be reopened.
   const onKey = (event: KeyboardEvent): void => {
     const target = event.target as HTMLElement;
     const inField = target.matches("input, select, textarea");
-    if (event.ctrlKey && event.key === "Enter") {
+    if (endPending) {
       event.preventDefault();
-      void end("complete");
+      if (event.key === "Escape") cancelEnd();
+      return;
+    }
+    if (event.ctrlKey && event.key === "Enter") {
+      if (inField) return;
+      event.preventDefault();
+      requestEnd("complete");
       return;
     }
     if (inField || event.key === "F1" || event.key === "/" || !run || !current) return;
     const index = run.steps.indexOf(current);
     if (event.key === " ") {
       event.preventDefault();
-      void setStatus(current, "done");
+      void markDone(current);
     } else if (event.key === "j" && index < run.steps.length - 1) {
       currentStep = index + 1;
     } else if (event.key === "k" && index > 0) {
@@ -574,7 +619,7 @@
     if (next) {
       next.focus();
     } else if (current) {
-      void setStatus(current, "done");
+      void markDone(current);
     }
   };
 
@@ -596,19 +641,6 @@
       return r ? r.steps[currentStep] ?? null : null;
     })()
   );
-
-  function expectedOk(value: string, expected: unknown): boolean {
-    if (expected === null || expected === undefined) return true;
-    if (typeof expected === "object" && ("min" in (expected as object) || "max" in (expected as object))) {
-      const n = Number(value);
-      if (Number.isNaN(n)) return true;
-      const e = expected as { min?: number; max?: number };
-      if (e.min !== undefined && n < e.min) return false;
-      if (e.max !== undefined && n > e.max) return false;
-      return true;
-    }
-    return text(expected) === value;
-  }
 
   // Seed the start form from a run the same lab took before. Values are only filled
   // where the operator has not typed, and a declared condition's value goes to its own
@@ -712,6 +744,17 @@
 
   {#if message}
     <p class={isError ? "err" : "muted"}>{message}</p>
+  {/if}
+
+  {#if endPending}
+    <div class="end-confirm" role="alertdialog" aria-label="Confirm ending the run">
+      <span>
+        End the run as <strong>{endPending}</strong>? A run that has ended cannot be
+        reopened.
+      </span>
+      <button class="primary" onclick={() => void confirmEnd()}>Yes, end {endPending}</button>
+      <button onclick={cancelEnd}>Cancel (Esc)</button>
+    </div>
   {/if}
 
   {#if ended}
@@ -959,11 +1002,11 @@
         <hr class="divider" />
         <button
           disabled={run!.steps.some((s) => !["done", "deviated"].includes(s.status))}
-          title="A complete run cannot contain a skipped step or one with no outcome"
-          onclick={() => void end("complete")}
+          title={blockedReason ?? "End the run as complete"}
+          onclick={() => requestEnd("complete")}
         >End: complete</button>
-        <button onclick={() => void end("partial")}>End: partial</button>
-        <button onclick={() => void end("aborted")}>End: aborted</button>
+        <button onclick={() => requestEnd("partial")}>End: partial</button>
+        <button onclick={() => requestEnd("aborted")}>End: aborted</button>
       </nav>
 
       {#if current}
@@ -984,6 +1027,9 @@
                 <div class="capture">
                   <label for={cap.key}>{cap.label ?? cap.key}{#if cap.required}<span class="req">*</span>{/if}</label>
                   <div class="hint mono">{cap.key} &middot; {cap.type}{#if cap.unit} {cap.unit}{/if}</div>
+                  {#if expectedHint(cap)}
+                    <div class="expected-hint">expected: {expectedHint(cap)}</div>
+                  {/if}
                   <div class="field-row">
                     {#if cap.type === "select" && cap.options?.length}
                       <select id={cap.key} onkeydown={onCaptureKey} value={cap.value ?? ""} onchange={(e) => void recordCapture(current, cap.key, (e.currentTarget as HTMLSelectElement).value)}>
@@ -998,6 +1044,16 @@
                         <option value="true">true</option>
                         <option value="false">false</option>
                       </select>
+                    {:else if expectsNumber(cap.type)}
+                      <input
+                        id={cap.key}
+                        onkeydown={onCaptureKey}
+                        type="number"
+                        inputmode="decimal"
+                        step={cap.type === "integer" ? "1" : "any"}
+                        placeholder={cap.value ?? "enter value"}
+                        onchange={(e) => void recordCapture(current, cap.key, (e.currentTarget as HTMLInputElement).value)}
+                      />
                     {:else}
                       <input
                         id={cap.key}
@@ -1008,6 +1064,9 @@
                       />
                     {/if}
                   </div>
+                  {#if formatProblem(cap.value, cap.type)}
+                    <div class="expected">&#9888; {formatProblem(cap.value, cap.type)} &mdash; retype and press Enter</div>
+                  {/if}
                   {#if cap.value}
                     <div class="muted">recorded: {cap.value}</div>
                   {/if}
@@ -1038,7 +1097,7 @@
           {/if}
 
           <div class="toolbar">
-            <button onclick={() => void setStatus(current, "done")}>Mark done</button>
+            <button onclick={() => void markDone(current)}>Mark done</button>
             <button onclick={() => void setStatus(current, "skipped")}>Skip</button>
             <button onclick={() => void setStatus(current, "deviated")}>Deviate</button>
             {#if current.status !== "open"}
@@ -1159,7 +1218,14 @@
   .warn { color: var(--warn); }
   .step-detail .captures h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
   .task { display: block; padding: 2px 0; }
+  .expected-hint { color: var(--muted); font-size: 12px; margin-top: 2px; }
   .expected { color: var(--warn); font-size: 12px; margin-top: 6px; }
+  .end-confirm {
+    display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    margin: 0 16px 8px; padding: 10px 12px; border-radius: 6px;
+    background: var(--quote); border: 1px solid var(--warn); color: var(--warn);
+  }
+  .end-confirm strong { text-transform: uppercase; }
   .divider-btn { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
   .notes h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
   .note-body {

@@ -280,6 +280,102 @@ fn a_torn_final_log_line_is_recovered() {
 }
 
 #[test]
+fn a_log_truncated_anywhere_replays_as_a_prefix() {
+    // The append-only promise: an interrupted write can only ever cut the final line, so
+    // replay from any byte length must yield the events written before the cut - never a
+    // half-applied event and never a hard failure.
+    let scratch = Scratch::new("run-truncate-prefix");
+    let repo = scratch.repo();
+    let run_id = "2026-09-25-truncate";
+    start(&repo, run_id);
+    for (key, value) in [("a", "1"), ("b", "2")] {
+        run::record(
+            &repo,
+            SOP,
+            run_id,
+            &RunEvent::CaptureRecorded {
+                at: "t".into(),
+                step: "cond-location".into(),
+                key: format!("cap_{key}"),
+                value: value.into(),
+                unit: None,
+            },
+        )
+        .unwrap();
+    }
+
+    let rel = "runs/ground-walk-survey/2026-09-25-truncate/events.jsonl";
+    let full = scratch.read(rel);
+    // Cut inside the last event's JSON, leaving a partial line with no newline.
+    let cut = full.trim_end().len() - 5;
+    scratch.write(rel, &full[..cut]);
+
+    let loaded = run::load(&repo, SOP, run_id).unwrap();
+    let captures = &loaded.state.step("cond-location").unwrap().captures;
+    assert_eq!(
+        captures["cap_a"].value, "1",
+        "an event written before the cut survives"
+    );
+    assert!(
+        !captures.contains_key("cap_b"),
+        "the event the cut landed inside is dropped whole, never half-applied"
+    );
+}
+
+#[test]
+fn concurrent_writers_do_not_lose_events() {
+    // The app and the CLI can both be pointed at one run. The per-run lock plus O_APPEND
+    // has to make every event land exactly once, with no interleaved line.
+    let scratch = Scratch::new("run-concurrent-append");
+    let repo = scratch.repo();
+    let run_id = "2026-09-25-concurrent";
+    start(&repo, run_id);
+
+    const WRITERS: usize = 8;
+    std::thread::scope(|scope| {
+        for writer in 0..WRITERS {
+            let repo = &repo;
+            scope.spawn(move || {
+                run::record(
+                    repo,
+                    SOP,
+                    run_id,
+                    &RunEvent::CaptureRecorded {
+                        at: "t".into(),
+                        step: "cond-location".into(),
+                        key: format!("cap_{writer}"),
+                        value: writer.to_string(),
+                        unit: None,
+                    },
+                )
+                .unwrap();
+            });
+        }
+    });
+
+    let rel = "runs/ground-walk-survey/2026-09-25-concurrent/events.jsonl";
+    let text = scratch.read(rel);
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    assert_eq!(
+        lines.len(),
+        WRITERS + 2,
+        "RunStarted + the draft-override note + one event per writer, no torn or dropped line:\n{text}"
+    );
+    for line in &lines {
+        serde_json::from_str::<RunEvent>(line).expect("every line is one whole event");
+    }
+
+    let loaded = run::load(&repo, SOP, run_id).unwrap();
+    let captures = &loaded.state.step("cond-location").unwrap().captures;
+    for writer in 0..WRITERS {
+        assert_eq!(captures[&format!("cap_{writer}")].value, writer.to_string());
+    }
+}
+
+#[test]
 fn the_rendered_record_matches_the_events() {
     let scratch = Scratch::new("run-crosscheck");
     let repo = scratch.repo();

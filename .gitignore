@@ -6,6 +6,9 @@ dist/manifest.json
 /target
 node_modules/
 
+# Atomic-write siblings (a crash can leave one behind).
+*.tmp
+
 # Machine-local settings written by the desktop app.
 .field-sop/
 

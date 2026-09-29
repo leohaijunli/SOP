@@ -10,7 +10,7 @@
 //! The human-reviewable record file `runs/<sop_id>/<run_id>.md` is written from
 //! `record.md` at the end of the run; the run directory holds the working log.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -269,6 +269,46 @@ fn write_events(path: &Path, events: &[RunEvent]) -> Result<(), RunError> {
     Ok(())
 }
 
+/// Append one event to the log as a single line, holding the run's lock so a concurrent
+/// writer cannot interleave with it.
+///
+/// The log is the source of truth, so it is the one file that must never be rewritten:
+/// a whole-file rewrite can lose every earlier event if it is interrupted. `O_APPEND`
+/// makes the offset-and-write one step, the advisory lock serialises the app and the CLI
+/// (and two windows), and `sync_data` means a crash can only ever cost the event being
+/// written - the events before it are already on the medium.
+fn append_event(path: &Path, event: &RunEvent) -> Result<(), RunError> {
+    let line = serde_json::to_string(event).map_err(|error| RunError::Io {
+        path: path.to_path_buf(),
+        source: std::io::Error::other(error.to_string()),
+    })?;
+    let mut log = OpenOptions::new()
+        .read(true)
+        .append(true)
+        .open(path)
+        .map_err(|source| RunError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    // Released when `log` drops, so an error below cannot leave the run locked.
+    log.lock().map_err(|source| RunError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    log.write_all(line.as_bytes())
+        .and_then(|()| log.write_all(b"\n"))
+        .and_then(|()| log.sync_data())
+        .map_err(|source| RunError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    log.unlock().map_err(|source| RunError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(())
+}
+
 /// Load a run: read the log, seed step shapes from the snapshot, replay to a state.
 pub fn load(repo: &Repo, sop_id: &str, run_id: &str) -> Result<LoadedRun, RunError> {
     let dir = run_dir(repo, sop_id, run_id);
@@ -451,24 +491,15 @@ pub fn start_with_meta(
 }
 
 /// Append one event to the run and regenerate the record.
+///
+/// The event is appended to `events.jsonl` (see [`append_event`]); the rendered
+/// `record.md` is a convenience, rebuilt from the log afterwards and never the truth.
 pub fn record(repo: &Repo, sop_id: &str, run_id: &str, event: &RunEvent) -> Result<LoadedRun, RunError> {
     let loaded = load(repo, sop_id, run_id)?;
     let mut next = loaded.state.clone();
     sop_core::run::apply(&mut next, event).map_err(RunError::Core)?;
-    let mut events = Vec::new();
-    {
-        let bytes = fs::read(&loaded.events_path).map_err(|source| RunError::Io {
-            path: loaded.events_path.clone(),
-            source,
-        })?;
-        for line in String::from_utf8_lossy(&bytes).lines() {
-            if let Ok(event) = serde_json::from_str::<RunEvent>(line) {
-                events.push(event);
-            }
-        }
-    }
-    events.push(event.clone());
-    write_events(&loaded.events_path, &events)?;
+
+    append_event(&loaded.events_path, event)?;
 
     let reloaded = load(repo, sop_id, run_id)?;
     write_record(&reloaded)?;

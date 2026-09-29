@@ -6,8 +6,8 @@
 //! lost work. Writing to a sibling and renaming means a reader sees the old file or the
 //! new one, never a fragment of either.
 
-use std::fs;
-use std::io;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -22,7 +22,8 @@ pub struct WriteError {
 
 /// Write `text` by way of a sibling temporary file, then rename it into place.
 pub fn write(path: &Path, text: &str) -> Result<(), WriteError> {
-    if let Some(parent) = path.parent()
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+    if let Some(parent) = parent
         && let Err(source) = fs::create_dir_all(parent)
     {
         return Err(WriteError {
@@ -32,14 +33,41 @@ pub fn write(path: &Path, text: &str) -> Result<(), WriteError> {
     }
 
     let temporary = sibling_temporary(path);
-    fs::write(&temporary, text).map_err(|source| WriteError {
+    // The rename is atomic for a *reader*, but only the physical write is durable across
+    // a power cut: without the fsync a record can be renamed into place while still
+    // sitting in the page cache, and come back empty or half-written.
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&temporary)
+        .map_err(|source| WriteError {
+            path: temporary.clone(),
+            source,
+        })?;
+    file.write_all(text.as_bytes())
+        .map_err(|source| WriteError {
+            path: temporary.clone(),
+            source,
+        })?;
+    file.sync_all().map_err(|source| WriteError {
         path: temporary.clone(),
         source,
     })?;
+    drop(file);
     fs::rename(&temporary, path).map_err(|source| WriteError {
         path: path.to_path_buf(),
         source,
-    })
+    })?;
+    // Durably record the rename itself, so the directory cannot come back without the
+    // entry. A platform that will not open a directory for sync is not fatal, so the
+    // error is dropped rather than losing work already safely written.
+    if let Some(parent) = parent
+        && let Ok(directory) = File::open(parent)
+    {
+        let _ = directory.sync_all();
+    }
+    Ok(())
 }
 
 /// A temporary path beside the real one, so the rename cannot cross a filesystem.

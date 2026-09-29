@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import * as api from "../lib/api";
   import { text } from "../lib/api";
+  import { localDay } from "../lib/dates";
   import type { Manifest, RunEntry, TestPlan, TestCase } from "../lib/types";
 
   let {
@@ -185,7 +186,7 @@
                     </td>
                     <td class="mono">{c.step_count}</td>
                     <td class="mono">{runs.length}</td>
-                    <td class="mono">{last ? text(last.started).slice(0, 10) : "\u2014"}</td>
+                    <td class="mono" title={last ? text(last.started) : ""}>{last ? localDay(last.started) : "\u2014"}</td>
                     <td>
                       <span class="state {last ? (text(last.status) || "open") : "none"}">{runLabel(last)}</span>
                       {#if last && text(last.operator)}<span class="muted">{text(last.operator)}</span>{/if}

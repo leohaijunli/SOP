@@ -1,27 +1,88 @@
 # 交接说明（中文）
 
 本文件记录**刚提交的这一批**改动、验证到什么程度、以及下一步怎么走。格式的权威
-说明是 `SPEC.md`，设计取舍编号索引是 `docs/DECISIONS.md`（本批补到 D21），功能优先级表
+说明是 `SPEC.md`，设计取舍编号索引是 `docs/DECISIONS.md`（Batch 1 补到 D24），功能优先级表
 是 `docs/FEATURES.md`，本批的评审与路线图是 `docs/REVIEW-engineer-workflow.md`（Phase 1–5，
 Phase 6/7 为建议）。中文操作教程在 `docs/USAGE-zh.md`。
 
-> 本批两个提交，都在本地 `main` 上、**尚未推送**：先是 Phase 1–3 + note 编辑器（`4766953`），
-> 然后是 Markdown 渲染器 Rust 化（见 §2.7）。工作副本里剩下的未提交内容只有 `runs/` 下
-> App 正在生成/删除的 run。上一版交接（D15–D19 那一批）同样在历史里：
-> `git show 94dae4d:docs/HANDOFF-zh.md`。
+> 上一批两个提交（`4766953` Phase 1–3 + note 编辑器，`d0f37cc` Markdown 渲染器 Rust 化）
+> 都已推送到 `origin/main`。**当前这一批（Batch 1：数据安全 + 录入正确）见 §0**。工作副本
+> 里未提交的只剩 `runs/` 下 App 正在生成/删除的 run，**不要顺手提交**。上一版交接
+> （D15–D19 那一批）在历史里：`git show 94dae4d:docs/HANDOFF-zh.md`。
+
+## 0. 最新一批（Batch 1：数据安全 + 录入正确）
+
+按 `docs/ROADMAP.md` 的 P0/P1 顺序做的第一批。**做完了 0.2 / 0.3 / 0.4 / 1.1–1.4**，
+0.1 需要真机，留在这里（§0.4）。
+
+### 0.1 事件日志改成真正的 append（ROADMAP 0.2）
+
+- `crates/sop-repo/src/run.rs`：新增 `append_event`。`run::record` 不再读全文件再用
+  `atomic::write` 整体重写，而是 `OpenOptions::append(true)` 追加一行，
+  写前 `File::lock()` 上 per-run 锁，写完 `sync_data()` 落盘再解锁。
+- 因为 `File::lock` 是 1.89 才进 std 的，workspace 的 `rust-version` 从 `1.88` 抬到
+  `1.89`（见到 D23）。
+- 结果：日志在**任意字节**被截断，replay 都只丢最后一条被截断的事件，前面的照常回放；
+  App 和 CLI（或两个窗口）并发写同一个 run 不会互相覆盖、不会写出半个 JSON 行。
+- 新增测试（`crates/sop-repo/tests/run.rs`）：
+  `a_log_truncated_anywhere_replays_as_a_prefix`、`concurrent_writers_do_not_lose_events`
+  （8 个线程并写，断言每条完整事件都在、且每行都能解析）。
+
+### 0.2 原子写补 fsync（ROADMAP 0.3）
+
+- `crates/sop-repo/src/atomic.rs`：临时文件改成 `OpenOptions` 打开 → `write_all` →
+  `sync_all` → `rename` → 再 fsync 父目录。断电后 rename 落盘、内容完整。
+- `.gitignore` 加 `*.tmp`（崩溃可能留下原子写的临时文件）。
+- 新增测试 `crates/sop-repo/tests/atomic.rs`：写完不留临时文件、父目录会被创建、覆盖写
+  用的是全新内容。
+
+### 0.3 结束 run 要先确认（ROADMAP 0.4）
+
+- `ui/src/components/ExecutionView.svelte`：`end()` 拆成 `requestEnd` / `confirmEnd` /
+  `cancelEnd`，中间多一条确认条（`endPending`，`Esc` 取消）。三个 `End:` 按钮都改走它。
+- `ctrl+enter` 只在**光标不在输入框**时才请求结束；在备注编辑器里它仍然是"保存备注"
+  （`MarkdownEditor` 自己处理并 `preventDefault`，窗口层再靠 `inField` 兜底），不会误结束。
+- `End: complete` 置灰时的 `title` 直接说明是哪几步挡着（复用 `blockedReason`）。
+
+### 0.4 录入正确性（ROADMAP 1.1–1.4）
+
+- 新增纯函数模块 `ui/src/lib/capture.ts`：`expectsNumber` / `expectedHint` / `expectedOk`
+  / `formatProblem` / `missingRequired`。范围判断从组件里搬出来，`expectedOk` 修掉了
+  `NaN → true`（`12a` 不再被当成合格）。
+- 新增 `ui/src/lib/dates.ts`：`localDay` / `localDateTime`。History 和 Test Plans 显示
+  操作员本地时间（UTC 原值放在 `title` 里），修掉"傍晚的 run 显示成第二天、和 run id 对不上"。
+- `ExecutionView.svelte`：capture 输入框上方常显 `expected:` 提示；`number`/`integer`
+  用 `type="number" inputmode="decimal"`（整数 `step="1"`）；格式不对时显示警告；
+  `Mark done` / `space` / capture 最后一个 `Enter` 都走新的 `markDone`——若有空的
+  `required` capture，先提示"还有 N 项为空"并要求写一句原因，写进 `StepStatusChanged.reason`
+  （`done` 带 reason 是格式允许的，不需要改 SPEC），操作员仍可取消。
+
+### 0.5 真机待办（ROADMAP 0.1，`[verify]`）
+
+以下三件事只是静态阅读推断，**没有在真机上验证**，接手后请在 Ubuntu + `.deb` 上跑一遍
+并把结论补进本文件：
+
+1. `prompt()` / `confirm()` 在 Tauri 打包后的 webview 里是否正常弹出（Batch 2 的 2.1
+   会用应用内模态替换它们；如果已经不能用，2.1 的优先级要提前）。
+2. 断网启动是否会冻结：启动时无条件 `git pull` 且没有超时（对应 2.2）。
+3. 录入中途 `kill -9`、以及拔电之后，run 能否恢复（现在有 append + fsync + 截断容错，
+   预期可以，但需要实测确认）。
 
 ## 1. 当前状态
 
 ```
-cargo test                  15 个测试目标 / 145 个测试全部通过
+cargo test                  18 个测试目标 / 161 个测试全部通过（Batch 1 新增 4 条）
 cargo check -p sop-app      通过
 sop validate                0 error(s), 0 warning(s)；若 App 里有一条已结束但没记任何结果的
                             run，会多一条 "no step results" warning，这是预期行为
-cargo test                  新增 md::tests（12 条）后仍然全绿
 cd ui && npm run check      0 errors, 0 warnings
 cd ui && npm run build      通过（ui/dist 已重建，且被 git 跟踪）
-git                         本批已提交到本地 main（未推送）
+git                         上一批已推送；Batch 1 见 §0，提交后一并推送
 ```
+
+**Batch 1 的验证边界**：Rust 侧（append / fsync / 并发）有测试；前端 `capture.ts` /
+`dates.ts` 是纯函数但没有前端测试框架（`npm install` 装不了 vitest，见 §4），
+只过了 `svelte-check`。真机三件事见 §0.5。
 
 **验证到哪一步**：Rust 侧全部有测试；前端只有 `svelte-check` + `build` 的静态验证，
 **没有在运行中的窗口里点过**。接手第一件事建议 `REBUILD_UI=1 ./run-app.sh`，按 §5 的

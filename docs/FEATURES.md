@@ -40,7 +40,13 @@ Legend: **P0-a** spec, **P1** core parsing, **P2** core events, **P3** CLI, **P4
 | Block starting a `draft` checklist | Override is possible and recorded as an event with a reason | done |
 | Fully offline | The app makes no network calls of its own; publishing hands the push to `git` (D17) | done |
 | Checklist items shown as the author wrote them | The run screen ticks the words in the file, not `Item 1` | done |
-| Keyboard-first operation | Field use is often one-handed and gloved; the run screen binds every key `help/app-basics.md` documents (`space`, `s`, `d`, `n`, `j`, `k`, `enter`, `ctrl+enter`) | done |
+| Keyboard-first operation | Field use is often one-handed and gloved; the run screen binds `space`, `s`, `d`, `n`, `j`, `k`, `enter`, and `ctrl+enter` (which asks to end the run and does not fire inside a field) | done |
+| Ending a run is confirmed | `ctrl+enter` and the End buttons only arm a confirmation bar; an ended run cannot be reopened, and a mis-press must not end one | done |
+| Expected range shown before entry | A capture with an `expected` value shows "expected -5 … +5 nT" while it is still empty | done |
+| Numeric captures are typed | `number`/`integer` captures render a numeric input; a value that is not a number is called out, not silently accepted | done |
+| Required captures are a reminder | Marking a step done counts the empty `required` captures, asks for a reason, and records it; the operator can always continue | done |
+| The event log is append-only | `events.jsonl` is appended with `O_APPEND`, fsynced per event, and locked per run, so a crash or a second process cannot lose earlier events | done |
+| Dates show in local time | History and Test Plans render the operator's local day/time (the run id uses the local date); the raw UTC stays in a tooltip | done |
 | Resume after a crash | Replay the log; the run reopens in its last consistent state | done |
 | Run a whole test plan | **Run plan** walks the plan's cases in `order`, carries the start configuration from one case to the next, records `plan`/`case`, and offers **Next case**; the plans view shows each case's last run and a **Run next** | done |
 | The start form remembers the last run | Operator, site, sensor, and conditions are seeded from the previous run of the checklist; a value the operator typed is never overwritten | done |

@@ -485,3 +485,45 @@ Cost: rendering as the operator types is a Tauri round trip (local, and cached b
 text), and the preview page depends on the manifest carrying HTML. Both are cheaper than
 two implementations of the same rule. The port also fixed a real bug the JS copy had: an
 ordered list was closed with `</ul>`.
+
+## D23 - The event log is appended, never rewritten
+
+Decision: `run::record` appends one line to `events.jsonl` with `O_APPEND`, holds a
+per-run advisory lock (`File::lock`) while it writes, and calls `sync_data` before
+returning. The whole-file rewrite through `atomic::write` is gone from this path; the
+rendered `record.md` is still regenerated for a human to read, but it is never the truth.
+
+Reasons:
+
+- The log is the source of truth (DESIGN 6.2), so the one thing a crash must not be able
+  to do is truncate it. A read-all / append / rewrite is an obvious way to lose every
+  earlier event if the machine dies mid-write; append-only means a crash can cost only the
+  event in flight, and replay already ignores a torn final line.
+- The app and the CLI can both be pointed at the same run - and two windows can. On POSIX
+  a small `O_APPEND` write is atomic, but the lock makes the read-lock-append step one
+  critical section, so a value the operator just typed and a CLI event cannot interleave.
+- `sync_data` per event is the price of "written" meaning on the medium. Events are small
+  and one happens per operator action, so the cost is invisible next to the keypress.
+
+Cost: a run's `events.jsonl` can no longer be edited by hand and re-saved as a whole; a
+correction is a new event (the `Reopen` path already works this way). This bumped the
+declared Rust floor to 1.89 for `File::lock`.
+
+## D24 - Ending a run asks first, and a completeness gap is a reminder
+
+Decision: ending a run goes through a confirmation bar (`requestEnd` / `confirmEnd`).
+`ctrl+enter` only arms it and only when the focus is not in a field, so it cannot fire
+from the note editor, where `ctrl+enter` means "save note". Marking a step done with
+empty `required` captures asks for a reason and writes it with the status; the operator
+can always continue.
+
+Reasons:
+
+- An ended run cannot be reopened, and the run screen is used one-handed with gloves; a
+  single stray chord must not be able to finish a session's work.
+- `required` was only an asterisk. A nudge is a completeness check, not a judgement about
+  the data, so it does not cross the "the tool never judges" line (D4) - the reason is
+  recorded and the operator decides.
+- Showing the `expected` range before a value is typed, and rejecting a non-number for a
+  `number` capture, moves the check to the moment the operator can act on it. The
+  judgement on an out-of-range value is still theirs (the `Acknowledge` path, D3/D4).
