@@ -1,7 +1,7 @@
 # Handoff — 记录对齐 / 跟踪价值（下一会话从这里接起）
 
-> 本会话按「建议的落地顺序」实现了 base + 1 + 2 + 6，并把 3/4/5/7/8 与杂项记录在案。
-> 写入时间：2026-09-29。所有 Rust 测试通过（18 suites, 0 fail），`svelte-check` 0 error，UI build 通过。
+> 本会话按「建议的落地顺序」实现了 base + 1 + 2 + 6 + 3 + 5(events 封存) + timeline 导出，并把 4/7/8 与杂项记录在案。
+> 写入时间：2026-09-29。所有 Rust 测试通过（18 suites, 0 fail），`svelte-check` 0 error，UI build 通过。已 push 到 origin/main。
 
 ## 已完成（本会话）
 
@@ -15,12 +15,25 @@
   - `render_record` 输出 `## Timeline` 表（步骤/标题/开始/结束/状态/时长），并把 `opened_at`/`ended_at` 写进每个 `yaml result` 块；`timeline_csv()` 输出同表 CSV。
   - 校验器：`missing_step_opened`（警告）、`time_regression`（ended<opened 报错）。
   - 测试：core 4 个 + repo `a_closed_step_renders_its_window_in_the_record_and_csv`。
+  - timeline.csv 导出已接到 CLI：`sop run timeline <sop> <run_id>`。
 
 - **2. 附加日志读取时间范围 + 重叠校验**。
   - `AttachmentAdded`/`Attachment` 增可选 `t_min`/`t_max`/`row_count`；`sop-repo::attach` 扫描 CSV 时间列（`timestamp*`/`time*`/`utc*`/`gps_time*`），解析 ISO-8601 或 epoch，失败则省略字段（不报错，符合 D6）。
   - 记录 `logs:` 段写出时间范围/行数，并新增 `step:`（当挂在步骤下）以支持步骤级重叠校验。
   - 校验器：`log_overlap`（日志时间与所属步骤或 run 窗口无交集 → 警告）。
   - 测试：`attaching_a_csv_with_a_time_column_records_its_range`、`attaching_a_file_with_no_time_column_omits_the_range`。
+
+- **3. 时钟偏差和现场标记**。
+  - `ClockInfo`（basis / instrument_time / offset_secs），run 开始时记录仪器时钟（`RunStarted.clock`，前端 start 表单输入 + 计算 offset）。
+  - `FieldMarker` 事件（工具打时间戳的带标签时刻）；`run_marker` 命令 + 前端 `m` 热键 + 标记列表显示。
+  - 记录前件 `clock:` / `markers:` + 正文 `## Field markers` 节。
+  - 测试：`a_run_keeps_its_clock_and_dropped_markers`。
+
+- **5. 时间戳可靠性（部分）**。
+  - 事件时间倒退校验（`time_regression`）已完成。
+  - run 结束时把 `events.jsonl` 的 sha256 封存进记录前件 `events_sha256:`；校验器在日志被改后报错（tamper 检测）。
+  - 测试：`an_ended_run_seals_its_event_log_hash_into_the_record`。
+  - 剩余：可选的 push 时 RFC 3161 时间戳（需联网，离线后补；git 提交时间不可信）。
 
 - **6. 动态加步骤**。
   - `StepAdded` 事件（id 由 Rust 生成 `adhoc-NNN`，`next_adhoc_id`）；快照冻结不变；`RunState.added_steps` 记录。
@@ -32,11 +45,10 @@
 
 ## 待办（未做 / 下一步）
 
-- **3. 时钟偏差和现场标记**（新输入框 + 一条带标签时间戳事件的热键；不复杂）。
 - **4. 步骤级 `outputs:` 声明**（改 SPEC/校验器/记录；与 2 互补，检查文件有没有 + 时间对不对）。
-- **5. 时间戳可靠性**：事件时间倒退校验已完成（`time_regression`）；还差 run 结束时把 `events.jsonl` 的 sha256 写进记录（一行），以及可选的 push 时 RFC 3161（需联网，离线后补）。
 - **7. 同一用例跨 run 对比**（历史视图加表 + 导出 CSV；校准类趋势）。
 - **8. 日志文件名自动生成**（附加时按 run 元数据给建议名）。
+- **5 的剩余**：可选的 push 时 RFC 3161 时间戳。
 
 ## 杂项 / 已知缺口
 

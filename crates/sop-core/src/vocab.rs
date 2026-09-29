@@ -72,7 +72,11 @@ pub const RUN_FRONT_KEYS: &[&str] = &[
     "sensor",
     "hardware",
     "conditions",
+    "clock",
+    "markers",
     "logs",
+    "events_sha256",
+    "added_steps",
     "deviations_count",
 ];
 

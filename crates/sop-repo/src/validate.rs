@@ -425,6 +425,26 @@ fn check_run(
         check_log_entry(repo, path, stem_of(path).as_str(), entry, report);
     }
 
+    // A record that sealed its event log at end must match the log on disk; a log edited
+    // afterwards no longer matches and is an error, not a soft warning.
+    if let Some(sealed) = doc.front.str("events_sha256").flatten() {
+        let record = repo.relpath(path);
+        let run_dir = record.strip_suffix(".md").unwrap_or(&record);
+        let events_path = repo.resolve(&format!("{run_dir}/events.jsonl"));
+        if let Ok(bytes) = std::fs::read(&events_path) {
+            let actual = hex(&sha256(&bytes));
+            if sealed.to_ascii_lowercase() != actual {
+                report.error(
+                    path,
+                    format!(
+                        "the event log was changed after this record was sealed: sealed {sealed}, now {actual}"
+                    ),
+                    Some(1),
+                );
+            }
+        }
+    }
+
     check_links(repo, path, doc, report);
 }
 

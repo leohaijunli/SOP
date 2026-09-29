@@ -909,3 +909,29 @@ fn a_run_keeps_its_clock_and_dropped_markers() {
     assert!(record.contains("Field markers"), "{record}");
     assert!(record.contains("start of the third line"), "{record}");
 }
+
+#[test]
+fn an_ended_run_seals_its_event_log_hash_into_the_record() {
+    let scratch = Scratch::new("seal-events");
+    let repo = scratch.repo();
+    start(&repo, RUN);
+    run::record(&repo, SOP, RUN, &RunEvent::StepOpened { at: "2026-09-25T12:00:00Z".into(), step: "cond-location".into() }).unwrap();
+    run::record(&repo, SOP, RUN, &RunEvent::StepStatusChanged { at: "2026-09-25T12:01:00Z".into(), step: "cond-location".into(), status: "done".into(), reason: None }).unwrap();
+    run::end(&repo, SOP, RUN, "partial", None).unwrap();
+
+    let record = scratch.read("runs/ground-walk-survey/2026-09-25-test-run.md");
+    assert!(record.contains("events_sha256:"), "{record}");
+
+    // The sealed hash matches the log on disk, so validation stays clean.
+    let (failed, report) = scratch.validate();
+    assert!(!failed, "a run with a matching seal must validate:\n{report}");
+
+    // Tamper with the log: the seal no longer matches, and validation reports an error.
+    let events = scratch.path("runs/ground-walk-survey/2026-09-25-test-run/events.jsonl");
+    let mut text = scratch.read("runs/ground-walk-survey/2026-09-25-test-run/events.jsonl");
+    text.push_str("{\"type\":\"NoteAdded\",\"at\":\"2026-09-25T12:02:00Z\",\"step\":null,\"text\":\"forged\"}\n");
+    std::fs::write(&events, text).unwrap();
+    let (failed, report) = scratch.validate();
+    assert!(failed, "a tampered log must be reported");
+    assert!(report.contains("was changed after this record was sealed"), "{report}");
+}

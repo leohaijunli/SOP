@@ -596,7 +596,7 @@ sensor: meta.sensor.clone().filter(|sensor| !sensor.is_empty()),
     // until `end` re-commits the finished run.
     let record_file = loaded_run.record_file.clone();
     if !record_file.exists() {
-        let text = run_record_text(&loaded_run.state, &loaded_run.steps, run_id);
+        let text = run_record_text(&loaded_run.state, &loaded_run.steps, run_id, None);
         atomic::write(&record_file, &text).map_err(|error| RunError::Io {
             path: record_file,
             source: error.source,
@@ -777,7 +777,7 @@ fn same_bytes(path: &Path, bytes: &[u8]) -> bool {
 }
 
 /// The front matter for the run record file, so the record is a valid `runs/...` file.
-fn run_file_front(state: &RunState, run_id: &str) -> String {
+fn run_file_front(state: &RunState, run_id: &str, events_sha256: Option<&str>) -> String {
     let mut out = String::from("---\nkind: run\n");
     out.push_str(&format!("run_id: {}\n", scalar(run_id)));
     if let Some(value) = &state.sop { out.push_str(&format!("sop: {value}\n")); }
@@ -871,6 +871,9 @@ fn run_file_front(state: &RunState, run_id: &str) -> String {
     if !state.added_steps.is_empty() {
         out.push_str(&format!("added_steps: {}\n", state.added_steps.len()));
     }
+    if let Some(hash) = events_sha256 {
+        out.push_str(&format!("events_sha256: {}\n", scalar(hash)));
+    }
     out.push_str(&format!("deviations_count: {}\n", state.deviations()));
     out.push_str("---\n\n");
     out
@@ -887,8 +890,13 @@ fn scalar(value: &str) -> String {
 
 /// The run record file: front matter plus the rendered record. This is the file the
 /// validator and the manifest read, so it has to be a well-formed `runs/...` record.
-fn run_record_text(state: &RunState, steps: &[RecordStep], run_id: &str) -> String {
-    let mut out = run_file_front(state, run_id);
+fn run_record_text(
+    state: &RunState,
+    steps: &[RecordStep],
+    run_id: &str,
+    events_sha256: Option<&str>,
+) -> String {
+    let mut out = run_file_front(state, run_id, events_sha256);
     out.push_str(&render_record(state, steps));
     out
 }
@@ -918,12 +926,20 @@ pub fn end(
         });
     }
     let loaded = record_events(repo, sop_id, run_id, &events)?;
-    let text = run_record_text(&loaded.state, &loaded.steps, run_id);
+    let hash = events_sha256_of(&loaded.events_path);
+    let text = run_record_text(&loaded.state, &loaded.steps, run_id, hash.as_deref());
     atomic::write(&loaded.record_file, &text).map_err(|error| RunError::Io {
         path: loaded.record_file.clone(),
         source: error.source,
     })?;
     Ok(loaded)
+}
+
+/// The sha256 of a run's event log, so the record can seal the exact bytes it was ended
+/// with - a log edited afterwards no longer matches the sealed hash.
+fn events_sha256_of(events_path: &Path) -> Option<String> {
+    let bytes = fs::read(events_path).ok()?;
+    Some(sha256_hex(&bytes))
 }
 
 /// The record document for a run, exactly as [`end`] commits it.
@@ -933,7 +949,8 @@ pub fn end(
 /// what was recorded against it. `end` writes it to the repository; export prints it.
 pub fn record_text(repo: &Repo, sop_id: &str, run_id: &str) -> Result<String, RunError> {
     let loaded = load(repo, sop_id, run_id)?;
-    Ok(run_record_text(&loaded.state, &loaded.steps, run_id))
+    let hash = events_sha256_of(&loaded.events_path);
+    Ok(run_record_text(&loaded.state, &loaded.steps, run_id, hash.as_deref()))
 }
 
 /// The experiment record for a run, from wherever it can still be read.
