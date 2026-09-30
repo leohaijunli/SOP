@@ -11,12 +11,13 @@
 //! `record.md` at the end of the run; the run directory holds the working log.
 
 use std::fs::{self, OpenOptions};
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 use sop_core::run::{
-    render_record, Attachment, ClockInfo, RecordStep, RunEvent, RunState, SensorIdentity, StepState,
+    render_record, render_notes, Attachment, AttachmentKind, ClockInfo, RecordStep, RunEvent, RunState,
+    SensorIdentity, StepState,
 };
 use sop_core::Document;
 use thiserror::Error;
@@ -490,6 +491,13 @@ fn write_record(loaded: &LoadedRun) -> Result<(), RunError> {
         path: loaded.record_path.clone(),
         source: error.source,
     })?;
+    // `notes.md` is a generated convenience: every note for the run in one place. The
+    // event log stays the source of truth, so it is rebuilt here, never edited.
+    let notes = render_notes(&loaded.state);
+    atomic::write(&loaded.dir.join("notes.md"), &notes).map_err(|error| RunError::Io {
+        path: loaded.dir.join("notes.md"),
+        source: error.source,
+    })?;
     Ok(())
 }
 
@@ -658,13 +666,53 @@ fn record_events(
         sop_core::run::apply(&mut next, event).map_err(RunError::Core)?;
     }
 
+    // Whether the run was already ended before this call, and how long its log was then.
+    // A late addition (a log, photo, note) is applied to an ended run; `end` itself is
+    // applied to a run that is still open, so only the former refreshes the committed
+    // record - `end` writes that record with the seal itself.
+    let was_ended = loaded.state.is_ended();
+    let pre_len = fs::metadata(&loaded.events_path).map(|meta| meta.len()).unwrap_or(0);
+
     for event in &stamped {
         append_event(&loaded.events_path, event)?;
     }
 
     let reloaded = load(repo, sop_id, run_id)?;
     write_record(&reloaded)?;
+    if was_ended {
+        refresh_committed_record(&reloaded, run_id, pre_len)?;
+    }
     Ok(reloaded)
+}
+
+/// Re-write the committed record `runs/<sop>/<run_id>.md` after a post-run addition.
+///
+/// The seal (the sha256 of the event log as it was when the run ended) is kept from the
+/// record that is already there, so the events added afterwards do not invalidate it. A
+/// record written before prefix sealing only carries `events_sha256`; the length it
+/// covered is the log length just before this addition, which is the length to seal.
+fn refresh_committed_record(
+    reloaded: &LoadedRun,
+    run_id: &str,
+    pre_len: u64,
+) -> Result<(), RunError> {
+    let seal = match read_seal_fields(&reloaded.record_file) {
+        // A record already carrying a prefix seal keeps it verbatim.
+        Some((Some(bytes), sha256)) => Seal { bytes, sha256 },
+        // A legacy record sealed the whole file, whose length was `pre_len`.
+        Some((None, sha256)) => Seal { bytes: pre_len, sha256 },
+        // No seal at all: seal the log as it stood before this addition.
+        None => Seal {
+            bytes: pre_len,
+            sha256: hash_first_n(&reloaded.events_path, pre_len).unwrap_or_default(),
+        },
+    };
+    let text = run_record_text(&reloaded.state, &reloaded.steps, run_id, Some(&seal));
+    atomic::write(&reloaded.record_file, &text).map_err(|error| RunError::Io {
+        path: reloaded.record_file.clone(),
+        source: error.source,
+    })?;
+    Ok(())
 }
 
 /// A suggested name for an attached data file, from the run's own metadata
@@ -697,15 +745,31 @@ pub fn suggest_log_name(loaded: &LoadedRun, stream: &str) -> String {
 
 /// Copy a file into the run's logs, hash it, and record an event for it.
 ///
-/// The copy keeps the file's own name (`logs/mag_raw.csv`), so the run directory reads
-/// like the folder the data came from; the recorded `sha256` is the identity. A second
-/// file with the same name gets `-2`, `-3` and so on, and re-attaching a file the run
-/// already holds is a no-op rather than a second copy.
+/// The default kind: a log. [`attach_kind`] is the same operation for a photo or any
+/// other file, which is what the History view uploads after a run has ended.
 pub fn attach(
     repo: &Repo,
     sop_id: &str,
     run_id: &str,
     step: Option<&str>,
+    source: &Path,
+) -> Result<sop_core::run::Attachment, RunError> {
+    attach_kind(repo, sop_id, run_id, step, AttachmentKind::Log, source)
+}
+
+/// Copy a file of a given kind into the run's subdirectory, hash it, and record it.
+///
+/// The copy keeps the file's own name (`logs/mag_raw.csv`, `photos/plot.jpg`), so the
+/// run directory reads like the folder the data came from; the recorded `sha256` is the
+/// identity. A second file with the same name gets `-2`, `-3` and so on, and
+/// re-attaching the same bytes of the same kind is a no-op rather than a second copy.
+/// Only a `log` is scanned for a time column.
+pub fn attach_kind(
+    repo: &Repo,
+    sop_id: &str,
+    run_id: &str,
+    step: Option<&str>,
+    kind: AttachmentKind,
     source: &Path,
 ) -> Result<sop_core::run::Attachment, RunError> {
     let loaded = load(repo, sop_id, run_id)?;
@@ -714,7 +778,9 @@ pub fn attach(
         source: error,
     })?;
     let digest = sha256_hex(&bytes);
-    // Attaching the same data to the same step twice is one attachment, not two records.
+    // Re-attaching the same bytes of the same kind to the same step is one attachment.
+    // The kind is part of the identity: a log and a photo can share a hash (an empty
+    // file) without one replacing the other.
     let held = match step {
         Some(id) => loaded
             .state
@@ -723,19 +789,21 @@ pub fn attach(
             .unwrap_or(&[]),
         None => loaded.state.run_attachments.as_slice(),
     };
-    if let Some(existing) = held.iter().find(|attachment| attachment.sha256 == digest) {
+    if let Some(existing) =
+        held.iter().find(|attachment| attachment.sha256 == digest && attachment.kind == kind)
+    {
         return Ok(existing.clone());
     }
     let name = source
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "attachment".to_owned());
-    let logs_dir = loaded.dir.join("logs");
-    fs::create_dir_all(&logs_dir).map_err(|source| RunError::Io {
-        path: logs_dir.clone(),
+    let dir = loaded.dir.join(kind.dir());
+    fs::create_dir_all(&dir).map_err(|source| RunError::Io {
+        path: dir.clone(),
         source,
     })?;
-    let dest = attachment_dest(&logs_dir, &name, &bytes);
+    let dest = attachment_dest(&dir, &name, &bytes);
     if !dest.is_file() {
         let mut file = fs::File::create(&dest).map_err(|error| RunError::Io {
             path: dest.clone(),
@@ -747,34 +815,44 @@ pub fn attach(
         })?;
     }
 
-    // The data's own time span, when the file carries a parseable time column. Best-effort:
-    // a file with no such column, or one value that does not parse, simply omits the fields.
-    let (t_min, t_max, row_count) = match csv_time_range(&bytes) {
-        Some((min, max, rows)) => (Some(min), Some(max), Some(rows)),
-        None => (None, None, None),
+    // The data's own time span, when the file carries a parseable time column. Only a log
+    // is scanned; a photo or a PDF has no such column. Best-effort either way: a file with
+    // no such column, or one value that does not parse, simply omits the fields.
+    let (t_min, t_max, row_count) = if kind == AttachmentKind::Log {
+        match csv_time_range(&bytes) {
+            Some((min, max, rows)) => (Some(min), Some(max), Some(rows)),
+            None => (None, None, None),
+        }
+    } else {
+        (None, None, None)
     };
 
-    let attachment = sop_core::run::Attachment {
-        // Repository-relative, so the record reads and resolves the same in any clone.
-        path: repo.relpath(&dest),
-        sha256: digest,
+    // Repository-relative, so the record reads and resolves the same in any clone.
+    let path = repo.relpath(&dest);
+    let event = RunEvent::AttachmentAdded {
+        at: now(),
+        step: step.map(str::to_owned),
+        // A log is the default, so its `kind` is left off, keeping a new log's event
+        // identical to one written before the field existed.
+        kind: (kind != AttachmentKind::Log).then_some(kind),
+        path,
+        sha256: digest.clone(),
         size: bytes.len() as u64,
         t_min,
         t_max,
         row_count,
     };
-    let event = RunEvent::AttachmentAdded {
-        at: now(),
-        step: step.map(str::to_owned),
-        path: attachment.path.clone(),
-        sha256: attachment.sha256.clone(),
-        size: attachment.size,
-        t_min: attachment.t_min.clone(),
-        t_max: attachment.t_max.clone(),
-        row_count: attachment.row_count,
+    // The event's timestamp is stamped by `record`; read the attachment back from the
+    // reloaded state so the returned value agrees with what was written.
+    let reloaded = record(repo, sop_id, run_id, &event)?;
+    let found = match step {
+        Some(id) => reloaded.state.step(id).map(|state| state.attachments.as_slice()),
+        None => Some(reloaded.state.run_attachments.as_slice()),
     };
-    record(repo, sop_id, run_id, &event)?;
-    Ok(attachment)
+    found
+        .and_then(|held| held.iter().find(|a| a.sha256 == digest && a.kind == kind))
+        .cloned()
+        .ok_or(RunError::Core(sop_core::RunError::MissingStep))
 }
 
 /// Where an attached file is saved: `logs/<its own name>`, with a `-2`, `-3` ... suffix
@@ -809,7 +887,7 @@ fn same_bytes(path: &Path, bytes: &[u8]) -> bool {
 }
 
 /// The front matter for the run record file, so the record is a valid `runs/...` file.
-fn run_file_front(state: &RunState, run_id: &str, events_sha256: Option<&str>) -> String {
+fn run_file_front(state: &RunState, run_id: &str, seal: Option<&Seal>) -> String {
     let mut out = String::from("---\nkind: run\n");
     out.push_str(&format!("run_id: {}\n", scalar(run_id)));
     if let Some(value) = &state.sop { out.push_str(&format!("sop: {value}\n")); }
@@ -903,8 +981,12 @@ fn run_file_front(state: &RunState, run_id: &str, events_sha256: Option<&str>) -
     if !state.added_steps.is_empty() {
         out.push_str(&format!("added_steps: {}\n", state.added_steps.len()));
     }
-    if let Some(hash) = events_sha256 {
-        out.push_str(&format!("events_sha256: {}\n", scalar(hash)));
+    // The seal: the length of the event log when the run ended, and the sha256 of exactly
+    // that prefix. Events appended after the end (a late log, photo, or note) sit beyond
+    // it and do not change it (`SPEC.md` section 9, `DECISIONS.md` D29).
+    if let Some(seal) = seal {
+        out.push_str(&format!("events_sealed_bytes: {}\n", seal.bytes));
+        out.push_str(&format!("events_sha256: {}\n", scalar(&seal.sha256)));
     }
     out.push_str(&format!("deviations_count: {}\n", state.deviations()));
     out.push_str("---\n\n");
@@ -926,9 +1008,9 @@ fn run_record_text(
     state: &RunState,
     steps: &[RecordStep],
     run_id: &str,
-    events_sha256: Option<&str>,
+    seal: Option<&Seal>,
 ) -> String {
-    let mut out = run_file_front(state, run_id, events_sha256);
+    let mut out = run_file_front(state, run_id, seal);
     out.push_str(&render_record(state, steps));
     out
 }
@@ -958,8 +1040,14 @@ pub fn end(
         });
     }
     let loaded = record_events(repo, sop_id, run_id, &events)?;
-    let hash = events_sha256_of(&loaded.events_path);
-    let text = run_record_text(&loaded.state, &loaded.steps, run_id, hash.as_deref());
+    // The whole log as it stands now is the sealed prefix: everything the run was ended
+    // with. Late additions will be appended beyond it.
+    let bytes = fs::metadata(&loaded.events_path).map(|meta| meta.len()).unwrap_or(0);
+    let seal = Seal {
+        bytes,
+        sha256: hash_first_n(&loaded.events_path, bytes).unwrap_or_default(),
+    };
+    let text = run_record_text(&loaded.state, &loaded.steps, run_id, Some(&seal));
     atomic::write(&loaded.record_file, &text).map_err(|error| RunError::Io {
         path: loaded.record_file.clone(),
         source: error.source,
@@ -967,11 +1055,53 @@ pub fn end(
     Ok(loaded)
 }
 
-/// The sha256 of a run's event log, so the record can seal the exact bytes it was ended
-/// with - a log edited afterwards no longer matches the sealed hash.
-fn events_sha256_of(events_path: &Path) -> Option<String> {
-    let bytes = fs::read(events_path).ok()?;
-    Some(sha256_hex(&bytes))
+/// The sealed prefix of a run's event log: the byte length sealed at end, and the sha256
+/// of exactly those bytes. Everything past `bytes` is a post-run addition.
+#[derive(Debug, Clone)]
+pub struct Seal {
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+/// The sha256 of the first `bytes` bytes of a file, streamed so a large log is not read
+/// into memory whole. `None` when the file cannot be opened.
+fn hash_first_n(path: &Path, bytes: u64) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    let mut reader = file.take(bytes);
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut reader, &mut hasher).ok()?;
+    let digest = hasher.finalize();
+    Some(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// The seal fields read back from a committed record: `(events_sealed_bytes, events_sha256)`.
+/// `events_sealed_bytes` is `None` for a record written before prefix sealing.
+fn read_seal_fields(record_file: &Path) -> Option<(Option<u64>, String)> {
+    let text = fs::read_to_string(record_file).ok()?;
+    let doc = Document::parse(&text).ok()?;
+    let sha256 = doc.front.str("events_sha256").flatten()?.to_owned();
+    let bytes = doc
+        .front
+        .get("events_sealed_bytes")
+        .and_then(|value| value.as_i64())
+        .map(|value| value.max(0) as u64);
+    Some((bytes, sha256))
+}
+
+/// The seal a run's record should carry when it is re-rendered: the one it already has,
+/// or - for a run that never sealed - the whole log as it stands.
+fn seal_for_record(loaded: &LoadedRun) -> Option<Seal> {
+    match read_seal_fields(&loaded.record_file) {
+        Some((Some(bytes), sha256)) => Some(Seal { bytes, sha256 }),
+        Some((None, sha256)) => {
+            let bytes = fs::metadata(&loaded.events_path).map(|meta| meta.len()).unwrap_or(0);
+            Some(Seal { bytes, sha256 })
+        }
+        None => {
+            let bytes = fs::metadata(&loaded.events_path).map(|meta| meta.len()).unwrap_or(0);
+            hash_first_n(&loaded.events_path, bytes).map(|sha256| Seal { bytes, sha256 })
+        }
+    }
 }
 
 /// The record document for a run, exactly as [`end`] commits it.
@@ -981,8 +1111,8 @@ fn events_sha256_of(events_path: &Path) -> Option<String> {
 /// what was recorded against it. `end` writes it to the repository; export prints it.
 pub fn record_text(repo: &Repo, sop_id: &str, run_id: &str) -> Result<String, RunError> {
     let loaded = load(repo, sop_id, run_id)?;
-    let hash = events_sha256_of(&loaded.events_path);
-    Ok(run_record_text(&loaded.state, &loaded.steps, run_id, hash.as_deref()))
+    let seal = seal_for_record(&loaded);
+    Ok(run_record_text(&loaded.state, &loaded.steps, run_id, seal.as_ref()))
 }
 
 /// The experiment record for a run, from wherever it can still be read.

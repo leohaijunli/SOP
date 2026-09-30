@@ -938,9 +938,12 @@ pub fn declared_outputs_present(
             .cloned()
             .collect();
         if !missing.is_empty() {
-            out.error(
+            // The run may have ended before its logs were uploaded, so a declared output
+            // that is not there yet is a pending warning, not a failure. It clears once
+            // the output is attached (`DECISIONS.md` D29, Q4).
+            out.warning(
                 format!(
-                    "run is 'complete' but step '{step_id}' has no attached output for: {}",
+                    "declared output pending: run is 'complete' but step '{step_id}' has no attached output yet for: {}",
                     missing.join(", ")
                 ),
                 Some(1),
@@ -1135,12 +1138,13 @@ mod tests {
     }
 
     #[test]
-    fn a_complete_run_without_a_declared_output_is_an_error() {
+    fn a_complete_run_without_a_declared_output_is_a_pending_warning() {
         let record = "---\nkind: run\nrun_id: r\nsop: s\nstatus: complete\nstarted: 2026-09-25T12:00:00Z\ndeviations_count: 0\nlogs:\n  - path: runs/s/2026-09-25-r/logs/other.csv\n    step: s1\n    sha256: \"a\"\n---\n";
         let document = doc(record);
         let outputs = vec![("s1".to_owned(), vec!["mag_raw.csv".to_owned()])];
         let diags = declared_outputs_present(&document, &outputs);
-        assert_eq!(diags.error_count(), 1);
+        assert_eq!(diags.error_count(), 0, "a missing declared output is pending, not an error");
+        assert_eq!(diags.warning_count(), 1);
     }
 
     #[test]

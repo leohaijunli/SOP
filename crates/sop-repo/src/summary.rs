@@ -130,9 +130,9 @@ struct Row {
 
 impl Row {
     fn of(state: &RunState) -> Self {
-        let mut notes: Vec<String> = state.run_notes.clone();
+        let mut notes: Vec<String> = state.run_notes.iter().map(|note| note.text.clone()).collect();
         for step in state.steps.values() {
-            notes.extend(step.notes.iter().cloned());
+            notes.extend(step.notes.iter().map(|note| note.text.clone()));
         }
         let sensor = state
             .sensor

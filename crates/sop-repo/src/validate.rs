@@ -431,13 +431,30 @@ fn check_run(
     }
 
     // A record that sealed its event log at end must match the log on disk; a log edited
-    // afterwards no longer matches and is an error, not a soft warning.
+    // afterwards no longer matches and is an error, not a soft warning. The seal covers
+    // the prefix recorded at end (`events_sealed_bytes`); a legacy record with only
+    // `events_sha256` sealed the whole file, which is the same check.
     if let Some(sealed) = doc.front.str("events_sha256").flatten() {
         let record = repo.relpath(path);
         let run_dir = record.strip_suffix(".md").unwrap_or(&record);
         let events_path = repo.resolve(&format!("{run_dir}/events.jsonl"));
         if let Ok(bytes) = std::fs::read(&events_path) {
-            let actual = hex(&sha256(&bytes));
+            let sealed_bytes = doc
+                .front
+                .get("events_sealed_bytes")
+                .and_then(|value| value.as_i64())
+                .map(|value| value.max(0) as usize);
+            if let Some(declared) = sealed_bytes
+                && declared > bytes.len()
+            {
+                report.error(
+                    path,
+                    "the event log is shorter than the length sealed in the record; the log was truncated after the run ended",
+                    Some(1),
+                );
+            }
+            let prefix_len = sealed_bytes.unwrap_or(bytes.len()).min(bytes.len());
+            let actual = hex(&sha256(&bytes[..prefix_len]));
             if sealed.to_ascii_lowercase() != actual {
                 report.error(
                     path,
@@ -446,6 +463,27 @@ fn check_run(
                     ),
                     Some(1),
                 );
+            }
+            // Anything past the sealed prefix is a post-run addition. It must be an
+            // event the tool is allowed to add late (a log, photo, file, note, or the
+            // conclusion), so a rewritten field record is caught rather than trusted.
+            for line in bytes[prefix_len..].split(|byte| *byte == b'\n') {
+                if line.iter().all(u8::is_ascii_whitespace) {
+                    continue;
+                }
+                match serde_json::from_slice::<sop_core::RunEvent>(line) {
+                    Ok(event) if event.allowed_after_end() => {}
+                    Ok(_) => report.error(
+                        path,
+                        "the event log was appended to after the run ended with an event that is not a late addition",
+                        Some(1),
+                    ),
+                    Err(_) => report.error(
+                        path,
+                        "the event log has an unreadable event after the sealed prefix",
+                        Some(1),
+                    ),
+                }
             }
         }
     }
@@ -476,13 +514,19 @@ fn check_log_entry(repo: &Repo, path: &Path, run_id: &str, entry: &Value, report
         }
     };
 
-    // A run's data lives inside the run directory (`runs/<sop>/<run_id>/logs/`), which is
-    // what the app writes and what D10 decided; `logs/<run_id>/` is kept as the location
-    // for records written before that. Anything else is a warning, because a log outside
-    // both is data the run cannot be archived with.
+    // A run's data lives inside the run directory, in a subdirectory named for its kind
+    // (`.../logs/`, `.../photos/`, `.../attachments/`), which is what the app writes and
+    // what D10/D29 decided; `logs/<run_id>/` is kept as the location for records written
+    // before that. Anything else is a warning, because data outside both cannot be
+    // archived with the run.
     let record = repo.relpath(path);
     let run_dir = record.strip_suffix(".md").unwrap_or(&record);
-    let inside_run = format!("{run_dir}/logs/");
+    let kind_dir = match map.get("kind").and_then(|value| value.as_str()) {
+        Some("photo") => "photos",
+        Some("file") => "attachments",
+        _ => "logs",
+    };
+    let inside_run = format!("{run_dir}/{kind_dir}/");
     let legacy = format!("logs/{run_id}/");
     if !log_path.starts_with(&inside_run) && !log_path.starts_with(&legacy) {
         report.warning(

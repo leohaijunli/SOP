@@ -785,7 +785,9 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
             checklist,
             captures,
             outputs: def.outputs.clone(),
-            notes: step_state.map(|s| s.notes.clone()).unwrap_or_default(),
+            notes: step_state
+                .map(|s| s.notes.iter().map(|note| note.text.clone()).collect())
+                .unwrap_or_default(),
             attachments: step_state
                 .map(|state| state.attachments.iter().map(attachment_view).collect())
                 .unwrap_or_default(),
@@ -837,7 +839,7 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
                 label: marker.label.clone(),
             })
             .collect(),
-        run_notes: state.run_notes.clone(),
+        run_notes: state.run_notes.iter().map(|note| note.text.clone()).collect(),
         run_attachments: state
             .run_attachments
             .iter()

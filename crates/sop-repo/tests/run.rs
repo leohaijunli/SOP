@@ -919,19 +919,57 @@ fn an_ended_run_seals_its_event_log_hash_into_the_record() {
     run::record(&repo, SOP, RUN, &RunEvent::StepStatusChanged { at: "2026-09-25T12:01:00Z".into(), step: "cond-location".into(), status: "done".into(), reason: None }).unwrap();
     run::end(&repo, SOP, RUN, "partial", None).unwrap();
 
-    let record = scratch.read("runs/ground-walk-survey/2026-09-25-test-run.md");
+    let record_file = "runs/ground-walk-survey/2026-09-25-test-run.md";
+    let record = scratch.read(record_file);
+    assert!(record.contains("events_sealed_bytes:"), "the seal records its length:\n{record}");
     assert!(record.contains("events_sha256:"), "{record}");
 
-    // The sealed hash matches the log on disk, so validation stays clean.
+    // The sealed prefix matches the log on disk, so validation stays clean.
     let (failed, report) = scratch.validate();
     assert!(!failed, "a run with a matching seal must validate:\n{report}");
 
-    // Tamper with the log: the seal no longer matches, and validation reports an error.
+    // A late addition (a note appended after the run ended) is allowed: the seal covers
+    // the prefix only, so the record stays valid.
+    run::record(&repo, SOP, RUN, &RunEvent::NoteAdded {
+        at: "2026-09-25T12:02:00Z".into(),
+        step: None,
+        text: "added after the run".into(),
+    }).unwrap();
+    let (failed, report) = scratch.validate();
+    assert!(!failed, "a late addition is allowed past the seal:\n{report}");
+
+    // A non-late event past the seal is the field record being rewritten: an error.
     let events = scratch.path("runs/ground-walk-survey/2026-09-25-test-run/events.jsonl");
     let mut text = scratch.read("runs/ground-walk-survey/2026-09-25-test-run/events.jsonl");
-    text.push_str("{\"type\":\"NoteAdded\",\"at\":\"2026-09-25T12:02:00Z\",\"step\":null,\"text\":\"forged\"}\n");
+    text.push_str("{\"type\":\"StepOpened\",\"at\":\"2026-09-25T12:03:00Z\",\"step\":\"cond-location\"}\n");
     std::fs::write(&events, text).unwrap();
     let (failed, report) = scratch.validate();
-    assert!(failed, "a tampered log must be reported");
+    assert!(failed, "a rewritten field record past the seal must be reported");
+    assert!(report.contains("not a late addition"), "{report}");
+
+    // Tamper with the sealed prefix itself: the hash no longer matches. Change one byte
+    // of the first event, so the whole-file check hashes different bytes.
+    let mut text = scratch.read("runs/ground-walk-survey/2026-09-25-test-run/events.jsonl");
+    text = text.replacen("RunStarted", "RunStartex", 1);
+    std::fs::write(&events, text).unwrap();
+    let (failed, report) = scratch.validate();
+    assert!(failed, "a tampered prefix must be reported");
     assert!(report.contains("was changed after this record was sealed"), "{report}");
+}
+
+#[test]
+fn a_legacy_record_without_a_sealed_length_still_validates() {
+    let scratch = Scratch::new("seal-legacy");
+    let repo = scratch.repo();
+    start(&repo, RUN);
+    run::end(&repo, SOP, RUN, "partial", None).unwrap();
+
+    // A record written before prefix sealing has `events_sha256` but no
+    // `events_sealed_bytes`; it sealed the whole file, which is the same check.
+    let record_file = "runs/ground-walk-survey/2026-09-25-test-run.md";
+    let record = scratch.read(record_file);
+    let legacy: String = record.lines().filter(|line| !line.starts_with("events_sealed_bytes:")).collect::<Vec<_>>().join("\n");
+    scratch.write(record_file, &format!("{legacy}\n"));
+    let (failed, report) = scratch.validate();
+    assert!(!failed, "a legacy whole-file seal must still validate:\n{report}");
 }

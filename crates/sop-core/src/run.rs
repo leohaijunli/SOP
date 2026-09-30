@@ -192,6 +192,10 @@ pub enum RunEvent {
     AttachmentAdded {
         at: String,
         step: Option<String>,
+        /// What the file is: an instrument log, a photo, or any other attachment.
+        /// Absent on events written before this field existed, and read as `log`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<AttachmentKind>,
         path: String,
         sha256: String,
         size: u64,
@@ -265,18 +269,76 @@ pub struct CaptureValue {
     pub unit: Option<String>,
 }
 
-/// A log attached to a step or the run.
+/// What an attached file is, so a log, a photo, and any other file can share one
+/// event and be filed into the matching subdirectory of the run.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AttachmentKind {
+    /// An instrument log (the default for an event with no `kind`).
+    #[default]
+    Log,
+    Photo,
+    File,
+}
+
+impl AttachmentKind {
+    /// Parse a `kind` from the wire: `log` / `photo` / `file`. Anything else is not an
+    /// attachment kind, so the caller reports it rather than guessing.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "log" => Some(AttachmentKind::Log),
+            "photo" => Some(AttachmentKind::Photo),
+            "file" => Some(AttachmentKind::File),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AttachmentKind::Log => "log",
+            AttachmentKind::Photo => "photo",
+            AttachmentKind::File => "file",
+        }
+    }
+
+    /// The subdirectory of the run a file of this kind is filed under.
+    pub fn dir(&self) -> &'static str {
+        match self {
+            AttachmentKind::Log => "logs",
+            AttachmentKind::Photo => "photos",
+            AttachmentKind::File => "attachments",
+        }
+    }
+}
+
+/// A file attached to a step or the run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attachment {
     pub path: String,
     pub sha256: String,
     pub size: u64,
+    /// What the file is (log / photo / file); `Log` when the event did not say.
+    pub kind: AttachmentKind,
+    /// When the file was attached, from the event's timestamp.
+    pub at: String,
+    /// True when the file was attached after the run had ended, so the record can tell
+    /// the operator's field record from a later addition.
+    pub post_run: bool,
     /// The data's own first and last timestamps, and how many rows it spans. These come
     /// from the attached file when it carries a parseable time column, and let the
     /// validator check the log overlaps the run it was attached to.
     pub t_min: Option<String>,
     pub t_max: Option<String>,
     pub row_count: Option<u64>,
+}
+
+/// A note recorded against a step or the run, with the tool's clock at the moment it was
+/// written and whether it was added after the run ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Note {
+    pub text: String,
+    pub at: String,
+    pub post_run: bool,
 }
 
 /// A step added to a run after it started. It is recorded in the event log, not the
@@ -310,7 +372,7 @@ pub struct StepState {
     /// Capture keys the operator acknowledged as outside the expected range.
     pub acknowledged: BTreeSet<String>,
     pub checkboxes: Vec<bool>,
-    pub notes: Vec<String>,
+    pub notes: Vec<Note>,
     pub attachments: Vec<Attachment>,
 }
 
@@ -339,7 +401,7 @@ pub struct RunState {
     pub added_steps: Vec<AddedStep>,
     /// Tagged moments the operator dropped, in the order they were dropped.
     pub markers: Vec<FieldMarker>,
-    pub run_notes: Vec<String>,
+    pub run_notes: Vec<Note>,
     pub run_attachments: Vec<Attachment>,
 }
 
@@ -413,7 +475,11 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
     if let RunEvent::RunStarted { .. } = event {
         return Err(RunError::AlreadyStarted);
     }
-    if state.is_ended() && !matches!(event, RunEvent::RunConcluded { .. }) {
+    // Whether the run had already ended when this event is applied. Events that are
+    // still allowed after the end (attachments, notes, a late conclusion) are tagged so
+    // the record can tell them apart from the field record.
+    let was_ended = state.is_ended();
+    if was_ended && !event.allowed_after_end() {
         return Err(RunError::Ended);
     }
 
@@ -478,17 +544,24 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
             }
             step_state.acknowledged.insert(key.clone());
         }
-        RunEvent::NoteAdded { step, text, .. } => {
+        RunEvent::NoteAdded { step, text, at, .. } => {
+            let note = Note {
+                text: text.clone(),
+                at: at.clone(),
+                post_run: was_ended,
+            };
             match step {
-                Some(id) => state.steps.entry(id.clone()).or_default().notes.push(text.clone()),
-                None => state.run_notes.push(text.clone()),
+                Some(id) => state.steps.entry(id.clone()).or_default().notes.push(note),
+                None => state.run_notes.push(note),
             }
         }
         RunEvent::AttachmentAdded {
             step,
+            kind,
             path,
             sha256,
             size,
+            at,
             t_min,
             t_max,
             row_count,
@@ -498,6 +571,11 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
                 path: path.clone(),
                 sha256: sha256.clone(),
                 size: *size,
+                // An event with no `kind` predates the field; read it as a log, which is
+                // what it was.
+                kind: kind.unwrap_or_default(),
+                at: at.clone(),
+                post_run: was_ended,
                 t_min: t_min.clone(),
                 t_max: t_max.clone(),
                 row_count: *row_count,
@@ -555,6 +633,20 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
 }
 
 impl RunEvent {
+    /// Whether this event may still be applied once the run has ended.
+    ///
+    /// Only evidence the operator added late (a log, a photo, a note) and the run's own
+    /// conclusion are allowed; everything that changes what the run did is refused, so
+    /// the field record stays frozen (`DECISIONS.md` D29).
+    pub fn allowed_after_end(&self) -> bool {
+        matches!(
+            self,
+            RunEvent::AttachmentAdded { .. }
+                | RunEvent::NoteAdded { .. }
+                | RunEvent::RunConcluded { .. }
+        )
+    }
+
     fn at(&self) -> String {
         match self {
             RunEvent::RunStarted { at, .. }
@@ -801,6 +893,101 @@ pub fn timeline_csv(state: &RunState, steps: &[RecordStep]) -> String {
 ///
 /// `steps` is the checklist as frozen at run start (id, title, prose, and how many
 /// checkboxes the step has), so the record is reviewable even after the content changes.
+fn short_hash(sha256: &str) -> &str {
+    &sha256[..sha256.len().min(12)]
+}
+
+/// The `## Added after the run ended` section: the logs, photos, files, and notes the
+/// operator added after the run ended, in time order. Kept apart from the field record
+/// so a reviewer can tell what was recorded during the run from what arrived later
+/// (`DECISIONS.md` D29).
+fn render_post_run(state: &RunState, out: &mut String) {
+    let mut items: Vec<(String, String)> = Vec::new();
+    for (step_id, step) in &state.steps {
+        for note in &step.notes {
+            if note.post_run {
+                items.push((
+                    note.at.clone(),
+                    format!("note on '{step_id}': {}", note.text.replace('\n', " ")),
+                ));
+            }
+        }
+        for attachment in &step.attachments {
+            if attachment.post_run {
+                items.push((
+                    attachment.at.clone(),
+                    format!(
+                        "{} on '{step_id}': {} ({} bytes, sha256 {})",
+                        attachment.kind.as_str(),
+                        attachment.path,
+                        attachment.size,
+                        short_hash(&attachment.sha256)
+                    ),
+                ));
+            }
+        }
+    }
+    for note in &state.run_notes {
+        if note.post_run {
+            items.push((note.at.clone(), format!("note: {}", note.text.replace('\n', " "))));
+        }
+    }
+    for attachment in &state.run_attachments {
+        if attachment.post_run {
+            items.push((
+                attachment.at.clone(),
+                format!(
+                    "{}: {} ({} bytes, sha256 {})",
+                    attachment.kind.as_str(),
+                    attachment.path,
+                    attachment.size,
+                    short_hash(&attachment.sha256)
+                ),
+            ));
+        }
+    }
+    if items.is_empty() {
+        return;
+    }
+    items.sort_by(|a, b| a.0.cmp(&b.0));
+    out.push_str("## Added after the run ended\n\n");
+    out.push_str("_Added after the run ended; the field record above is unchanged._\n\n");
+    for (at, text) in items {
+        out.push_str(&format!("- {at} \u{2014} {text}\n"));
+    }
+    out.push('\n');
+}
+
+/// The generated `notes.md`: every note (run-level and per-step) in time order, so the
+/// notes for a run can be read without opening the whole record. A generated file; the
+/// event log stays the source of truth.
+pub fn render_notes(state: &RunState) -> String {
+    let mut items: Vec<(String, String)> = Vec::new();
+    for (step_id, step) in &state.steps {
+        for note in &step.notes {
+            items.push((note.at.clone(), format!("`{step_id}` {}", note.text)));
+        }
+    }
+    for note in &state.run_notes {
+        items.push((note.at.clone(), note.text.clone()));
+    }
+    items.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut out = String::from("<!-- generated from events.jsonl; do not edit -->\n\n# Run notes\n\n");
+    if items.is_empty() {
+        out.push_str("_No notes were recorded for this run._\n");
+        return out;
+    }
+    for (at, body) in items {
+        let mut lines = body.split('\n');
+        out.push_str(&format!("- **{at}** {}", lines.next().unwrap_or("")));
+        for line in lines {
+            out.push_str(&format!("\n  {line}"));
+        }
+        out.push('\n');
+    }
+    out
+}
+
 pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
     let mut out = String::new();
     out.push_str(&format!(
@@ -922,7 +1109,7 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
             // A note may be multi-line Markdown. Prefixing every line keeps the whole
             // note inside one blockquote instead of letting the second line escape into
             // the step's prose.
-            for (i, line) in note.split('\n').enumerate() {
+            for (i, line) in note.text.split('\n').enumerate() {
                 if i == 0 {
                     out.push_str(&format!("> note: {line}\n"));
                 } else if line.trim().is_empty() {
@@ -935,7 +1122,8 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
         }
         for attachment in &state.attachments {
             out.push_str(&format!(
-                "> attachment: {path} (sha256 {sha256}, {size} bytes)\n",
+                "> attachment ({kind}): {path} (sha256 {sha256}, {size} bytes)\n",
+                kind = attachment.kind.as_str(),
                 path = attachment.path,
                 sha256 = &attachment.sha256[..attachment.sha256.len().min(12)],
                 size = attachment.size
@@ -991,7 +1179,7 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
         out.push_str("## Run notes\n\n");
         for note in &state.run_notes {
             // Continuation lines are indented so they stay inside the same list item.
-            for (i, line) in note.split('\n').enumerate() {
+            for (i, line) in note.text.split('\n').enumerate() {
                 if i == 0 {
                     out.push_str(&format!("- {line}\n"));
                 } else if line.trim().is_empty() {
@@ -1007,13 +1195,16 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
         out.push_str("## Run attachments\n\n");
         for attachment in &state.run_attachments {
             out.push_str(&format!(
-                "- {path} (sha256 {sha256})\n",
+                "- {kind}: {path} (sha256 {sha256})\n",
+                kind = attachment.kind.as_str(),
                 path = attachment.path,
                 sha256 = &attachment.sha256[..attachment.sha256.len().min(12)]
             ));
         }
         out.push('\n');
     }
+
+    render_post_run(state, &mut out);
 
     if let Some(status) = &state.run_status {
         out.push_str(&format!("\nstatus: {status}\n"));
@@ -1484,6 +1675,7 @@ mod tests {
         apply(&mut state, &RunEvent::AttachmentAdded {
             at: "2026-09-25T12:00:00Z".into(),
             step: None,
+            kind: None,
             path: "logs/mag_raw.csv".into(),
             sha256: "abcd".into(),
             size: 10,
@@ -1494,5 +1686,127 @@ mod tests {
         let att = &state.run_attachments[0];
         assert_eq!(att.t_min.as_deref(), Some("2026-09-25T12:00:00Z"));
         assert_eq!(att.row_count, Some(300));
+    }
+
+    #[test]
+    fn an_attachment_with_no_kind_reads_as_a_log() {
+        let mut state = RunState::default();
+        apply(&mut state, &started()).unwrap();
+        apply(&mut state, &RunEvent::AttachmentAdded {
+            at: "2026-09-25T12:00:00Z".into(),
+            step: None,
+            kind: None,
+            path: "logs/mag_raw.csv".into(),
+            sha256: "abcd".into(),
+            size: 10,
+            t_min: None,
+            t_max: None,
+            row_count: None,
+        }).unwrap();
+        let att = &state.run_attachments[0];
+        assert_eq!(att.kind, AttachmentKind::Log, "an old event is a log");
+        assert!(!att.post_run, "it was added during the run");
+    }
+
+    #[test]
+    fn a_photo_is_filed_under_its_own_kind() {
+        let mut state = RunState::default();
+        apply(&mut state, &started()).unwrap();
+        apply(&mut state, &RunEvent::AttachmentAdded {
+            at: "2026-09-25T12:00:00Z".into(),
+            step: None,
+            kind: Some(AttachmentKind::Photo),
+            path: "photos/plot.jpg".into(),
+            sha256: "abcd".into(),
+            size: 10,
+            t_min: None,
+            t_max: None,
+            row_count: None,
+        }).unwrap();
+        assert_eq!(state.run_attachments[0].kind, AttachmentKind::Photo);
+    }
+
+    #[test]
+    fn a_log_photo_and_file_round_trip_as_their_wire_names() {
+        for (kind, wire) in [
+            (AttachmentKind::Log, "log"),
+            (AttachmentKind::Photo, "photo"),
+            (AttachmentKind::File, "file"),
+        ] {
+            assert_eq!(kind.as_str(), wire);
+            assert_eq!(AttachmentKind::parse(wire), Some(kind));
+        }
+        assert_eq!(AttachmentKind::parse("video"), None);
+    }
+
+    #[test]
+    fn attachments_and_notes_are_allowed_after_the_run_ends() {
+        let mut state = RunState::default();
+        apply(&mut state, &started()).unwrap();
+        apply(&mut state, &RunEvent::RunEnded { at: "t".into(), status: "complete".into() }).unwrap();
+
+        apply(&mut state, &RunEvent::AttachmentAdded {
+            at: "t2".into(),
+            step: None,
+            kind: None,
+            path: "logs/late.csv".into(),
+            sha256: "abcd".into(),
+            size: 4,
+            t_min: None,
+            t_max: None,
+            row_count: None,
+        })
+        .unwrap();
+        apply(&mut state, &RunEvent::NoteAdded {
+            at: "t3".into(),
+            step: None,
+            text: "written up later".into(),
+        })
+        .unwrap();
+        assert!(state.run_attachments[0].post_run, "a late attachment is marked");
+        assert!(state.run_notes[0].post_run, "a late note is marked");
+
+        // Anything that changes what the run did is still refused.
+        let late = RunEvent::CheckboxToggled { at: "t4".into(), step: "s".into(), index: 0, checked: true };
+        assert_eq!(apply(&mut state, &late), Err(RunError::Ended));
+    }
+
+    #[test]
+    fn a_note_written_during_the_run_is_not_post_run() {
+        let mut state = RunState::default();
+        apply(&mut state, &started()).unwrap();
+        apply(&mut state, &RunEvent::NoteAdded { at: "t".into(), step: None, text: "field note".into() }).unwrap();
+        assert!(!state.run_notes[0].post_run);
+    }
+
+    #[test]
+    fn the_record_lists_post_run_additions_separately() {
+        let mut state = RunState::default();
+        apply(&mut state, &started()).unwrap();
+        apply(&mut state, &RunEvent::RunEnded { at: "2026-09-25T12:00:00Z".into(), status: "complete".into() }).unwrap();
+        apply(&mut state, &RunEvent::AttachmentAdded {
+            at: "2026-09-25T13:00:00Z".into(),
+            step: None,
+            kind: Some(AttachmentKind::Photo),
+            path: "phot%%/plot.jpg".replace("%%", "os").into(),
+            sha256: "deadbeefdeadbeef".into(),
+            size: 42,
+            t_min: None,
+            t_max: None,
+            row_count: None,
+        }).unwrap();
+        apply(&mut state, &RunEvent::NoteAdded {
+            at: "2026-09-25T13:01:00Z".into(),
+            step: None,
+            text: "uploaded the plot later".into(),
+        }).unwrap();
+        let rendered = render_record(&state, &[]);
+        assert!(rendered.contains("## Added after the run ended"), "{rendered}");
+        assert!(rendered.contains("2026-09-25T13:00:00Z"), "{rendered}");
+        assert!(rendered.contains("photo: runs/"), "{rendered}");
+
+        let notes = render_notes(&state);
+        assert!(notes.contains("uploaded the plot later"), "{notes}");
+        assert!(notes.contains("do not edit"), "{notes}");
     }
 }
