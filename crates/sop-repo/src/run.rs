@@ -667,6 +667,34 @@ fn record_events(
     Ok(reloaded)
 }
 
+/// A suggested name for an attached data file, from the run's own metadata
+/// (`LOGS.md`: `<site>_<date>_<sensor>_<stream>.csv`), so the file name and the record
+/// agree without the operator inventing one. Best-effort: blank parts are skipped.
+pub fn suggest_log_name(loaded: &LoadedRun, stream: &str) -> String {
+    let state = &loaded.state;
+    let site = state.site.as_deref().unwrap_or("");
+    let date = state
+        .started
+        .as_deref()
+        .and_then(|started| started.get(..10))
+        .unwrap_or("");
+    let sensor = state
+        .sensor
+        .as_ref()
+        .map(|sensor| sensor.model.as_str())
+        .unwrap_or("");
+    let stream = stream.trim().replace([' ', '/'], "_");
+    let parts: Vec<&str> = vec![site, date, sensor]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect();
+    if stream.is_empty() {
+        format!("{}.csv", parts.join("_"))
+    } else {
+        format!("{}_{stream}.csv", parts.join("_"))
+    }
+}
+
 /// Copy a file into the run's logs, hash it, and record an event for it.
 ///
 /// The copy keeps the file's own name (`logs/mag_raw.csv`), so the run directory reads
