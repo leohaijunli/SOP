@@ -17,7 +17,8 @@ fn json_str(value: Option<&serde_json::Value>) -> Option<&str> {
 }
 
 const WALK: &str = "checklists/ground-walk-survey.md";
-const WALK_RUN: &str = "runs/ground-walk-survey/2026-09-24-renfrew-walk01.md";
+#[allow(dead_code)]
+const WALK_RUN: &str = "runs/uvic-geomag-survey/ground-walk-survey/2026-09-24-renfrew-walk01.md";
 const HEADING: &str = "procedures/heading-error.md";
 
 fn draft(id: &str, title: &str) -> StepDraft {
@@ -140,7 +141,7 @@ fn only_content_is_editable() {
     let repo = scratch.repo();
 
     for relative in [
-        "runs/ground-walk-survey/2026-09-24-renfrew-walk01.md",
+        "runs/uvic-geomag-survey/ground-walk-survey/2026-09-24-renfrew-walk01.md",
         "project.md",
         "help/commands.md",
         "SPEC.md",

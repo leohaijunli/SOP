@@ -119,6 +119,11 @@ pub struct RunEntry {
     pub sensor: Option<Json>,
     /// The conditions recorded at start, for the same reason.
     pub conditions: Option<Json>,
+    /// How many attachments of each kind the record lists, so the History `files` column
+    /// needs no second call. Read from the record's `logs:` front matter.
+    pub log_count: usize,
+    pub photo_count: usize,
+    pub file_count: usize,
     pub path: String,
     pub step_count: usize,
 }
@@ -137,7 +142,32 @@ pub struct StepEntry {
 }
 
 /// Build the manifest for a repository.
+/// How many `logs:` entries in a record are of a given kind. An entry with no `kind` is
+/// a log, which is what it was before kinds existed.
+fn kind_count(front: &sop_core::FrontMatter, kind: &str) -> usize {
+    let value = front.get("logs");
+    let entries = match value {
+        Some(sop_core::Value::Sequence(items)) => items.clone(),
+        Some(other) => vec![other.clone()],
+        None => Vec::new(),
+    };
+    entries
+        .iter()
+        .filter(|entry| {
+            let entry_kind = entry
+                .as_mapping()
+                .and_then(|map| map.get("kind"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("log");
+            entry_kind == kind
+        })
+        .count()
+}
+
 pub fn build(repo: &Repo) -> Manifest {
+    // Upgrade a pre-project run layout before reading, so records filed under the old flat
+    // `runs/<sop_id>/` still show after the top level became the project.
+    crate::run::migrate_runs(repo);
     let found = repo.discover();
 
     let project = found.project.as_ref().and_then(|path| {
@@ -230,6 +260,9 @@ pub fn build(repo: &Repo) -> Manifest {
             },
             sensor: front.get("sensor").map(yaml_to_json),
             conditions: front.get("conditions").map(yaml_to_json),
+            log_count: kind_count(front, "log"),
+            photo_count: kind_count(front, "photo"),
+            file_count: kind_count(front, "file"),
             path: loaded.relpath.clone(),
             step_count: loaded.doc.results.len(),
         });
@@ -300,7 +333,7 @@ pub fn build(repo: &Repo) -> Manifest {
         project,
         procedures,
         checklists,
-        testplans: crate::testplan::plans(&repo),
+        testplans: crate::testplan::plans(repo),
         runs,
         help,
         help_sections,

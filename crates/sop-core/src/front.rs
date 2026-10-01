@@ -3,8 +3,8 @@
 //! The mapping is kept raw rather than deserialised into a per-kind struct, because
 //! unknown keys must be reported and preserved. See `SPEC-COMPAT.md`.
 
-use serde_norway::{Mapping, Value};
 use serde::Serialize;
+use serde_norway::{Mapping, Value};
 
 use crate::error::ParseError;
 
@@ -297,8 +297,14 @@ mod tests {
         assert_eq!(
             list.conditions(),
             vec![
-                ConditionDecl { key: "weather".to_owned(), hint: None },
-                ConditionDecl { key: "temp_c".to_owned(), hint: None },
+                ConditionDecl {
+                    key: "weather".to_owned(),
+                    hint: None
+                },
+                ConditionDecl {
+                    key: "temp_c".to_owned(),
+                    hint: None
+                },
             ]
         );
         assert!(list.conditions_are_well_formed());

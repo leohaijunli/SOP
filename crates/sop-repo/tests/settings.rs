@@ -187,7 +187,9 @@ fn git_settings_are_kept_in_the_working_copy_and_travel_with_it() {
 
     // A second machine with its own settings picks the repository's values up.
     let mut other_machine = Settings::default();
-    other_machine.set("repository", "/home/somebody/else").unwrap();
+    other_machine
+        .set("repository", "/home/somebody/else")
+        .unwrap();
     settings::apply_repo(&scratch.root, &mut other_machine).unwrap();
     assert_eq!(other_machine.remote, "upstream");
     assert_eq!(other_machine.branch.as_deref(), Some("field"));
@@ -245,7 +247,9 @@ fn a_repository_file_that_is_not_an_object_is_reported() {
     fs::write(&path, "[1, 2, 3]\n").unwrap();
 
     let mut settings = Settings::default();
-    let error = settings::apply_repo(&scratch.root, &mut settings).unwrap_err().to_string();
+    let error = settings::apply_repo(&scratch.root, &mut settings)
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("settings.json"), "{error}");
 }
 
@@ -256,8 +260,14 @@ fn the_sensor_inventory_round_trips_and_merges_repeated_models() {
     assert_eq!(
         parse_sensors(DEFAULT_SENSORS),
         vec![
-            sop_core::settings::SensorStock { model: "UAS-MAG".to_owned(), serials: vec![] },
-            sop_core::settings::SensorStock { model: "RM3100".to_owned(), serials: vec![] },
+            sop_core::settings::SensorStock {
+                model: "UAS-MAG".to_owned(),
+                serials: vec![]
+            },
+            sop_core::settings::SensorStock {
+                model: "RM3100".to_owned(),
+                serials: vec![]
+            },
         ],
         "the default names the models the form offers"
     );
@@ -279,12 +289,17 @@ fn the_sensor_setting_defaults_normalises_and_can_be_cleared() {
     assert_eq!(settings.get("sensors").as_deref(), Some("UAS-MAG; RM3100"));
 
     // Writing a serial back after a run normalises the text on the way in.
-    settings.set("sensors", "UAS-MAG: 1001 ; RM3100: 3001,3002").unwrap();
+    settings
+        .set("sensors", "UAS-MAG: 1001 ; RM3100: 3001,3002")
+        .unwrap();
     assert_eq!(
         settings.get("sensors").as_deref(),
         Some("UAS-MAG: 1001; RM3100: 3001, 3002")
     );
-    assert!(settings.to_json().contains("sensors"), "the value is persisted");
+    assert!(
+        settings.to_json().contains("sensors"),
+        "the value is persisted"
+    );
 
     // A value with no model at all is rejected rather than stored as an empty picker.
     let error = settings.set("sensors", "  ;  ").unwrap_err().to_string();

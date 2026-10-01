@@ -80,14 +80,12 @@ pub fn apply_repo(root: &Path, settings: &mut Settings) -> Result<(), SettingsEr
     match fs::read_to_string(&path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(source) => Err(SettingsError::Io { path, source }),
-        Ok(text) => {
-            settings
-                .apply_repo_json(&text)
-                .map_err(|error| SettingsError::Invalid {
-                    path,
-                    message: error.to_string(),
-                })
-        }
+        Ok(text) => settings
+            .apply_repo_json(&text)
+            .map_err(|error| SettingsError::Invalid {
+                path,
+                message: error.to_string(),
+            }),
     }
 }
 

@@ -1,0 +1,30 @@
+# Test summary
+
+- project: 
+- exported: 2026-09-30 18:10
+- version: 0.1.0
+- revision: f93bc59 (uncommitted changes)
+
+## Test cases
+
+| Test plan | Test case | Runs | Complete | Partial | Aborted | Last run |
+|---|---|---|---|---|---|---|
+| UAS-MAG Preflight | Power On and Boot | 2 | 1 | 0 | 0 | 2026-09-30T23:56:45Z |
+| UAS-MAG Preflight | heading error | 0 | 0 | 0 | 0 |  |
+| UAS-MAG Preflight | Sensor Mount and Orientation | 0 | 0 | 0 | 0 |  |
+| UAS-MAG Preflight | GNSS Lock and Time Sync | 0 | 0 | 0 | 0 |  |
+| UAS-MAG Calibration | Zero Offset | 0 | 0 | 0 | 0 |  |
+| UAS-MAG Calibration | Heading Error | 0 | 0 | 0 | 0 |  |
+| UAS-MAG Calibration | Scale Factor | 0 | 0 | 0 | 0 |  |
+| UAS-MAG Survey Flight | Base Station Setup | 0 | 0 | 0 | 0 |  |
+| UAS-MAG Survey Flight | Survey Pre-flight | 0 | 0 | 0 | 0 |  |
+| UAS-MAG Survey Flight | Survey Flight | 0 | 0 | 0 | 0 |  |
+| UAS-MAG Survey Flight | Post-flight Backup | 0 | 0 | 0 | 0 |  |
+| test | heading error | 0 | 0 | 0 | 0 |  |
+
+## Runs
+
+| Test plan | Test case | Run ID | Started | Site | Operator | Sensor | Outcome | Conclusion | Deviations | Files (L/P/F) | Notes | Folder |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| UAS-MAG Preflight | Power On and Boot | 2026-09-30-power-on-uas-mag | 2026-09-30 16:48 | cfar | Leo | UAS-MAG | complete |  | 0 | 1/0/0 |  | runs/uas-mag-preflight-power-on/2026-09-30-power-on-uas-mag |
+| UAS-MAG Preflight | Power On and Boot | 2026-09-30-power-on-uas-mag-2 | 2026-09-30 16:56 | cfar | Leo | UAS-MAG |  |  | 0 | 0/0/0 |  | runs/uas-mag-preflight-power-on/2026-09-30-power-on-uas-mag-2 |

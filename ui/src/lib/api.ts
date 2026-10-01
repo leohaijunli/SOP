@@ -5,6 +5,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
+  AttachmentKind,
+  AttachResult,
   CaptureInput,
   ChecklistEntry,
   Drift,
@@ -14,12 +16,14 @@ import type {
   ProjectView,
   PushResult,
   RunEventInput,
+  RunFiles,
   RunMetaInput,
   RunView,
   SettingRow,
-Status,
+  Status,
   StepInput,
   StepPatch,
+  SummaryExportReport,
   TestPlan,
 } from "./types";
 
@@ -155,6 +159,35 @@ export const runEnd = (
 export const runAttach = (sop: string, runId: string, step: string | null, path: string): Promise<RunView> =>
   invoke<RunView>("run_attach", { sop, runId, step, path });
 
+// Attach several files of one kind at once (History's "add log / photos / files"). Each
+// file is handled on its own: one failure does not stop the rest, and the per-file result
+// says where it landed or why it did not.
+export const runAttachMany = (
+  sop: string,
+  runId: string,
+  kind: AttachmentKind,
+  paths: string[]
+): Promise<AttachResult[]> =>
+  invoke<AttachResult[]>("run_attach_many", { sop, runId, kind, paths });
+
+// Add a run-level note to a run. An empty note is refused by the shell.
+export const runNoteAdd = (sop: string, runId: string, note: string): Promise<RunFiles> =>
+  invoke<RunFiles>("run_note_add", { sop, runId, note });
+
+// The files and notes recorded for a run, with per-kind counts.
+export const runFiles = (sop: string, runId: string): Promise<RunFiles> =>
+  invoke<RunFiles>("run_files", { sop, runId });
+
+// Open the folder a run's material lives in, in the desktop file manager. Returns the
+// path that was opened (or would have been), so a failure can show it.
+export const openRunFolder = (sop: string, runId: string): Promise<string> =>
+  invoke<string>("open_run_folder", { sop, runId });
+
+// The size in bytes of each named file, so the window can warn before uploading a large
+// one. A file that cannot be read comes back as 0.
+export const fileSizes = (paths: string[]): Promise<number[]> =>
+  invoke<number[]>("file_sizes", { paths });
+
 // Remove one run (its record, run directory, and log directory). Returns how many paths
 // were removed.
 export const runDelete = (sop: string, runId: string): Promise<number> =>
@@ -168,6 +201,25 @@ export const pickDataFile = async (): Promise<string | null> => {
   const path = await open({ multiple: false });
   if (!path || Array.isArray(path)) return null;
   return path;
+};
+
+// Pick one or more files of a kind to upload. A photo gets an image filter; a log or any
+// other file gets no filter, so a data file the operator names anything still shows.
+export const pickFiles = async (kind: AttachmentKind): Promise<string[]> => {
+  const filters =
+    kind === "photo"
+      ? [{ name: "Images", extensions: ["jpg", "jpeg", "png", "heic", "webp", "tif", "tiff"] }]
+      : undefined;
+  const picked = await open({ multiple: true, filters });
+  if (!picked) return [];
+  return Array.isArray(picked) ? picked : [picked];
+};
+
+// Pick any number of any files; the caller sorts them by kind afterwards.
+export const pickFilesAny = async (): Promise<string[]> => {
+  const picked = await open({ multiple: true });
+  if (!picked) return [];
+  return Array.isArray(picked) ? picked : [picked];
 };
 
 export const testPlans = (): Promise<TestPlan[]> => invoke<TestPlan[]>("test_plans");
@@ -219,6 +271,33 @@ export const runSummaryDialog = async (): Promise<string | null> => {
   if (!path) return null;
   return invoke<string>("run_summary", { out: path });
 };
+
+// Package a summary and every run into `<dest>/export_<local time>/`. The native folder
+// picker starts in the working copy's `exports/` folder; the shell creates it if needed.
+// Returns null when the operator cancels.
+export const runExportPackageDialog = async (
+  defaultDir?: string | null
+): Promise<SummaryExportReport | null> => {
+  const dest = await open({
+    directory: true,
+    multiple: false,
+    defaultPath: defaultDir ?? undefined,
+  });
+  if (!dest || Array.isArray(dest)) return null;
+  return invoke<SummaryExportReport>("run_export_package", { dest, label: null });
+};
+
+// Pick any directory with the native folder picker. Returns null when the operator cancels.
+export const pickDirectory = async (): Promise<string | null> => {
+  const path = await open({ directory: true, multiple: false });
+  if (!path || Array.isArray(path)) return null;
+  return path;
+};
+
+// Open the folder the last export wrote. The shell refuses any other path, so this
+// cannot be used to open an arbitrary directory.
+export const openExportFolder = (path: string): Promise<string> =>
+  invoke<string>("open_export_folder", { path });
 
 // ---- local file loading ------------------------------------------------------
 

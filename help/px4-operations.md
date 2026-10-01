@@ -5,7 +5,7 @@ title: PX4 Operations
 section: PX4 Operations
 order: 10
 audience: operator
-updated: 2026-09-26
+updated: 2026-09-29
 summary: Flight controller, payload, and survey-flight procedures for PX4-based aircraft.
 ---
 
@@ -28,6 +28,9 @@ Help and reference for operating PX4-based aircraft during a magnetic survey.
 ## After landing
 
 - Copy the payload log and the flight log to the field laptop with the same run id.
+- Add the payload log to the run as a `log` and any photographs of the site as `photo`
+  files, from the History detail drawer or `sop run attach --kind`. Both are allowed
+  after the run has ended.
 - Checksum the raw magnetometer data before leaving the field.
 
 See the individual pages under this category for the step-by-step details.

@@ -14,16 +14,16 @@
 
 use std::path::{Path, PathBuf};
 
-use sop_core::authoring::{ItemRef, Move};
 use sop_core::RunEvent;
+use sop_core::authoring::{ItemRef, Move};
 use sop_repo::{Repo, authoring, git, manifest, project, run, validate};
 use tauri::State;
 
 use crate::api::{
-    CaptureInput, ChecklistItemView, ContentCounts, GitInfo, ProjectField, ProjectView,
-    RunAddedStepView, RunAttachmentView, RunCaptureView, RunClockView, RunMarkerView,
-    RunMetaInput, RunStepView, RunView, SensorView, SettingRow, Status, StepInput, StepPatch,
-    ValidationCounts,
+    AttachResult, CaptureInput, ChecklistItemView, ContentCounts, GitInfo, ProjectField,
+    ProjectView, RunAddedStepView, RunAttachmentView, RunCaptureView, RunClockView, RunFileView,
+    RunFiles, RunMarkerView, RunMetaInput, RunNoteView, RunStepView, RunView, SensorView,
+    SettingRow, Status, StepInput, StepPatch, SummaryExportReport, ValidationCounts,
 };
 use crate::state::AppState;
 
@@ -102,17 +102,17 @@ pub fn duplicate_test_case(path: String, state: State<'_, AppState>) -> Reply<St
         n += 1;
     };
 
-    let text = std::fs::read_to_string(&src)
-        .map_err(|error| format!("{}: {error}", src.display()))?;
+    let text =
+        std::fs::read_to_string(&src).map_err(|error| format!("{}: {error}", src.display()))?;
     let new_id = dest
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or(&stem)
         .to_owned();
     let text = sop_core::front::set_field(&text, "sop_id", &new_id).unwrap_or(text);
-    let text = sop_core::front::set_field(&text, "title", &new_id.replace('-', " ")).unwrap_or(text);
-    std::fs::write(&dest, text)
-        .map_err(|error| format!("{}: {error}", dest.display()))?;
+    let text =
+        sop_core::front::set_field(&text, "title", &new_id.replace('-', " ")).unwrap_or(text);
+    std::fs::write(&dest, text).map_err(|error| format!("{}: {error}", dest.display()))?;
     Ok(repo.relpath(&dest))
 }
 
@@ -121,23 +121,26 @@ pub fn duplicate_test_case(path: String, state: State<'_, AppState>) -> Reply<St
 pub fn delete_test_case(path: String, state: State<'_, AppState>) -> Reply<()> {
     let repo = Repo::open(state.testcase_repo_root()?);
     let file = resolve_file(&repo, &path)?;
-    std::fs::remove_file(&file)
-        .map_err(|error| format!("{}: {error}", file.display()))?;
+    std::fs::remove_file(&file).map_err(|error| format!("{}: {error}", file.display()))?;
     Ok(())
 }
 
 /// Import a markdown file into a plan folder as a new test case. The source file is
 /// copied in under a unique name and given a fresh id/title so it is a runnable case.
 #[tauri::command(async)]
-pub fn import_test_case(plan_path: String, source: String, state: State<'_, AppState>) -> Reply<String> {
+pub fn import_test_case(
+    plan_path: String,
+    source: String,
+    state: State<'_, AppState>,
+) -> Reply<String> {
     let repo = Repo::open(state.testcase_repo_root()?);
     let plan_dir = resolve_file(&repo, &plan_path)?;
     if !plan_dir.is_dir() {
         return Err(format!("{plan_path}: no such plan folder"));
     }
     let src = resolve_file(&repo, &source)?;
-    let text = std::fs::read_to_string(&src)
-        .map_err(|error| format!("{}: {error}", src.display()))?;
+    let text =
+        std::fs::read_to_string(&src).map_err(|error| format!("{}: {error}", src.display()))?;
 
     let stem = src
         .file_stem()
@@ -158,7 +161,8 @@ pub fn import_test_case(plan_path: String, source: String, state: State<'_, AppS
         .unwrap_or(&stem)
         .to_owned();
     let text = sop_core::front::set_field(&text, "sop_id", &new_id).unwrap_or(text);
-    let text = sop_core::front::set_field(&text, "title", &new_id.replace('-', " ")).unwrap_or(text);
+    let text =
+        sop_core::front::set_field(&text, "title", &new_id.replace('-', " ")).unwrap_or(text);
     std::fs::write(&candidate, text)
         .map_err(|error| format!("{}: {error}", candidate.display()))?;
     Ok(repo.relpath(&candidate))
@@ -177,7 +181,11 @@ pub fn create_test_plan(name: String, title: String, state: State<'_, AppState>)
         return Err(format!("plan '{name}' already exists"));
     }
     let title = title.trim();
-    let title = if title.is_empty() { name.clone() } else { title.to_owned() };
+    let title = if title.is_empty() {
+        name.clone()
+    } else {
+        title.to_owned()
+    };
     std::fs::create_dir_all(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
     let plan_file = dir.join("plan.md");
     let text = format!(
@@ -185,7 +193,8 @@ pub fn create_test_plan(name: String, title: String, state: State<'_, AppState>)
         sop_core::front::format_scalar(&title),
         title
     );
-    std::fs::write(&plan_file, text).map_err(|error| format!("{}: {error}", plan_file.display()))?;
+    std::fs::write(&plan_file, text)
+        .map_err(|error| format!("{}: {error}", plan_file.display()))?;
     Ok(dir.display().to_string())
 }
 
@@ -196,7 +205,8 @@ pub fn create_test_plan(name: String, title: String, state: State<'_, AppState>)
 pub fn run_summary(out: String, state: State<'_, AppState>) -> Reply<String> {
     let repo = state.repo()?;
     let testcases = Repo::open(state.testcase_repo_root()?);
-    let text = sop_repo::summary::markdown(&repo, &testcases);
+    let meta = sop_repo::export::repo_meta(&repo, local_display(&sop_core::now_utc_rfc3339()));
+    let text = sop_repo::summary::markdown(&repo, &testcases, &|time| local_display(time), &meta);
     let path = PathBuf::from(&out);
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -204,6 +214,70 @@ pub fn run_summary(out: String, state: State<'_, AppState>) -> Reply<String> {
     std::fs::write(&path, text.as_bytes())
         .map_err(|error| format!("{}: {error}", path.display()))?;
     Ok(path.display().to_string())
+}
+
+/// Package a summary and every run's material into one self-contained folder.
+///
+/// `dest` is the folder the window picked; the package lands in `dest/export_<label>`
+/// with `summary.md`, `summary.csv`, each run's record and folder, and a
+/// `MANIFEST.sha256`. When `label` is blank the local time is used. The folder that was
+/// written is remembered so `open_export_folder` can open that one result and nothing
+/// else.
+#[tauri::command(async)]
+pub fn run_export_package(
+    dest: String,
+    label: Option<String>,
+    state: State<'_, AppState>,
+) -> Reply<SummaryExportReport> {
+    let repo = state.repo()?;
+    let testcases = Repo::open(state.testcase_repo_root()?);
+    let dest = dest.trim();
+    if dest.is_empty() {
+        return Err("no destination folder was chosen".to_owned());
+    }
+    let now = sop_core::now_utc_rfc3339();
+    let label = label
+        .map(|label| label.trim().to_owned())
+        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| local_label(&now));
+    let meta = sop_repo::export::repo_meta(&repo, local_display(&now));
+    let report = sop_repo::export::export_package(
+        &repo,
+        &testcases,
+        Path::new(dest),
+        &label,
+        &|time| local_display(time),
+        &meta,
+        None,
+    )
+    .map_err(|error| error.to_string())?;
+    state.set_last_export(report.dir.clone())?;
+    Ok(SummaryExportReport {
+        dir: report.dir.display().to_string(),
+        runs: report.runs,
+        files: report.files,
+        bytes: report.bytes,
+        skipped: report.skipped,
+        failed: report.failed,
+    })
+}
+
+/// Open the folder the most recent export wrote, in the desktop's file manager.
+///
+/// The path is passed back by the window, but only the folder the last successful export
+/// produced is accepted, so this cannot open an arbitrary directory.
+#[tauri::command(async)]
+pub fn open_export_folder(path: String, state: State<'_, AppState>) -> Reply<String> {
+    let target = PathBuf::from(path.trim());
+    if target.as_os_str().is_empty() || !target.is_dir() {
+        return Err(format!("{} is not a folder", target.display()));
+    }
+    let target = target.canonicalize().unwrap_or(target);
+    if !state.is_last_export(&target)? {
+        return Err("that is not the folder the last export wrote".to_owned());
+    }
+    open_in_file_manager(&target)?;
+    Ok(target.display().to_string())
 }
 
 /// Remove one run: its record file, run directory, and log directory.
@@ -259,12 +333,17 @@ pub fn render_markdown(text: String) -> Reply<String> {
 #[tauri::command(async)]
 pub fn validation_report(state: State<'_, AppState>) -> Reply<String> {
     let repo = state.repo()?;
-    Ok(validate::validate_repository(&repo).report.render(repo.root()))
+    Ok(validate::validate_repository(&repo)
+        .report
+        .render(repo.root()))
 }
 
 /// The procedures that can be included in a checklist, and whether it already has them.
 #[tauri::command(async)]
-pub fn procedure_choices(file: Option<String>, state: State<'_, AppState>) -> Reply<Vec<ProcedureChoice>> {
+pub fn procedure_choices(
+    file: Option<String>,
+    state: State<'_, AppState>,
+) -> Reply<Vec<ProcedureChoice>> {
     let repo = state.repo()?;
     let included = match file.as_deref() {
         Some(file) => {
@@ -285,7 +364,12 @@ pub fn procedure_choices(file: Option<String>, state: State<'_, AppState>) -> Re
         let relative = repo.relpath(&path);
         let (id, title) = match repo.load(&path) {
             Ok(loaded) => (
-                loaded.doc.front.str("procedure_id").flatten().map(str::to_owned),
+                loaded
+                    .doc
+                    .front
+                    .str("procedure_id")
+                    .flatten()
+                    .map(str::to_owned),
                 loaded.doc.front.str("title").flatten().map(str::to_owned),
             ),
             Err(_) => (None, None),
@@ -322,7 +406,11 @@ pub fn settings_path(state: State<'_, AppState>) -> Reply<String> {
 }
 
 #[tauri::command(async)]
-pub fn settings_set(key: String, value: String, state: State<'_, AppState>) -> Reply<Vec<SettingRow>> {
+pub fn settings_set(
+    key: String,
+    value: String,
+    state: State<'_, AppState>,
+) -> Reply<Vec<SettingRow>> {
     state.set_setting(&key, &value)?;
     rows(&state)
 }
@@ -380,13 +468,16 @@ pub fn config_load(state: State<'_, AppState>) -> Reply<String> {
 #[tauri::command(async)]
 pub fn config_save(json: String, state: State<'_, AppState>) -> Reply<String> {
     let repo = state.repo()?;
-    let parsed: serde_json::Value =
-        serde_json::from_str(&json).map_err(|error| format!("config is not valid JSON: {error}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|error| format!("config is not valid JSON: {error}"))?;
 
     // Write the config file first so it always lands, even if applying a field fails.
     let config_path = repo.resolve("configure.json");
-    std::fs::write(&config_path, serde_json::to_string_pretty(&parsed).unwrap_or_else(|_| "{}".to_owned()))
-        .map_err(|error| format!("{}: {error}", config_path.display()))?;
+    std::fs::write(
+        &config_path,
+        serde_json::to_string_pretty(&parsed).unwrap_or_else(|_| "{}".to_owned()),
+    )
+    .map_err(|error| format!("{}: {error}", config_path.display()))?;
 
     if let Some(project_obj) = parsed.get("project").and_then(|value| value.as_object()) {
         for (key, value) in project_obj {
@@ -586,8 +677,14 @@ pub fn run_start(
             .map(|(key, value)| (key.trim().to_owned(), value.trim().to_owned()))
             .filter(|(key, value)| !key.is_empty() && !value.is_empty())
             .collect(),
-        plan: meta.plan.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty()),
-        case: meta.case.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty()),
+        plan: meta
+            .plan
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty()),
+        case: meta
+            .case
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty()),
         clock: match (meta.clock_instrument_time, meta.clock_basis) {
             (Some(instrument_time), Some(basis))
                 if !instrument_time.trim().is_empty() && !basis.trim().is_empty() =>
@@ -609,9 +706,16 @@ pub fn run_start(
             _ => None,
         },
     };
-    let loaded =
-        run::start_with_meta(&repo, &sop, &run_id, &operator, &site, r#override.as_deref(), &meta)
-            .map_err(text)?;
+    let loaded = run::start_with_meta(
+        &repo,
+        &sop,
+        &run_id,
+        &operator,
+        &site,
+        r#override.as_deref(),
+        &meta,
+    )
+    .map_err(text)?;
     Ok(build_run_view(&loaded, &run_id))
 }
 
@@ -656,7 +760,9 @@ pub fn run_add_step(
         at: String::new(), // stamped by the tool
         id: next_adhoc_id(&loaded.state),
         title,
-        after: after.filter(|id| !id.trim().is_empty()).map(|id| id.trim().to_owned()),
+        after: after
+            .filter(|id| !id.trim().is_empty())
+            .map(|id| id.trim().to_owned()),
     };
     let loaded = run::record(&repo, &sop, &run_id, &event).map_err(text)?;
     Ok(build_run_view(&loaded, &run_id))
@@ -704,7 +810,7 @@ pub fn run_end(
     conclusion_note: Option<String>,
     state: State<'_, AppState>,
 ) -> Reply<RunView> {
-let repo = state.repo()?;
+    let repo = state.repo()?;
     let conclusion = match (conclusion, conclusion_note) {
         (None, None) => None,
         (Some(outcome), Some(note)) => Some((outcome, note)),
@@ -724,10 +830,254 @@ pub fn run_attach(
     state: State<'_, AppState>,
 ) -> Reply<RunView> {
     let repo = state.repo()?;
-    run::attach(&repo, &sop, &run_id, step.as_deref(), std::path::Path::new(&path))
-        .map_err(text)?;
+    run::attach(
+        &repo,
+        &sop,
+        &run_id,
+        step.as_deref(),
+        std::path::Path::new(&path),
+    )
+    .map_err(text)?;
     let loaded = run::load(&repo, &sop, &run_id).map_err(text)?;
     Ok(build_run_view(&loaded, &run_id))
+}
+
+/// Attach several files of one kind to a run (History's "add log / photos / files").
+///
+/// Each file is handled on its own: one failure does not stop the rest, and the caller
+/// gets a per-file result to show. The kind picks the subdirectory (`logs/`, `photos/`,
+/// `attachments/`). Files attach at the run level, not to a step.
+#[tauri::command(async)]
+pub fn run_attach_many(
+    sop: String,
+    run_id: String,
+    kind: String,
+    paths: Vec<String>,
+    state: State<'_, AppState>,
+) -> Reply<Vec<AttachResult>> {
+    let repo = state.repo()?;
+    require_id(&sop, "checklist")?;
+    require_id(&run_id, "run")?;
+    let kind = sop_core::run::AttachmentKind::parse(&kind)
+        .ok_or_else(|| format!("'{kind}' is not an attachment kind; use log, photo, or file"))?;
+    let mut results = Vec::with_capacity(paths.len());
+    for source in paths {
+        let outcome = run::attach_kind(
+            &repo,
+            &sop,
+            &run_id,
+            None,
+            kind,
+            std::path::Path::new(&source),
+        );
+        results.push(match outcome {
+            Ok(attachment) => AttachResult {
+                source,
+                path: Some(attachment.path),
+                error: None,
+            },
+            Err(error) => AttachResult {
+                source,
+                path: None,
+                error: Some(error.to_string()),
+            },
+        });
+    }
+    Ok(results)
+}
+
+/// Add a run-level note to a run (History's "add note"). An empty note is refused: it
+/// records nothing. The tool stamps the time.
+#[tauri::command(async)]
+pub fn run_note_add(
+    sop: String,
+    run_id: String,
+    note: String,
+    state: State<'_, AppState>,
+) -> Reply<RunFiles> {
+    let repo = state.repo()?;
+    require_id(&sop, "checklist")?;
+    require_id(&run_id, "run")?;
+    let note = note.trim();
+    if note.is_empty() {
+        return Err("a note cannot be empty".to_owned());
+    }
+    run::record(
+        &repo,
+        &sop,
+        &run_id,
+        &RunEvent::NoteAdded {
+            at: String::new(),
+            step: None,
+            text: note.to_owned(),
+        },
+    )
+    .map_err(text)?;
+    build_run_files(&repo, &sop, &run_id)
+}
+
+/// The files and notes recorded for a run, with per-kind counts (History's detail drawer).
+#[tauri::command(async)]
+pub fn run_files(sop: String, run_id: String, state: State<'_, AppState>) -> Reply<RunFiles> {
+    let repo = state.repo()?;
+    require_id(&sop, "checklist")?;
+    require_id(&run_id, "run")?;
+    build_run_files(&repo, &sop, &run_id)
+}
+
+/// Open the folder a run's material lives in, in the desktop's file manager.
+///
+/// The path is built here from the two ids, never passed in, so the window cannot ask to
+/// open an arbitrary path. A run that has its own directory opens that; a legacy record
+/// with only `runs/<sop>/<run_id>.md` opens the checklist's folder instead. The opened
+/// path is returned so the window can show it when the file manager does not come up.
+#[tauri::command(async)]
+pub fn open_run_folder(sop: String, run_id: String, state: State<'_, AppState>) -> Reply<String> {
+    let repo = state.repo()?;
+    require_id(&sop, "checklist")?;
+    require_id(&run_id, "run")?;
+    let run_dir = repo.resolve(&format!("runs/{sop}/{run_id}"));
+    let target = if run_dir.is_dir() {
+        run_dir
+    } else {
+        let parent = repo.resolve(&format!("runs/{sop}"));
+        if parent.is_dir() {
+            parent
+        } else {
+            repo.root().to_path_buf()
+        }
+    };
+    open_in_file_manager(&target)?;
+    Ok(target.display().to_string())
+}
+
+/// The sizes of the named files, so the window can warn before copying a large photo or
+/// log into the repository. A file that cannot be read is reported as 0 bytes.
+#[tauri::command(async)]
+pub fn file_sizes(paths: Vec<String>) -> Reply<Vec<u64>> {
+    Ok(paths
+        .iter()
+        .map(|path| std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0))
+        .collect())
+}
+
+/// Reject an id that is not well formed before it reaches a path.
+fn require_id(id: &str, what: &str) -> Reply<()> {
+    if sop_core::vocab::is_valid_id(id) {
+        Ok(())
+    } else {
+        Err(format!("'{id}' is not a {what} id"))
+    }
+}
+
+/// A stored UTC timestamp as the operator's local time: `YYYY-MM-DD HH:MM`.
+///
+/// A value this build cannot parse is returned unchanged, so a hand-written or legacy
+/// timestamp still shows up in a summary rather than disappearing.
+fn local_display(utc: &str) -> String {
+    match chrono::DateTime::parse_from_rfc3339(utc) {
+        Ok(time) => time
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string(),
+        Err(_) => utc.to_owned(),
+    }
+}
+
+/// The export label for a UTC `now`: the local time as `YYYY-MM-DD_HHMMSS`.
+///
+/// Only `[0-9A-Za-z_-]` is allowed in a label, so an unreadable `now` falls back to a
+/// fixed valid word rather than leaking punctuation into a path.
+fn local_label(now: &str) -> String {
+    match chrono::DateTime::parse_from_rfc3339(now) {
+        Ok(time) => time
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d_%H%M%S")
+            .to_string(),
+        Err(_) => "export".to_owned(),
+    }
+}
+
+/// Build the file/note list and counts the drawer renders.
+fn build_run_files(repo: &Repo, sop: &str, run_id: &str) -> Reply<RunFiles> {
+    let loaded = run::load(repo, sop, run_id).map_err(text)?;
+    let state = &loaded.state;
+    let mut files: Vec<RunFileView> = Vec::new();
+    let mut notes: Vec<RunNoteView> = Vec::new();
+    let mut push_attachment = |step: Option<&str>, attachment: &sop_core::run::Attachment| {
+        let name = std::path::Path::new(&attachment.path)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| attachment.path.clone());
+        files.push(RunFileView {
+            kind: attachment.kind.as_str().to_owned(),
+            name,
+            path: attachment.path.clone(),
+            size: attachment.size,
+            added_at: attachment.at.clone(),
+            post_run: attachment.post_run,
+            step: step.map(str::to_owned),
+        });
+    };
+    for (step_id, step) in &state.steps {
+        for attachment in &step.attachments {
+            push_attachment(Some(step_id), attachment);
+        }
+        for note in &step.notes {
+            notes.push(RunNoteView {
+                text: note.text.clone(),
+                added_at: note.at.clone(),
+                post_run: note.post_run,
+                step: Some(step_id.clone()),
+            });
+        }
+    }
+    for attachment in &state.run_attachments {
+        push_attachment(None, attachment);
+    }
+    for note in &state.run_notes {
+        notes.push(RunNoteView {
+            text: note.text.clone(),
+            added_at: note.at.clone(),
+            post_run: note.post_run,
+            step: None,
+        });
+    }
+    files.sort_by(|a, b| a.added_at.cmp(&b.added_at));
+    notes.sort_by(|a, b| a.added_at.cmp(&b.added_at));
+    let count = |kind: &str| files.iter().filter(|file| file.kind == kind).count();
+    Ok(RunFiles {
+        log_count: count("log"),
+        photo_count: count("photo"),
+        file_count: count("file"),
+        files,
+        notes,
+    })
+}
+
+/// Open a directory in the platform's file manager. Fire-and-forget: the process's
+/// output is discarded and it is not waited on, so a slow file manager cannot stall the
+/// window. `LD_*` and AppImage variables are cleared first, because an AppImage injects
+/// its own library path and `xdg-open` would then load the wrong libraries.
+fn open_in_file_manager(path: &Path) -> Reply<()> {
+    use std::process::{Command, Stdio};
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    let mut command = Command::new(program);
+    command.arg(path);
+    command.stdout(Stdio::null()).stderr(Stdio::null());
+    for variable in ["LD_LIBRARY_PATH", "LD_PRELOAD", "APPIMAGE", "APPDIR", "OWD"] {
+        command.env_remove(variable);
+    }
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("{}: {error}", path.display()))
 }
 
 /// `Some(text)` for a field with content, `None` for a blank one, so the view leaves a
@@ -742,7 +1092,9 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
     let mut steps = Vec::new();
     for def in &loaded.defs {
         let step_state = state.steps.get(&def.id);
-        let status = step_state.map(|s| s.status.clone()).unwrap_or(StepStatus::Open);
+        let status = step_state
+            .map(|s| s.status.clone())
+            .unwrap_or(StepStatus::Open);
         let captures = def
             .captures
             .iter()
@@ -839,14 +1191,14 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
                 label: marker.label.clone(),
             })
             .collect(),
-        run_notes: state.run_notes.iter().map(|note| note.text.clone()).collect(),
-        run_attachments: state
-            .run_attachments
+        run_notes: state
+            .run_notes
             .iter()
-            .map(attachment_view)
+            .map(|note| note.text.clone())
             .collect(),
+        run_attachments: state.run_attachments.iter().map(attachment_view).collect(),
         record_path: loaded.record_path.display().to_string(),
-        suggested_log_name: Some(run::suggest_log_name(&loaded, "")),
+        suggested_log_name: Some(run::suggest_log_name(loaded, "")),
     }
 }
 
@@ -855,6 +1207,9 @@ fn attachment_view(attachment: &sop_core::run::Attachment) -> RunAttachmentView 
         path: attachment.path.clone(),
         sha256: attachment.sha256.clone(),
         size: attachment.size,
+        kind: attachment.kind.as_str().to_owned(),
+        added_at: attachment.at.clone(),
+        post_run: attachment.post_run,
         t_min: attachment.t_min.clone(),
         t_max: attachment.t_max.clone(),
         row_count: attachment.row_count,
@@ -960,11 +1315,11 @@ pub fn run_export_to(
 pub fn load_external_md(path: String, state: State<'_, AppState>) -> Reply<Option<String>> {
     let _ = state;
     let path = PathBuf::from(&path);
-    let text_content = std::fs::read_to_string(&path)
-        .map_err(|error| format!("{}: {error}", path.display()))?;
+    let text_content =
+        std::fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
 
-    let doc = sop_core::Document::parse_standalone(&text_content)
-        .map_err(|error| error.to_string())?;
+    let doc =
+        sop_core::Document::parse_standalone(&text_content).map_err(|error| error.to_string())?;
 
     let filename = path
         .file_stem()
@@ -1148,4 +1503,44 @@ fn build_status(state: &AppState) -> Reply<Status> {
             warnings: validation.warning_count(),
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{local_display, local_label};
+
+    #[test]
+    fn local_display_renders_the_operator_clock() {
+        // The exact text depends on the machine's zone, but the shape does not: the
+        // stored date and the `HH:MM` time are always in that order.
+        let text = local_display("2026-09-29T20:31:00Z");
+        assert_eq!(text.len(), 16, "{text}");
+        assert_eq!(&text[4..5], "-", "{text}");
+        assert_eq!(&text[7..8], "-", "{text}");
+        assert_eq!(&text[10..11], " ", "{text}");
+        assert_eq!(&text[13..14], ":", "{text}");
+    }
+
+    #[test]
+    fn local_display_leaves_an_unreadable_value_alone() {
+        assert_eq!(local_display("not a timestamp"), "not a timestamp");
+    }
+
+    #[test]
+    fn local_label_is_a_safe_folder_name() {
+        let label = local_label("2026-09-29T20:31:00Z");
+        assert_eq!(label.len(), 17, "{label}");
+        assert_eq!(&label[10..11], "_", "{label}");
+        assert!(
+            label
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            "{label}"
+        );
+    }
+
+    #[test]
+    fn local_label_falls_back_for_an_unreadable_value() {
+        assert_eq!(local_label("nope"), "export");
+    }
 }

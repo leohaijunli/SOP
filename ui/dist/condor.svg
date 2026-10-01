@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- field-sop app icon: a chibi Andean condor soaring over a geomagnetic anomaly
+     contour map. Navigation is shown by waypoint dots and the condor's heading,
+     never by an arrow. Source of truth; icon.png is rasterised from this file. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <clipPath id="squircle">
+      <rect x="0" y="0" width="512" height="512" rx="112" ry="112"/>
+    </clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#173350"/>
+      <stop offset="0.55" stop-color="#122238"/>
+      <stop offset="1" stop-color="#0a1322"/>
+    </linearGradient>
+    <radialGradient id="anomaly" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ff9d4d" stop-opacity="0.8"/>
+      <stop offset="0.45" stop-color="#f2705a" stop-opacity="0.38"/>
+      <stop offset="1" stop-color="#f2705a" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="cool" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#57e2d6" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#57e2d6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="trail" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#4fd1c5"/>
+      <stop offset="0.6" stop-color="#f6c667"/>
+      <stop offset="1" stop-color="#ff9d4d"/>
+    </linearGradient>
+    <linearGradient id="plume" x1="0" y1="0" x2="0.2" y2="1">
+      <stop offset="0" stop-color="#4b5776"/>
+      <stop offset="0.55" stop-color="#2b3446"/>
+      <stop offset="1" stop-color="#1a2130"/>
+    </linearGradient>
+    <linearGradient id="head" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#f7e6cd"/>
+      <stop offset="1" stop-color="#e8d2b0"/>
+    </linearGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="20"/>
+    </filter>
+    <filter id="liftshadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#04070d" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <rect width="512" height="512" fill="url(#bg)"/>
+
+    <!-- geomagnetic anomaly map: cool blob upper-left, warm hotspot lower-right -->
+    <circle cx="104" cy="112" r="158" fill="url(#cool)"/>
+    <circle cx="410" cy="378" r="178" fill="url(#anomaly)"/>
+
+    <g fill="none" stroke="#5fe3d6" stroke-opacity="0.34" stroke-width="3">
+      <ellipse cx="104" cy="114" rx="58"  ry="42"  transform="rotate(-24 104 114)"/>
+      <ellipse cx="104" cy="114" rx="100" ry="70"  transform="rotate(-24 104 114)" stroke-opacity="0.26"/>
+      <ellipse cx="104" cy="114" rx="146" ry="100" transform="rotate(-24 104 114)" stroke-opacity="0.19"/>
+      <ellipse cx="104" cy="114" rx="196" ry="134" transform="rotate(-24 104 114)" stroke-opacity="0.12"/>
+    </g>
+    <g fill="none" stroke="#ffb066" stroke-opacity="0.6" stroke-width="3">
+      <ellipse cx="412" cy="378" rx="44" ry="32" transform="rotate(18 412 378)"/>
+      <ellipse cx="412" cy="378" rx="78" ry="56" transform="rotate(18 412 378)" stroke-opacity="0.44"/>
+      <ellipse cx="412" cy="378" rx="116" ry="84" transform="rotate(18 412 378)" stroke-opacity="0.3"/>
+      <ellipse cx="412" cy="378" rx="158" ry="114" transform="rotate(18 412 378)" stroke-opacity="0.19"/>
+      <ellipse cx="412" cy="378" rx="202" ry="148" transform="rotate(18 412 378)" stroke-opacity="0.11"/>
+    </g>
+
+    <!-- flight path: breadcrumb waypoints, no arrows -->
+    <path d="M 70 458 C 130 436 178 420 226 410 C 296 396 350 362 414 304"
+          fill="none" stroke="url(#trail)" stroke-opacity="0.5" stroke-width="5"
+          stroke-linecap="round" stroke-dasharray="2 22"/>
+    <g fill="#8ff0e6">
+      <circle cx="92"  cy="450" r="5"/>
+      <circle cx="148" cy="430" r="5.5"/>
+      <circle cx="250" cy="404" r="7"/>
+      <circle cx="328" cy="378" r="7.5"/>
+      <circle cx="396" cy="326" r="8"/>
+    </g>
+    <g fill="none" stroke="url(#trail)" stroke-opacity="0.85" stroke-width="4">
+      <circle cx="148" cy="430" r="13"/>
+      <circle cx="328" cy="378" r="15"/>
+    </g>
+    <g fill="none" stroke="#ffe6b0" stroke-opacity="0.8" stroke-width="3">
+      <circle cx="396" cy="326" r="12"/>
+    </g>
+
+    <!-- the condor, soaring -->
+    <circle cx="256" cy="228" r="152" fill="#060b16" opacity="0.30" filter="url(#soft)"/>
+    <g filter="url(#liftshadow)">
+      <!-- wings: broad, in a soaring dihedral, tips lifted -->
+      <path d="M 240 214 C 198 200 148 178 100 156 C 78 145 58 142 52 152
+               C 46 162 64 174 84 182 C 134 206 194 240 236 274 Z" fill="url(#plume)"/>
+      <path d="M 272 214 C 314 200 364 178 412 156 C 434 145 454 142 460 152
+               C 466 162 448 174 428 182 C 378 206 318 240 276 274 Z" fill="url(#plume)"/>
+      <!-- the Andean condor's white wing band, along the mid-wing -->
+      <path d="M 226 238 C 196 218 164 198 136 184" fill="none" stroke="#f4f1ea"
+            stroke-width="12" stroke-linecap="round"/>
+      <path d="M 286 238 C 316 218 348 198 376 184" fill="none" stroke="#f4f1ea"
+            stroke-width="12" stroke-linecap="round"/>
+      <!-- body -->
+      <path d="M 256 192 C 233 192 221 223 221 256 C 221 293 240 317 256 335
+               C 272 317 291 293 291 256 C 291 223 279 192 256 192 Z" fill="#242b3a"/>
+      <!-- forked tail -->
+      <path d="M 256 328 C 242 342 234 358 238 370 C 247 361 252 357 256 353
+               C 260 357 265 361 274 370 C 278 358 270 342 256 328 Z" fill="#1c2331"/>
+      <!-- tucked feet -->
+      <path d="M 245 337 c -4 6 -3 12 2 13 c 5 1 8 -4 6 -10 Z" fill="#e9c79a"/>
+      <path d="M 267 337 c 4 6 3 12 -2 13 c -5 1 -8 -4 -6 -10 Z" fill="#e9c79a"/>
+      <!-- fluffy white neck ruff, wider than the head and scalloped on top -->
+      <path d="M 206 190 C 202 172 218 163 231 173 C 238 160 274 160 281 173
+               C 294 163 310 172 306 190 C 308 212 284 226 256 226
+               C 228 226 204 212 206 190 Z" fill="#f8f6f0"/>
+      <!-- neck shadow where the head meets the ruff -->
+      <path d="M 232 186 C 242 196 270 196 280 186" fill="none" stroke="#d8cfc0"
+            stroke-width="4" stroke-linecap="round" stroke-opacity="0.55"/>
+      <!-- head -->
+      <circle cx="256" cy="150" r="26" fill="url(#head)"/>
+      <path d="M 243 132 a 21 21 0 0 1 19 -6" fill="none" stroke="#ffffff"
+            stroke-opacity="0.8" stroke-width="4" stroke-linecap="round"/>
+      <!-- beak -->
+      <path d="M 250 156 C 252 153 260 153 262 156 C 262 163 259 169 256 171
+               C 253 169 250 163 250 156 Z" fill="#f0a35e"/>
+      <path d="M 253 166 C 254 169 258 169 259 166 C 258 171 254 171 253 166 Z" fill="#cd7736"/>
+      <!-- forehead caruncle -->
+      <ellipse cx="256" cy="152" rx="4.5" ry="6" fill="#dd5a4a"/>
+      <!-- eyes -->
+      <circle cx="242" cy="145" r="8.5" fill="#ffffff"/>
+      <circle cx="270" cy="145" r="8.5" fill="#ffffff"/>
+      <circle cx="243" cy="147" r="4.6" fill="#1d2330"/>
+      <circle cx="271" cy="147" r="4.6" fill="#1d2330"/>
+      <circle cx="240" cy="143" r="1.8" fill="#ffffff"/>
+      <circle cx="268" cy="143" r="1.8" fill="#ffffff"/>
+      <!-- blush -->
+      <ellipse cx="233" cy="160" rx="8" ry="5" fill="#f2a0ad" opacity="0.7"/>
+      <ellipse cx="279" cy="160" rx="8" ry="5" fill="#f2a0ad" opacity="0.7"/>
+    </g>
+  </g>
+
+  <!-- inner rim, for a crisp edge on light and dark docks -->
+  <rect x="6" y="6" width="500" height="500" rx="107" ry="107"
+        fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="4"/>
+</svg>

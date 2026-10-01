@@ -1,24 +1,79 @@
-/* field-sop renderer, themed after Omarchy's Tokyo Night.
-   The palette is copied from the Omarchy theme that is current on the machine that
-   wrote this file: the app picks the system look up, rather than inventing its own. */
+/* field-sop renderer. Two palettes share one set of roles: a dark default for the lab
+   and night, and a light one for daylight in the field. `data-theme` pins a palette;
+   an unset attribute follows the OS with `prefers-color-scheme`.
+
+   Roles are split so a colour never does two jobs at once: text colours stay text,
+   decorative dividers stay quiet, and only interactive controls use the high-contrast
+   `--border`. Status colours follow Okabe-Ito, so a red-green colour-blind operator can
+   still tell a pass from a failure, and every status also carries a word. */
 
 :root {
-  --bg: #1a1b26;
-  --bg-dark: #13141c;
-  --bg-darker: #0e0e14;
-  --panel: #24283b;
-  --selection: #292e42;
-  --muted: #414868;
-  --ink: #a9b1d6;
-  --ink-bright: #c0caf5;
-  --ink-light: #b4bee6;
-  --line: #414868;
-  --accent: #7aa2f7;
-  --critical: #f7768e;
-  --warn: #e0af68;
-  --ok: #9ece6a;
-  --quote: #1f2335;
+  --bg: #15181e;
+  --bg-dark: #101318;
+  --bg-darker: #0b0d11;
+  --panel: #1c2028;
+  --selection: #262d3a;
+  --muted: #93a0b6;
+  --ink: #d3d9e4;
+  --ink-bright: #f1f4f9;
+  --ink-light: #93a0b6;
+  --line: #2f3644;
+  --border: #66728a;
+  --accent: #5fa8ff;
+  --critical: #ff7a5c;
+  --warn: #f2c14e;
+  --ok: #3fc9a0;
+  --quote: #0b0d11;
+  --deviate: rgba(255, 122, 92, 0.1);
+  --shadow: rgba(0, 0, 0, 0.45);
+  --overlay: rgba(0, 0, 0, 0.55);
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+:root[data-theme="light"] {
+  --bg: #f5f6f8;
+  --bg-dark: #ffffff;
+  --bg-darker: #eceef2;
+  --panel: #ebeef3;
+  --selection: #dbe5f7;
+  --muted: #566175;
+  --ink: #283040;
+  --ink-bright: #0f1622;
+  --ink-light: #566175;
+  --line: #d3d8e0;
+  --border: #7f8a9e;
+  --accent: #1a5fd0;
+  --critical: #b8300f;
+  --warn: #85560a;
+  --ok: #0d7052;
+  --quote: #eceef2;
+  --deviate: rgba(184, 48, 15, 0.08);
+  --shadow: rgba(15, 22, 34, 0.2);
+  --overlay: rgba(15, 22, 34, 0.32);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f5f6f8;
+    --bg-dark: #ffffff;
+    --bg-darker: #eceef2;
+    --panel: #ebeef3;
+    --selection: #dbe5f7;
+    --muted: #566175;
+    --ink: #283040;
+    --ink-bright: #0f1622;
+    --ink-light: #566175;
+    --line: #d3d8e0;
+    --border: #7f8a9e;
+    --accent: #1a5fd0;
+    --critical: #b8300f;
+    --warn: #85560a;
+    --ok: #0d7052;
+    --quote: #eceef2;
+    --deviate: rgba(184, 48, 15, 0.08);
+    --shadow: rgba(15, 22, 34, 0.2);
+    --overlay: rgba(15, 22, 34, 0.32);
+  }
 }
 
 * { box-sizing: border-box; }
@@ -40,6 +95,11 @@ header .tag {
 }
 header .spacer { flex: 1; }
 header .counts { color: var(--muted); font-size: 13px; }
+/* The icon is drawn for the dark theme. On a light surface it needs a frame to read. */
+:root[data-theme="light"] header .mark { box-shadow: 0 0 0 1px var(--border), 0 1px 3px var(--shadow); }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) header .mark { box-shadow: 0 0 0 1px var(--border), 0 1px 3px var(--shadow); }
+}
 kbd {
   font: 12px var(--mono); background: var(--quote); border: 1px solid var(--line);
   border-bottom-width: 2px; border-radius: 4px; padding: 0 5px;
@@ -61,15 +121,29 @@ nav h2, aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .
 label { font-size: 12px; color: var(--muted); }
 select, input, textarea, button {
   font: inherit; color: var(--ink); background: var(--bg-dark);
-  border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px;
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
 }
 select:focus, input:focus, textarea:focus, button:focus {
   outline: 2px solid var(--accent); outline-offset: -1px;
 }
 button { cursor: pointer; }
 button.primary { background: var(--accent); color: var(--bg-darker); border-color: var(--accent); font-weight: 600; }
-button:hover { border-color: var(--accent); }
-button:disabled { opacity: .45; cursor: not-allowed; }
+button:hover { border-color: var(--accent); background: var(--selection); }
+button.primary:hover { background: var(--accent); filter: brightness(1.06); }
+button:disabled { opacity: .45; cursor: not-allowed; background: none; }
+
+/* Placeholder text, selected text, and the scrollbar follow the theme instead of the
+   browser's defaults, so a light or dark palette does not fight a white placeholder or a
+   default blue selection highlight. */
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: 0.8; }
+::selection { background: var(--accent); color: var(--bg-darker); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border); border-radius: 999px;
+  border: 2px solid transparent; background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--accent); background-clip: padding-box; }
 
 ol.steps { list-style: none; margin: 8px 0 0; padding: 0; }
 ol.steps li {
@@ -86,7 +160,7 @@ ol.steps li[aria-current="true"] { background: var(--selection); border-color: v
 ol.steps li[data-state] { border-left-width: 3px; }
 ol.steps li[data-state="done"] { border-left-color: var(--ok); }
 ol.steps li[data-state="skipped"] { border-left-color: var(--warn); }
-ol.steps li[data-state="deviated"] { border-left-color: var(--critical); background: rgba(247, 118, 142, .09); }
+ol.steps li[data-state="deviated"] { border-left-color: var(--critical); background: var(--deviate); }
 ol.steps li[data-state="deviated"][aria-current="true"] { background: var(--selection); }
 ol.steps li.empty { cursor: default; color: var(--muted); font-size: 13px; }
 ol.steps .title { display: flex; align-items: baseline; gap: 6px; }
@@ -95,7 +169,7 @@ ol.steps .meta { display: flex; align-items: baseline; gap: 6px; font-size: 11px
 ol.steps .meta .reason { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .state {
   flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
-  border: 1px solid var(--muted); border-radius: 999px; padding: 0 6px; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; color: var(--muted);
 }
 .state.done { color: var(--ok); border-color: var(--ok); }
 .state.skipped { color: var(--warn); border-color: var(--warn); }

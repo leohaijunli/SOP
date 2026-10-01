@@ -96,6 +96,11 @@ impl ClockInfo {
 }
 
 /// One line of the run's event log. The `type` discriminates the variant.
+///
+/// `RunStarted` is much larger than the others (it carries the whole start form); the
+/// log is parsed one line at a time and events are short-lived, so the size difference is
+/// not worth a boxed payload.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "PascalCase")]
 pub enum RunEvent {
@@ -249,7 +254,10 @@ impl StepStatus {
             "done" => Ok(StepStatus::Done),
             "skipped" => Ok(StepStatus::Skipped),
             "deviated" => Ok(StepStatus::Deviated),
-            other => Err(RunError::BadResultStatus(other.to_owned(), RESULT_STATUS.join(", "))),
+            other => Err(RunError::BadResultStatus(
+                other.to_owned(),
+                RESULT_STATUS.join(", "),
+            )),
         }
     }
     pub fn as_str(&self) -> &str {
@@ -490,7 +498,9 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
             // operator was actually working on it.
             step_state.opened_at = Some(at.clone());
         }
-        RunEvent::StepAdded { id, title, after, .. } => {
+        RunEvent::StepAdded {
+            id, title, after, ..
+        } => {
             state.steps.entry(id.clone()).or_default();
             state.added_steps.push(AddedStep {
                 id: id.clone(),
@@ -505,7 +515,10 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
             });
         }
         RunEvent::CheckboxToggled {
-            step, index, checked, ..
+            step,
+            index,
+            checked,
+            ..
         } => {
             let step_state = state.steps.entry(step.clone()).or_default();
             if *index >= step_state.checkboxes.len() {
@@ -537,7 +550,9 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
             step_state.captures.remove(key);
             step_state.acknowledged.remove(key);
         }
-        RunEvent::CaptureAcknowledged { step, key, reason, .. } => {
+        RunEvent::CaptureAcknowledged {
+            step, key, reason, ..
+        } => {
             let step_state = state.steps.entry(step.clone()).or_default();
             if reason.as_deref().is_some_and(|r| r.trim().is_empty()) {
                 return Err(RunError::ReasonRequired("acknowledged"));
@@ -581,7 +596,12 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
                 row_count: *row_count,
             };
             match step {
-                Some(id) => state.steps.entry(id.clone()).or_default().attachments.push(attachment),
+                Some(id) => state
+                    .steps
+                    .entry(id.clone())
+                    .or_default()
+                    .attachments
+                    .push(attachment),
                 None => state.run_attachments.push(attachment),
             }
         }
@@ -609,17 +629,27 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
         }
         RunEvent::RunEnded { status, .. } => {
             if !RUN_STATUS.contains(&status.as_str()) {
-                return Err(RunError::BadRunStatus(status.clone(), RUN_STATUS.join(", ")));
+                return Err(RunError::BadRunStatus(
+                    status.clone(),
+                    RUN_STATUS.join(", "),
+                ));
             }
             state.run_status = Some(status.clone());
             state.ended = Some(event.at());
         }
-        RunEvent::RunConcluded { conclusion, summary, .. } => {
+        RunEvent::RunConcluded {
+            conclusion,
+            summary,
+            ..
+        } => {
             if state.ended.is_none() {
                 return Err(RunError::ConclusionBeforeEnd);
             }
             if !RUN_CONCLUSION.contains(&conclusion.as_str()) {
-                return Err(RunError::BadConclusion(conclusion.clone(), RUN_CONCLUSION.join(", ")));
+                return Err(RunError::BadConclusion(
+                    conclusion.clone(),
+                    RUN_CONCLUSION.join(", "),
+                ));
             }
             if summary.trim().is_empty() {
                 return Err(RunError::ConclusionNoteRequired);
@@ -709,7 +739,9 @@ pub struct RecordStep {
 fn yaml_scalar(value: &str) -> String {
     if value.is_empty()
         || value.starts_with(|c: char| c.is_ascii_digit())
-        || value.contains([':', '#', '{', '}', '[', ']', ',', '&', '*', '!', '|', '>', '"', '\''])
+        || value.contains([
+            ':', '#', '{', '}', '[', ']', ',', '&', '*', '!', '|', '>', '"', '\'',
+        ])
         || value.trim() != value
     {
         format!("{value:?}")
@@ -821,7 +853,10 @@ pub fn run_step_order(state: &RunState, steps: &[RecordStep]) -> Vec<(String, St
     // the end, in the order it was added.
     let anchored: Vec<String> = steps.iter().map(|s| s.id.clone()).collect();
     for added in &state.added_steps {
-        let placed = added.after.as_deref().is_some_and(|target| anchored.contains(&target.to_owned()));
+        let placed = added
+            .after
+            .as_deref()
+            .is_some_and(|target| anchored.contains(&target.to_owned()));
         if !placed {
             out.push((added.id.clone(), added.title.clone()));
         }
@@ -848,7 +883,10 @@ fn render_timeline(state: &RunState, steps: &[RecordStep]) -> String {
             _ => "—".to_owned(),
         };
         let t = |value: &Option<String>| {
-            value.as_deref().map(time_of_day).unwrap_or_else(|| "—".to_owned())
+            value
+                .as_deref()
+                .map(time_of_day)
+                .unwrap_or_else(|| "—".to_owned())
         };
         out.push_str(&format!(
             "| {id} | {title} | {} | {} | {status} | {duration} |\n",
@@ -865,10 +903,17 @@ pub fn timeline_csv(state: &RunState, steps: &[RecordStep]) -> String {
     let mut out = String::from("step,title,start_utc,end_utc,status,duration\n");
     for (id, title) in run_step_order(state, steps) {
         let step_state = state.steps.get(&id);
-        let opened = step_state.and_then(|s| s.opened_at.clone()).unwrap_or_default();
-        let ended = step_state.and_then(|s| s.ended_at.clone()).unwrap_or_default();
+        let opened = step_state
+            .and_then(|s| s.opened_at.clone())
+            .unwrap_or_default();
+        let ended = step_state
+            .and_then(|s| s.ended_at.clone())
+            .unwrap_or_default();
         let status = step_state.map(|s| s.status.as_str()).unwrap_or("open");
-        let duration = match (step_state.and_then(|s| s.opened_at.clone()), step_state.and_then(|s| s.ended_at.clone())) {
+        let duration = match (
+            step_state.and_then(|s| s.opened_at.clone()),
+            step_state.and_then(|s| s.ended_at.clone()),
+        ) {
             (Some(start), Some(end)) => match (epoch_seconds(&start), epoch_seconds(&end)) {
                 (Some(a), Some(b)) if b >= a => format_duration(b - a),
                 _ => String::new(),
@@ -929,7 +974,10 @@ fn render_post_run(state: &RunState, out: &mut String) {
     }
     for note in &state.run_notes {
         if note.post_run {
-            items.push((note.at.clone(), format!("note: {}", note.text.replace('\n', " "))));
+            items.push((
+                note.at.clone(),
+                format!("note: {}", note.text.replace('\n', " ")),
+            ));
         }
     }
     for attachment in &state.run_attachments {
@@ -972,7 +1020,8 @@ pub fn render_notes(state: &RunState) -> String {
         items.push((note.at.clone(), note.text.clone()));
     }
     items.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut out = String::from("<!-- generated from events.jsonl; do not edit -->\n\n# Run notes\n\n");
+    let mut out =
+        String::from("<!-- generated from events.jsonl; do not edit -->\n\n# Run notes\n\n");
     if items.is_empty() {
         out.push_str("_No notes were recorded for this run._\n");
         return out;
@@ -1007,7 +1056,9 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
         }
         out.push('\n');
     }
-    if let (Some(version), Some(commit)) = (state.sop_version.as_deref(), state.sop_commit.as_deref()) {
+    if let (Some(version), Some(commit)) =
+        (state.sop_version.as_deref(), state.sop_commit.as_deref())
+    {
         out.push_str(&format!("sop_version: {version}\nsop_commit: {commit}\n"));
     }
     // The head is a restatement of the front matter for a reader who has only the
@@ -1152,7 +1203,10 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
             let opened = step_state.and_then(|s| s.opened_at.clone());
             let ended = step_state.and_then(|s| s.ended_at.clone());
             let t = |value: &Option<String>| {
-                value.as_deref().map(time_of_day).unwrap_or_else(|| "—".to_owned())
+                value
+                    .as_deref()
+                    .map(time_of_day)
+                    .unwrap_or_else(|| "—".to_owned())
             };
             out.push_str(&format!(
                 "| {} | {} | {} | {} | {} | {} |\n",
@@ -1170,7 +1224,11 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
     if !state.markers.is_empty() {
         out.push_str("## Field markers\n\n");
         for marker in &state.markers {
-            out.push_str(&format!("- {label} at {at}\n", label = marker.label, at = marker.at));
+            out.push_str(&format!(
+                "- {label} at {at}\n",
+                label = marker.label,
+                at = marker.at
+            ));
         }
         out.push('\n');
     }
@@ -1245,7 +1303,10 @@ mod tests {
     fn replay_builds_state_in_order() {
         let events = vec![
             started(),
-            RunEvent::StepOpened { at: "t1".into(), step: "cond-location".into() },
+            RunEvent::StepOpened {
+                at: "t1".into(),
+                step: "cond-location".into(),
+            },
             RunEvent::CaptureRecorded {
                 at: "t2".into(),
                 step: "cond-location".into(),
@@ -1259,7 +1320,10 @@ mod tests {
                 status: "done".into(),
                 reason: None,
             },
-            RunEvent::RunEnded { at: "t4".into(), status: "complete".into() },
+            RunEvent::RunEnded {
+                at: "t4".into(),
+                status: "complete".into(),
+            },
         ];
         let state = replay(&events).unwrap();
         assert_eq!(state.sop.as_deref(), Some("ground-walk-survey"));
@@ -1273,16 +1337,32 @@ mod tests {
 
     #[test]
     fn first_event_must_be_run_started() {
-        let event = RunEvent::StepOpened { at: "t".into(), step: "s".into() };
-        assert_eq!(apply(&mut RunState::default(), &event), Err(RunError::MustStartWithRunStarted));
+        let event = RunEvent::StepOpened {
+            at: "t".into(),
+            step: "s".into(),
+        };
+        assert_eq!(
+            apply(&mut RunState::default(), &event),
+            Err(RunError::MustStartWithRunStarted)
+        );
     }
 
     #[test]
     fn no_events_after_ended() {
         let mut state = RunState::default();
         apply(&mut state, &started()).unwrap();
-        apply(&mut state, &RunEvent::RunEnded { at: "t".into(), status: "complete".into() }).unwrap();
-        let late = RunEvent::StepOpened { at: "t2".into(), step: "s".into() };
+        apply(
+            &mut state,
+            &RunEvent::RunEnded {
+                at: "t".into(),
+                status: "complete".into(),
+            },
+        )
+        .unwrap();
+        let late = RunEvent::StepOpened {
+            at: "t2".into(),
+            step: "s".into(),
+        };
         assert_eq!(apply(&mut state, &late), Err(RunError::Ended));
     }
 
@@ -1296,7 +1376,10 @@ mod tests {
             status: "skipped".into(),
             reason: None,
         };
-        assert_eq!(apply(&mut state, &skip), Err(RunError::ReasonRequired("skipped/deviated")));
+        assert_eq!(
+            apply(&mut state, &skip),
+            Err(RunError::ReasonRequired("skipped/deviated"))
+        );
     }
 
     #[test]
@@ -1337,8 +1420,18 @@ mod tests {
             conclusion: "pass".into(),
             summary: "all good".into(),
         };
-        assert_eq!(apply(&mut state, &premature), Err(RunError::ConclusionBeforeEnd));
-        apply(&mut state, &RunEvent::RunEnded { at: "t".into(), status: "complete".into() }).unwrap();
+        assert_eq!(
+            apply(&mut state, &premature),
+            Err(RunError::ConclusionBeforeEnd)
+        );
+        apply(
+            &mut state,
+            &RunEvent::RunEnded {
+                at: "t".into(),
+                status: "complete".into(),
+            },
+        )
+        .unwrap();
         apply(&mut state, &premature).unwrap();
         assert_eq!(state.conclusion.as_deref(), Some("pass"));
         assert_eq!(state.conclusion_note.as_deref(), Some("all good"));
@@ -1348,7 +1441,14 @@ mod tests {
     fn a_conclusion_must_be_a_vocabulary_value_with_a_note() {
         let mut state = RunState::default();
         apply(&mut state, &started()).unwrap();
-        apply(&mut state, &RunEvent::RunEnded { at: "t".into(), status: "complete".into() }).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::RunEnded {
+                at: "t".into(),
+                status: "complete".into(),
+            },
+        )
+        .unwrap();
         let bad = RunEvent::RunConcluded {
             at: "t".into(),
             conclusion: "great".into(),
@@ -1356,21 +1456,34 @@ mod tests {
         };
         assert_eq!(
             apply(&mut state, &bad),
-            Err(RunError::BadConclusion("great".into(), RUN_CONCLUSION.join(", ")))
+            Err(RunError::BadConclusion(
+                "great".into(),
+                RUN_CONCLUSION.join(", ")
+            ))
         );
         let no_note = RunEvent::RunConcluded {
             at: "t".into(),
             conclusion: "fail".into(),
             summary: "   ".into(),
         };
-        assert_eq!(apply(&mut state, &no_note), Err(RunError::ConclusionNoteRequired));
+        assert_eq!(
+            apply(&mut state, &no_note),
+            Err(RunError::ConclusionNoteRequired)
+        );
     }
 
     #[test]
     fn a_concluded_run_restates_its_verdict_in_the_record() {
         let mut state = RunState::default();
         apply(&mut state, &started()).unwrap();
-        apply(&mut state, &RunEvent::RunEnded { at: "t".into(), status: "complete".into() }).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::RunEnded {
+                at: "t".into(),
+                status: "complete".into(),
+            },
+        )
+        .unwrap();
         apply(
             &mut state,
             &RunEvent::RunConcluded {
@@ -1394,7 +1507,14 @@ mod tests {
     fn checkbox_out_of_range_is_rejected() {
         let mut state = RunState::default();
         apply(&mut state, &started()).unwrap();
-        apply(&mut state, &RunEvent::StepOpened { at: "t".into(), step: "s".into() }).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::StepOpened {
+                at: "t".into(),
+                step: "s".into(),
+            },
+        )
+        .unwrap();
         let toggle = RunEvent::CheckboxToggled {
             at: "t".into(),
             step: "s".into(),
@@ -1487,29 +1607,66 @@ mod tests {
         assert!(rendered.contains("```yaml result"), "{rendered}");
         assert!(rendered.contains("step: s"), "{rendered}");
         assert!(rendered.contains("sigma_nt: \"0.08\" nT"), "{rendered}");
-        assert!(!rendered.contains("status:"), "no outcome means no status line: {rendered}");
+        assert!(
+            !rendered.contains("status:"),
+            "no outcome means no status line: {rendered}"
+        );
     }
 
     #[test]
     fn a_note_between_steps_leaves_exactly_one_blank_line() {
         let mut state = RunState::default();
         apply(&mut state, &started()).unwrap();
-        apply(&mut state, &RunEvent::StepOpened { at: "t".into(), step: "a".into() }).unwrap();
         apply(
             &mut state,
-            &RunEvent::NoteAdded { at: "t".into(), step: Some("a".into()), text: "note".into() },
+            &RunEvent::StepOpened {
+                at: "t".into(),
+                step: "a".into(),
+            },
         )
         .unwrap();
-        apply(&mut state, &RunEvent::StepOpened { at: "t".into(), step: "b".into() }).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::NoteAdded {
+                at: "t".into(),
+                step: Some("a".into()),
+                text: "note".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            &mut state,
+            &RunEvent::StepOpened {
+                at: "t".into(),
+                step: "b".into(),
+            },
+        )
+        .unwrap();
         let steps = vec![
-            RecordStep { id: "a".into(), title: "A".into(), body: String::new(), checkbox_count: 0 },
-            RecordStep { id: "b".into(), title: "B".into(), body: String::new(), checkbox_count: 0 },
+            RecordStep {
+                id: "a".into(),
+                title: "A".into(),
+                body: String::new(),
+                checkbox_count: 0,
+            },
+            RecordStep {
+                id: "b".into(),
+                title: "B".into(),
+                body: String::new(),
+                checkbox_count: 0,
+            },
         ];
 
         let rendered = render_record(&state, &steps);
 
-        assert!(rendered.contains("> note: note\n\n## B"), "one blank line before the next step: {rendered}");
-        assert!(!rendered.contains("\n\n\n"), "no doubled blank lines: {rendered}");
+        assert!(
+            rendered.contains("> note: note\n\n## B"),
+            "one blank line before the next step: {rendered}"
+        );
+        assert!(
+            !rendered.contains("\n\n\n"),
+            "no doubled blank lines: {rendered}"
+        );
     }
 
     #[test]
@@ -1624,8 +1781,24 @@ mod tests {
     fn an_opened_then_closed_step_forms_a_time_window() {
         let mut state = RunState::default();
         apply(&mut state, &started()).unwrap();
-        apply(&mut state, &RunEvent::StepOpened { at: "2026-09-25T12:00:00Z".into(), step: "s".into() }).unwrap();
-        apply(&mut state, &RunEvent::StepStatusChanged { at: "2026-09-25T12:03:15Z".into(), step: "s".into(), status: "done".into(), reason: None }).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::StepOpened {
+                at: "2026-09-25T12:00:00Z".into(),
+                step: "s".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            &mut state,
+            &RunEvent::StepStatusChanged {
+                at: "2026-09-25T12:03:15Z".into(),
+                step: "s".into(),
+                status: "done".into(),
+                reason: None,
+            },
+        )
+        .unwrap();
         let step = state.step("s").unwrap();
         assert_eq!(step.opened_at.as_deref(), Some("2026-09-25T12:00:00Z"));
         assert_eq!(step.ended_at.as_deref(), Some("2026-09-25T12:03:15Z"));
@@ -1635,20 +1808,73 @@ mod tests {
     fn closing_without_opening_leaves_no_start() {
         let mut state = RunState::default();
         apply(&mut state, &started()).unwrap();
-        apply(&mut state, &RunEvent::StepStatusChanged { at: "2026-09-25T12:00:00Z".into(), step: "s".into(), status: "done".into(), reason: None }).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::StepStatusChanged {
+                at: "2026-09-25T12:00:00Z".into(),
+                step: "s".into(),
+                status: "done".into(),
+                reason: None,
+            },
+        )
+        .unwrap();
         assert_eq!(state.step("s").unwrap().opened_at, None);
-        assert_eq!(state.step("s").unwrap().ended_at.as_deref(), Some("2026-09-25T12:00:00Z"));
+        assert_eq!(
+            state.step("s").unwrap().ended_at.as_deref(),
+            Some("2026-09-25T12:00:00Z")
+        );
     }
 
     #[test]
     fn reopening_a_step_moves_its_start_forward() {
         let mut state = RunState::default();
         apply(&mut state, &started()).unwrap();
-        apply(&mut state, &RunEvent::StepOpened { at: "2026-09-25T12:00:00Z".into(), step: "s".into() }).unwrap();
-        apply(&mut state, &RunEvent::StepStatusChanged { at: "2026-09-25T12:05:00Z".into(), step: "s".into(), status: "done".into(), reason: None }).unwrap();
-        apply(&mut state, &RunEvent::StepStatusChanged { at: "2026-09-25T12:10:00Z".into(), step: "s".into(), status: "open".into(), reason: Some("reopen".into()) }).unwrap();
-        apply(&mut state, &RunEvent::StepOpened { at: "2026-09-25T12:11:00Z".into(), step: "s".into() }).unwrap();
-        apply(&mut state, &RunEvent::StepStatusChanged { at: "2026-09-25T12:12:00Z".into(), step: "s".into(), status: "done".into(), reason: None }).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::StepOpened {
+                at: "2026-09-25T12:00:00Z".into(),
+                step: "s".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            &mut state,
+            &RunEvent::StepStatusChanged {
+                at: "2026-09-25T12:05:00Z".into(),
+                step: "s".into(),
+                status: "done".into(),
+                reason: None,
+            },
+        )
+        .unwrap();
+        apply(
+            &mut state,
+            &RunEvent::StepStatusChanged {
+                at: "2026-09-25T12:10:00Z".into(),
+                step: "s".into(),
+                status: "open".into(),
+                reason: Some("reopen".into()),
+            },
+        )
+        .unwrap();
+        apply(
+            &mut state,
+            &RunEvent::StepOpened {
+                at: "2026-09-25T12:11:00Z".into(),
+                step: "s".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            &mut state,
+            &RunEvent::StepStatusChanged {
+                at: "2026-09-25T12:12:00Z".into(),
+                step: "s".into(),
+                status: "done".into(),
+                reason: None,
+            },
+        )
+        .unwrap();
         let step = state.step("s").unwrap();
         assert_eq!(step.opened_at.as_deref(), Some("2026-09-25T12:11:00Z"));
         assert_eq!(step.ended_at.as_deref(), Some("2026-09-25T12:12:00Z"));
@@ -1659,9 +1885,34 @@ mod tests {
     fn a_step_added_mid_run_is_merged_at_replay() {
         let mut state = RunState::default();
         apply(&mut state, &started()).unwrap();
-        apply(&mut state, &RunEvent::StepAdded { at: "2026-09-25T12:00:00Z".into(), id: "adhoc-001".into(), title: "Extra line".into(), after: Some("s1".into()) }).unwrap();
-        apply(&mut state, &RunEvent::StepOpened { at: "2026-09-25T12:01:00Z".into(), step: "adhoc-001".into() }).unwrap();
-        apply(&mut state, &RunEvent::StepStatusChanged { at: "2026-09-25T12:02:00Z".into(), step: "adhoc-001".into(), status: "done".into(), reason: None }).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::StepAdded {
+                at: "2026-09-25T12:00:00Z".into(),
+                id: "adhoc-001".into(),
+                title: "Extra line".into(),
+                after: Some("s1".into()),
+            },
+        )
+        .unwrap();
+        apply(
+            &mut state,
+            &RunEvent::StepOpened {
+                at: "2026-09-25T12:01:00Z".into(),
+                step: "adhoc-001".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            &mut state,
+            &RunEvent::StepStatusChanged {
+                at: "2026-09-25T12:02:00Z".into(),
+                step: "adhoc-001".into(),
+                status: "done".into(),
+                reason: None,
+            },
+        )
+        .unwrap();
         assert_eq!(state.added_steps.len(), 1);
         assert_eq!(state.added_steps[0].id, "adhoc-001");
         assert_eq!(state.added_steps[0].after.as_deref(), Some("s1"));
@@ -1672,17 +1923,21 @@ mod tests {
     fn an_attachment_carries_a_time_range_when_present() {
         let mut state = RunState::default();
         apply(&mut state, &started()).unwrap();
-        apply(&mut state, &RunEvent::AttachmentAdded {
-            at: "2026-09-25T12:00:00Z".into(),
-            step: None,
-            kind: None,
-            path: "logs/mag_raw.csv".into(),
-            sha256: "abcd".into(),
-            size: 10,
-            t_min: Some("2026-09-25T12:00:00Z".into()),
-            t_max: Some("2026-09-25T12:05:00Z".into()),
-            row_count: Some(300),
-        }).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::AttachmentAdded {
+                at: "2026-09-25T12:00:00Z".into(),
+                step: None,
+                kind: None,
+                path: "logs/mag_raw.csv".into(),
+                sha256: "abcd".into(),
+                size: 10,
+                t_min: Some("2026-09-25T12:00:00Z".into()),
+                t_max: Some("2026-09-25T12:05:00Z".into()),
+                row_count: Some(300),
+            },
+        )
+        .unwrap();
         let att = &state.run_attachments[0];
         assert_eq!(att.t_min.as_deref(), Some("2026-09-25T12:00:00Z"));
         assert_eq!(att.row_count, Some(300));
@@ -1692,17 +1947,21 @@ mod tests {
     fn an_attachment_with_no_kind_reads_as_a_log() {
         let mut state = RunState::default();
         apply(&mut state, &started()).unwrap();
-        apply(&mut state, &RunEvent::AttachmentAdded {
-            at: "2026-09-25T12:00:00Z".into(),
-            step: None,
-            kind: None,
-            path: "logs/mag_raw.csv".into(),
-            sha256: "abcd".into(),
-            size: 10,
-            t_min: None,
-            t_max: None,
-            row_count: None,
-        }).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::AttachmentAdded {
+                at: "2026-09-25T12:00:00Z".into(),
+                step: None,
+                kind: None,
+                path: "logs/mag_raw.csv".into(),
+                sha256: "abcd".into(),
+                size: 10,
+                t_min: None,
+                t_max: None,
+                row_count: None,
+            },
+        )
+        .unwrap();
         let att = &state.run_attachments[0];
         assert_eq!(att.kind, AttachmentKind::Log, "an old event is a log");
         assert!(!att.post_run, "it was added during the run");
@@ -1712,17 +1971,21 @@ mod tests {
     fn a_photo_is_filed_under_its_own_kind() {
         let mut state = RunState::default();
         apply(&mut state, &started()).unwrap();
-        apply(&mut state, &RunEvent::AttachmentAdded {
-            at: "2026-09-25T12:00:00Z".into(),
-            step: None,
-            kind: Some(AttachmentKind::Photo),
-            path: "photos/plot.jpg".into(),
-            sha256: "abcd".into(),
-            size: 10,
-            t_min: None,
-            t_max: None,
-            row_count: None,
-        }).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::AttachmentAdded {
+                at: "2026-09-25T12:00:00Z".into(),
+                step: None,
+                kind: Some(AttachmentKind::Photo),
+                path: "photos/plot.jpg".into(),
+                sha256: "abcd".into(),
+                size: 10,
+                t_min: None,
+                t_max: None,
+                row_count: None,
+            },
+        )
+        .unwrap();
         assert_eq!(state.run_attachments[0].kind, AttachmentKind::Photo);
     }
 
@@ -1743,31 +2006,52 @@ mod tests {
     fn attachments_and_notes_are_allowed_after_the_run_ends() {
         let mut state = RunState::default();
         apply(&mut state, &started()).unwrap();
-        apply(&mut state, &RunEvent::RunEnded { at: "t".into(), status: "complete".into() }).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::RunEnded {
+                at: "t".into(),
+                status: "complete".into(),
+            },
+        )
+        .unwrap();
 
-        apply(&mut state, &RunEvent::AttachmentAdded {
-            at: "t2".into(),
-            step: None,
-            kind: None,
-            path: "logs/late.csv".into(),
-            sha256: "abcd".into(),
-            size: 4,
-            t_min: None,
-            t_max: None,
-            row_count: None,
-        })
+        apply(
+            &mut state,
+            &RunEvent::AttachmentAdded {
+                at: "t2".into(),
+                step: None,
+                kind: None,
+                path: "logs/late.csv".into(),
+                sha256: "abcd".into(),
+                size: 4,
+                t_min: None,
+                t_max: None,
+                row_count: None,
+            },
+        )
         .unwrap();
-        apply(&mut state, &RunEvent::NoteAdded {
-            at: "t3".into(),
-            step: None,
-            text: "written up later".into(),
-        })
+        apply(
+            &mut state,
+            &RunEvent::NoteAdded {
+                at: "t3".into(),
+                step: None,
+                text: "written up later".into(),
+            },
+        )
         .unwrap();
-        assert!(state.run_attachments[0].post_run, "a late attachment is marked");
+        assert!(
+            state.run_attachments[0].post_run,
+            "a late attachment is marked"
+        );
         assert!(state.run_notes[0].post_run, "a late note is marked");
 
         // Anything that changes what the run did is still refused.
-        let late = RunEvent::CheckboxToggled { at: "t4".into(), step: "s".into(), index: 0, checked: true };
+        let late = RunEvent::CheckboxToggled {
+            at: "t4".into(),
+            step: "s".into(),
+            index: 0,
+            checked: true,
+        };
         assert_eq!(apply(&mut state, &late), Err(RunError::Ended));
     }
 
@@ -1775,7 +2059,15 @@ mod tests {
     fn a_note_written_during_the_run_is_not_post_run() {
         let mut state = RunState::default();
         apply(&mut state, &started()).unwrap();
-        apply(&mut state, &RunEvent::NoteAdded { at: "t".into(), step: None, text: "field note".into() }).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::NoteAdded {
+                at: "t".into(),
+                step: None,
+                text: "field note".into(),
+            },
+        )
+        .unwrap();
         assert!(!state.run_notes[0].post_run);
     }
 
@@ -1783,27 +2075,45 @@ mod tests {
     fn the_record_lists_post_run_additions_separately() {
         let mut state = RunState::default();
         apply(&mut state, &started()).unwrap();
-        apply(&mut state, &RunEvent::RunEnded { at: "2026-09-25T12:00:00Z".into(), status: "complete".into() }).unwrap();
-        apply(&mut state, &RunEvent::AttachmentAdded {
-            at: "2026-09-25T13:00:00Z".into(),
-            step: None,
-            kind: Some(AttachmentKind::Photo),
-            path: "phot%%/plot.jpg".replace("%%", "os").into(),
-            sha256: "deadbeefdeadbeef".into(),
-            size: 42,
-            t_min: None,
-            t_max: None,
-            row_count: None,
-        }).unwrap();
-        apply(&mut state, &RunEvent::NoteAdded {
-            at: "2026-09-25T13:01:00Z".into(),
-            step: None,
-            text: "uploaded the plot later".into(),
-        }).unwrap();
+        apply(
+            &mut state,
+            &RunEvent::RunEnded {
+                at: "2026-09-25T12:00:00Z".into(),
+                status: "complete".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            &mut state,
+            &RunEvent::AttachmentAdded {
+                at: "2026-09-25T13:00:00Z".into(),
+                step: None,
+                kind: Some(AttachmentKind::Photo),
+                path: "photos/plot.jpg".into(),
+                sha256: "deadbeefdeadbeef".into(),
+                size: 42,
+                t_min: None,
+                t_max: None,
+                row_count: None,
+            },
+        )
+        .unwrap();
+        apply(
+            &mut state,
+            &RunEvent::NoteAdded {
+                at: "2026-09-25T13:01:00Z".into(),
+                step: None,
+                text: "uploaded the plot later".into(),
+            },
+        )
+        .unwrap();
         let rendered = render_record(&state, &[]);
-        assert!(rendered.contains("## Added after the run ended"), "{rendered}");
+        assert!(
+            rendered.contains("## Added after the run ended"),
+            "{rendered}"
+        );
         assert!(rendered.contains("2026-09-25T13:00:00Z"), "{rendered}");
-        assert!(rendered.contains("photo: runs/"), "{rendered}");
+        assert!(rendered.contains("photo: photos/plot.jpg"), "{rendered}");
 
         let notes = render_notes(&state);
         assert!(notes.contains("uploaded the plot later"), "{notes}");

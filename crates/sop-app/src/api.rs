@@ -250,6 +250,12 @@ pub struct RunAttachmentView {
     pub path: String,
     pub sha256: String,
     pub size: u64,
+    /// `log` / `photo` / `file`.
+    pub kind: String,
+    /// When it was attached, from the event's timestamp.
+    pub added_at: String,
+    /// True when it was added after the run ended.
+    pub post_run: bool,
     /// The data's own time span and row count, when the attached file carried a parseable
     /// time column; `None` when it did not.
     pub t_min: Option<String>,
@@ -329,4 +335,68 @@ impl From<StepPatch> for StepChanges {
             prose: patch.prose,
         }
     }
+}
+
+/// One attached file, for the History detail drawer.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunFileView {
+    /// `log` / `photo` / `file`.
+    pub kind: String,
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    pub added_at: String,
+    pub post_run: bool,
+    /// The step it was attached to, or `None` for a run-level file.
+    pub step: Option<String>,
+}
+
+/// One note, for the History detail drawer.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunNoteView {
+    pub text: String,
+    pub added_at: String,
+    pub post_run: bool,
+    /// The step it was attached to, or `None` for a run-level note.
+    pub step: Option<String>,
+}
+
+/// A run's files and notes, with a per-kind count the `files` column shows.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunFiles {
+    pub files: Vec<RunFileView>,
+    pub notes: Vec<RunNoteView>,
+    pub log_count: usize,
+    pub photo_count: usize,
+    pub file_count: usize,
+}
+
+/// The result of attaching one file: where it landed, or why it did not.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachResult {
+    pub source: String,
+    pub path: Option<String>,
+    pub error: Option<String>,
+}
+
+/// The result of packaging a summary and its runs into one folder.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryExportReport {
+    /// The folder that was written.
+    pub dir: String,
+    /// How many runs were packaged.
+    pub runs: usize,
+    /// How many files were copied.
+    pub files: usize,
+    /// Total bytes copied.
+    pub bytes: u64,
+    /// Paths that were skipped (a symlink or special file).
+    pub skipped: Vec<String>,
+    /// Runs that could not be found, by `sop/run_id`.
+    pub failed: Vec<String>,
 }

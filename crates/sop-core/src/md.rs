@@ -27,16 +27,13 @@ static BULLET_ITEM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*[-*+]\s+
 static NUMBERED_ITEM: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*\d+[.)]\s+(.*)$").unwrap());
 static TASK_ITEM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[([ xX])\]\s+(.*)$").unwrap());
-static PARAGRAPH_STOP: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*(```|>|[-*+]\s|\d+[.)]\s|\||#{1,4}\s)").unwrap()
-});
+static PARAGRAPH_STOP: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(```|>|[-*+]\s|\d+[.)]\s|\||#{1,4}\s)").unwrap());
 
 static CODE_SPAN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`([^`]+)`").unwrap());
 static STRONG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*\*([^*]+)\*\*").unwrap());
-static EMPHASIS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(^|[\s(])\*([^*\n]+)\*").unwrap());
-static LINK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\(([^)\s]+)\)").unwrap());
+static EMPHASIS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(^|[\s(])\*([^*\n]+)\*").unwrap());
+static LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\(([^)\s]+)\)").unwrap());
 
 /// Render Markdown to HTML with the subset above.
 pub fn render(source: &str) -> String {
@@ -78,7 +75,9 @@ pub fn render(source: &str) -> String {
         }
 
         if TABLE_ROW.is_match(line)
-            && lines.get(i + 1).is_some_and(|next| TABLE_SEPARATOR.is_match(next))
+            && lines
+                .get(i + 1)
+                .is_some_and(|next| TABLE_SEPARATOR.is_match(next))
         {
             let head = cells(line);
             i += 2;
@@ -155,10 +154,7 @@ pub fn render(source: &str) -> String {
         }
 
         let mut paragraph: Vec<&str> = Vec::new();
-        while i < lines.len()
-            && !lines[i].trim().is_empty()
-            && !PARAGRAPH_STOP.is_match(lines[i])
-        {
+        while i < lines.len() && !lines[i].trim().is_empty() && !PARAGRAPH_STOP.is_match(lines[i]) {
             paragraph.push(lines[i]);
             i += 1;
         }
@@ -206,7 +202,10 @@ fn cells(row: &str) -> Vec<String> {
     let trimmed = row.trim();
     let trimmed = trimmed.strip_prefix('|').unwrap_or(trimmed);
     let trimmed = trimmed.strip_suffix('|').unwrap_or(trimmed);
-    trimmed.split('|').map(|cell| cell.trim().to_owned()).collect()
+    trimmed
+        .split('|')
+        .map(|cell| cell.trim().to_owned())
+        .collect()
 }
 
 #[cfg(test)]
@@ -265,7 +264,10 @@ mod tests {
 
     #[test]
     fn a_numbered_list_opens_and_closes_as_an_ordered_list() {
-        assert_eq!(render("1. one\n2. two"), "<ol><li>one</li><li>two</li></ol>");
+        assert_eq!(
+            render("1. one\n2. two"),
+            "<ol><li>one</li><li>two</li></ol>"
+        );
     }
 
     #[test]

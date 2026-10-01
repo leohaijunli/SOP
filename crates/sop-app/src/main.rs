@@ -20,7 +20,10 @@ fn main() {
             std::process::exit(1);
         }
     };
-    println!("field-sop: working copy {}", state.root().unwrap_or_default().display());
+    println!(
+        "field-sop: working copy {}",
+        state.root().unwrap_or_default().display()
+    );
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -66,6 +69,13 @@ fn main() {
             commands::run_drift,
             commands::run_end,
             commands::run_attach,
+            commands::run_attach_many,
+            commands::run_note_add,
+            commands::run_files,
+            commands::open_run_folder,
+            commands::file_sizes,
+            commands::run_export_package,
+            commands::open_export_folder,
             commands::run_export,
             commands::run_export_to,
             commands::run_summary,

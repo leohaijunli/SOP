@@ -1,6 +1,0 @@
-{"type":"RunStarted","at":"2026-09-29T13:08:16Z","sop":"uas-mag-preflight-gnss","sop_version":"1","sop_commit":"b74cea4","snapshot_sha256":"00648f6f9a1223c6c470ae4048047396da40c4ce4faeae12f38f23331c8b9c70","operator":"leo","site":"cfar","plan":"uas-mag-preflight","case":"gnss-lock","sensor":{"model":"UAS-MAG"},"hardware":["RTK GNSS base and rover","UAS-MAG fluxgate","Field laptop"]}
-{"type":"StepOpened","at":"2026-09-29T13:08:16Z","step":"satellite-fix--2"}
-{"type":"StepStatusChanged","at":"2026-09-29T13:08:18Z","step":"satellite-fix--2","status":"done","reason":null}
-{"type":"StepOpened","at":"2026-09-29T13:08:18Z","step":"time-sync"}
-{"type":"StepStatusChanged","at":"2026-09-29T13:08:18Z","step":"time-sync","status":"done","reason":null}
-{"type":"RunEnded","at":"2026-09-29T13:08:22Z","status":"complete"}

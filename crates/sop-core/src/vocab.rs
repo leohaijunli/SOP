@@ -103,7 +103,14 @@ pub const HELP_AUDIENCE: &[&str] = &["operator", "author", "maintainer"];
 /// Pages without an explicit `order` sort after the ones that have one.
 pub const DEFAULT_HELP_ORDER: i64 = 100;
 
-pub const STEP_KEYS: &[&str] = &["id", "kind", "severity", "deprecated", "captures", "outputs"];
+pub const STEP_KEYS: &[&str] = &[
+    "id",
+    "kind",
+    "severity",
+    "deprecated",
+    "captures",
+    "outputs",
+];
 
 pub const CAPTURE_KEYS: &[&str] = &[
     "key", "label", "type", "unit", "required", "options", "expected", "accept",

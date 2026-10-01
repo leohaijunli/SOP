@@ -1,0 +1,711 @@
+# field-sop Format Specification
+
+Version 1 - 2026-09-24
+
+This document is authoritative. The Rust code in `crates/` implements the checks
+described here; when the two disagree, this document is wrong and should be fixed.
+
+## 1. Scope
+
+Five file kinds are defined:
+
+| Kind | Lives in | Role |
+|---|---|---|
+| `procedure` | `procedures/` | A reusable block of steps. Not directly executable on its own. |
+| `checklist` | `checklists/` | One experiment type. Includes procedures and adds local steps. This is what an operator runs. |
+| `run` | `runs/` | The record of one execution of one checklist. |
+| `help` | `help/` | Documentation read while working. Never executed. |
+| `project` | `project.md` | The repository's identity: what campaign this is, and who is responsible for it. See section 14. |
+
+A checklist does not copy procedure text. It references it, so fixing one procedure
+fixes every checklist that uses it. This matters because the experiment matrix
+(experiment type x sensor x site x software/hardware configuration) would otherwise
+require dozens of near-identical documents that drift apart.
+
+## 2. Controlled vocabulary
+
+`applies_to` values are drawn from this list. Adding a value is a spec change.
+
+`calibration`, `ground-survey`, `interference`, `navigation`, `uav-survey`
+
+`severity` is one of `info`, `normal`, `critical`. `critical` means a failed or
+skipped step invalidates the run.
+
+`kind` (on a step) is one of `check`, `measure`, `select`, `note`, `gate`.
+
+`status` (on a run) is one of `complete`, `partial`, `aborted`.
+
+`conclusion` (on a run) is one of `pass`, `fail`, `inconclusive`. It is the operator's own
+verdict on the run, distinct from `status`: `complete` means the run was executed,
+`conclusion` is the human judgement, and the tool never derives one from the other.
+
+`status` (on a step result) is one of `done`, `skipped`, `deviated`.
+
+`audience` (on a help page) is one of `operator`, `author`, `maintainer`.
+
+## 3. Formatting rules
+
+Applies to every file:
+
+- UTF-8, no BOM.
+- LF line endings.
+- Exactly one trailing newline.
+- Front matter starts on line 1 with `---` and ends with a closing `---`.
+- Tabs are not used for indentation.
+
+Any file may optionally declare the content schema it was written against:
+
+```yaml
+schema: 1
+```
+
+Absence means schema 1. `SPEC-COMPAT.md` defines what may change between versions and
+what the tooling does when it meets a file from the future.
+
+## 4. Identifiers
+
+- Must match `^[a-z0-9][a-z0-9-]*$`.
+- Must be unique within the file that defines them.
+- After resolving include markers, all step ids in a checklist must be unique.
+- Ids are permanent in the sense that they are never reused for a different step. To
+  retire a step, set `deprecated: true` and stop using it rather than deleting it where
+  the content allows. Renaming an id does not invalidate the run records that cite it -
+  a record is read against its own snapshot - but it does break the thread for a reader
+  comparing two revisions of a checklist, which is what the permanence is protecting.
+
+Step ids are referenced by run records, so they are part of the data contract, not a
+display detail.
+
+Recommended form: the abbreviation of the procedure that defines the step, then a short
+suffix unique within that procedure. `abs-reference` (from `absolute-value-check`),
+`cond-location` (from `conditions-log`), and `zdc-1` are all in this shape. Uniqueness is
+checked *after* include resolution, so a bare number is the one form to avoid: two
+procedures that both start at `1` collide the moment a checklist includes both. When an id
+is all digits, quote it (`id: "7"`), because YAML otherwise reads it as an integer.
+
+## 5. Procedures (`procedures/*.md`)
+
+````markdown
+---
+kind: procedure
+procedure_id: magnetic-hygiene
+title: Personnel and Equipment Magnetic Hygiene
+version: 1
+updated: 2026-09-24
+applies_to: [calibration, ground-survey]
+tags: [safety, hygiene]
+---
+
+Introductory prose for the whole block. Optional.
+
+## Remove magnetisable items from the operator
+
+```yaml step
+id: hygiene-person
+kind: check
+severity: critical
+```
+
+Any ferrous object on the operator shows up as an anomaly.
+
+- [ ] Watch, phone, keys, coins removed
+- [ ] Belt buckle or steel-toed boots replaced
+````
+
+Required front matter: `kind`, `procedure_id`, `title`, `version`, `updated`,
+`applies_to`.
+
+Optional: `tags`, `notes`.
+
+`version` is an integer, incremented when the procedure changes in a way that would
+change how a step is executed or evaluated. Fixing a typo does not require a bump.
+
+## 6. Steps
+
+A step is a `##` heading, then a `yaml step` block that gives it its `id`, then the prose
+the operator reads. The block is what makes a chapter a step: the `id` is cited by run
+records and cannot be derived from the heading, because a heading is display text and
+gets reworded (section 4). A `##` chapter with no block is prose, and `sop validate`
+names it.
+
+The `yaml step` block:
+
+```yaml
+id: static-noise            # required, unique
+kind: measure               # required
+severity: critical          # optional, default normal
+deprecated: false           # optional
+outputs:                    # optional files this step should produce
+  - mag_raw.csv
+captures:                   # optional list of values the operator records
+  - key: sigma_nt
+    label: Static noise (1 sigma)
+    type: number
+    unit: nT
+    required: true
+```
+
+`outputs` lists the files this step is declared to produce. A `complete` run is only
+trustworthy when each declared output is attached to its step, which the validator checks
+against the run's `logs:` (`item 4`).
+
+Capture `type` is one of `text`, `number`, `integer`, `bool`, `select`, `datetime`,
+`duration`, `attach`.
+
+`select` requires an `options` list. `number` and `integer` may carry `unit`. `attach`
+may carry `accept`, a list of file extensions used only as a filter hint in the UI.
+
+The prose body is unrestricted CommonMark: tables, images, links, code blocks. Put
+the instruction, the acceptance criterion, and the warning here - in that order is a
+good convention, but only the text matters to tooling.
+
+### Expected values
+
+Captures of type `number`, `integer`, `select`, and `bool` may declare an `expected`
+value or range:
+
+```yaml
+captures:
+  - key: sigma_nt
+    label: Static noise (1 sigma)
+    type: number
+    unit: nT
+    expected:
+      min: 0
+      max: 0.5
+  - key: self_test_result
+    label: Self-test result as reported
+    type: select
+    options: [ok, warning, error]
+    expected: ok
+```
+
+`expected` is **presentation only**. The app highlights a value outside it and requires
+the operator to acknowledge that field explicitly. The tooling never marks a step pass
+or fail, and never writes a verdict - see `DECISIONS.md` D4.
+
+Declaring it is still worth doing. It moves the criterion out of prose and in front of
+the operator at the moment of entry, which is when it is still actionable.
+
+`expected` is valid only on those four types. Declaring it on `text`, `datetime`,
+`duration`, or `attach` is a validation error, because there is nothing meaningful to
+compare against.
+
+### Checkbox and prose list semantics
+
+List items are interpreted one at a time, by their own syntax. There is no whole-list
+rule:
+
+- An item beginning `- [ ]` is an interactive checkbox.
+- An item beginning `- [x]` is a **validation error** in a procedure or checklist.
+  Templates are executed repeatedly; a pre-checked item cannot be. It nearly always
+  means a run record was copied into a template.
+- Any other list item is prose.
+
+This deliberately differs from tools that treat a list containing a mix of checkbox and
+plain items as entirely prose. That rule is a silent trap: one stray bullet silently
+changes the meaning of every other item in the list, with no error and no visible
+difference in a Markdown preview.
+
+Checkbox identity is the 0-based index of the item within its step. The index is stable
+for the life of a run because the checklist is snapshotted when the run starts, and a
+run record must never be interpreted against a different revision of its checklist.
+
+A step with no checkbox items is allowed and is treated as prose-only guidance.
+
+### Writing acceptance criteria
+
+State the criterion as fact, not as a logged judgement, and record the measured value
+separately.
+
+```markdown
+Acceptance: static noise 1 sigma below 0.1 nT over 300 s.
+
+- [ ] Sensor undisturbed for the full window
+- [ ] Reading recorded
+```
+
+Where the criterion is numeric or a known-good value, put it in `expected` as well, so
+it is in front of the operator while entering the value rather than only on read-back.
+
+## 7. Checklists (`checklists/*.md`)
+
+````markdown
+---
+kind: checklist
+sop_id: ground-walk-survey
+title: Ground Magnetic Walk Survey
+version: 1
+updated: 2026-09-24
+status: draft
+applies_to: [ground-survey]
+equipment:
+  - Total-field magnetometer with 1 Hz logging
+  - Non-magnetic tripod
+  - GNSS receiver
+conditions:
+  weather: clear, overcast, or rain
+  temp_c: air temperature in degrees C
+---
+
+Prose shown at the top of the checklist. Scope, prerequisites, what "done" means.
+
+## Team briefing
+
+```yaml step
+id: walk-briefing
+kind: check
+```
+
+A step defined directly in the checklist, for something not reusable enough to live
+in `procedures/`.
+
+<!-- include: procedures/power-on.md -->
+
+<!-- include: procedures/magnetic-hygiene.md -->
+
+## Session close-out
+
+```yaml step
+id: walk-session-closeout
+kind: note
+```
+
+Another local step, after the included ones.
+````
+
+Required front matter: `kind`, `sop_id`, `title`, `version`, `updated`, `status`,
+`applies_to`.
+
+`status` is `draft`, `active`, or `retired`. Only `active` checklists should be used
+for real data collection.
+
+`conditions` is optional. It names the values the operator records at the start of a run,
+so the app shows a field for each instead of one free-text box. It may be a list of keys
+(`conditions: [weather, temp_c]`) or a mapping of key to hint, where the hint is shown as
+a placeholder. The names are the keys the run record's own `conditions` mapping uses
+(section 8); a key must not contain a space or a colon, because it becomes a
+`key: value` line.
+
+### Include markers
+
+Procedure steps are pulled in at a specific document position with an HTML comment:
+
+```markdown
+<!-- include: procedures/power-on.md -->
+```
+
+An include marker must be on its own line, and the path is relative to the repository
+root. The marker renders as nothing in GitHub and in any CommonMark viewer, so a
+checklist stays readable as ordinary Markdown.
+
+Step order is document order, with each marker replaced in place by the steps of the
+procedure it names. This is why ordering is expressed inline rather than in front
+matter: a checklist needs its briefing before the shared startup steps and its
+close-out after them, and a front-matter list cannot express that.
+
+Including the same procedure twice in one checklist is an error, because the step ids
+would then collide.
+
+## 8. Run records (`runs/<sop_id>/<run_id>.md`)
+
+One file per execution. The file is created once and then only appended to.
+
+````markdown
+---
+kind: run
+run_id: 2026-09-24-renfrew-walk01
+sop: ground-walk-survey
+sop_version: 1
+sop_commit: 8f3c1a2
+operator: Feng
+site: Renfrew 395
+started: 2026-09-24T16:10:00Z
+ended: 2026-09-24T20:05:00Z
+status: complete
+conclusion: pass
+conclusion_note: all readings inside the expected range at this site
+sensor:
+  model: GEM GSM-19
+  serial: "4451233"
+  firmware: "7.0"
+hardware:
+  - mag_gcs v0.3.1
+conditions:
+  weather: clear
+  temp_c: 12
+logs:
+  - path: runs/ground-walk-survey/2026-09-24-renfrew-walk01/logs/mag_raw.csv
+    sha256: 0f2a...
+    size: 1048576
+    description: Raw magnetometer log
+  - path: runs/ground-walk-survey/2026-09-24-renfrew-walk01/photos/setup.jpg
+    kind: photo
+    sha256: 9c1b...
+    size: 2310144
+events_sealed_bytes: 18432
+events_sha256: 7d4e...
+---
+
+## Static noise test
+
+```yaml result
+step: static-noise
+status: done
+captures:
+  sigma_nt: 0.08
+  duration_s: 300
+acknowledged:
+  - sigma_nt
+```
+
+Operator prose. Anything unusual goes here.
+````
+
+### 8.1 The seal, and what may follow it
+
+`events_sealed_bytes` is the byte length of `events.jsonl` at the moment the run ended,
+and `events_sha256` is the `sha256` of exactly that prefix. The pair is what makes the
+field record tamper-evident: changing any byte the operator wrote during the run makes
+the hash disagree. It is written together with `ended` and `status`, and only once.
+
+Events recorded *after* the run ended are appended beyond the sealed prefix and do not
+move it. A log, photo, or other file copied off the instrument after the fact, a note
+written later, and a late verdict (`RunConcluded`) are all allowed then; anything that
+would change what the run *did* - a checkbox, a capture, a step status, a new step - is
+refused. A line after the seal that is not one of those three event types is an error,
+because a record that grew an unexpected event is not a record anyone should trust.
+
+A record written before prefix sealing carries `events_sha256` but no
+`events_sealed_bytes`; it is validated against the hash of the whole file, exactly as it
+was when it was written. When such a record first gains a post-run event, the file length
+at that moment is adopted as the seal, and it does not move again.
+
+A reader that predates `events_sealed_bytes` warns about an unknown front-matter key and
+reads the record unchanged (`SPEC-COMPAT.md`).
+
+### 8.2 Added after the run ended, and `notes.md`
+
+The appended material is rendered in its own section, `## Added after the run ended`,
+after the step results, each item stamped with the time it was added and marked so a
+reviewer can tell the field record from the later additions. A note with no step is
+rendered there rather than inside a step block.
+
+Every run directory holds a generated `notes.md`: every note, run-level and per-step, in
+time order, with its time and whether it came after the end. Like `record.md`, it is a
+rendering of `events.jsonl`, created when there is something to write, and never edited
+by hand - the log is the truth (D23).
+
+Required front matter: `kind`, `run_id`, `sop`, `sop_version`, `operator`, `site`,
+`started`, `deviations_count`.
+
+`ended` and `status` are written together by `sop run end`. Both are absent while the run
+is still in progress: the record exists from the moment the run starts, because it is what
+crash recovery replays, so an unfinished record is valid. A record carrying one of the two
+keys without the other was edited by hand and is reported as an error.
+
+`conclusion` and `conclusion_note` are optional and are written with `ended` and `status`.
+`conclusion` is the operator's own verdict on the run - `pass`, `fail`, or `inconclusive` -
+and `conclusion_note` is the one sentence saying why. They are distinct from `status`
+(section 2): `complete` means the run was executed, `conclusion` is the human judgement,
+and the tool never derives one from the other (D4). Both are written together, so a record
+carrying one without the other was edited by hand and is reported as an error.
+
+`conclusion` and `conclusion_note` are optional front matter recorded by the operator when
+the run ends, in the same `sop run end` call that writes `ended` and `status`. `status`
+(`complete` / `partial` / `aborted`) means the run was executed; `conclusion` is the human
+judgement of the result - one of `pass`, `fail`, or `inconclusive` - and the tool never
+derives one from the other. `conclusion_note` is the one sentence that says why. The two
+are written together (a conclusion without a note is not recorded), and both are absent on
+a run the operator ends without giving a verdict. They are additive, so a reader that
+predates them warns about an unknown front-matter key and leaves the record readable
+(`SPEC-COMPAT.md`).
+
+Optional front matter: `plan` and `case`. Both are written when a run is started from a
+test case under `testplan/`, and name the plan directory and the case file stem. They are
+absent on a run started from a checklist directly. They are provenance, not inputs: the
+checklist id in `sop` still decides which snapshot the run replays against.
+
+`run_id` must equal the filename stem, and must be unique repo-wide. Recommended
+form: `<YYYY-MM-DD>-<site-slug>-<sop-slug><NN>`.
+
+Timestamps are ISO 8601 in UTC with a `Z` suffix. Local time with an offset is
+accepted but UTC is preferred, because it must line up with instrument logs.
+
+`sop_version` is the version of the checklist that was actually executed.
+`sop_commit` is the git commit it was read from. Both are required for the record to
+be reviewable later - without them, nobody can tell which revision produced the data.
+
+Each executed step gets one `yaml result` block. `step` must match an id of the checklist
+*revision the run was recorded against* - the `snapshot.md` frozen when it started - not
+of whatever the checklist says today. A checklist is allowed to change after a run, and
+the record has to stay valid when it does. A record written before runs became
+self-contained directories has no snapshot, so it is checked against the current
+checklist and any difference is reported as a warning rather than an error.
+
+A result whose `status` is `skipped` or `deviated` requires a `reason` string. Both
+are equally useful signals:
+
+- `skipped` - a required step did not happen. Bound the dataset's validity.
+- `deviated` - the step happened but not as written. This is the highest-value output
+  of the whole system, because it is the raw material for improving the procedures.
+
+`deviations_count` counts `deviated` results only, not `skipped` ones.
+
+`status` may be omitted from a result block. That means the step happened and its data is
+recorded, but the operator gave no outcome for it. It is not the same as `done`, which is
+a judgement that the step met its acceptance criteria, and a `complete` run may not
+contain one: a run whose steps have no outcome is not complete. A step with neither an
+outcome nor any data is left out of the record rather than written as a placeholder.
+
+`acknowledged` is optional. It lists capture keys whose value was outside the range the
+step declared with `expected`, and that the operator accepted anyway. The tool never
+decides whether a value is acceptable; the acknowledgement is the recorded judgement, so
+a flagged value becomes a decision a reviewer can see rather than a warning that scrolled
+past.
+
+`sensor`, `hardware`, and `conditions` are optional front matter that records what the
+checklist cannot know. The field app fills `sensor` from a list of `model`s and their
+`serial`s (the machine-local `sensors` setting) rather than a free-text box, so a model
+name in a record is one that was chosen, not typed. `sensor` is a mapping of `model`,
+`serial`, and `firmware`;
+`hardware` is a list of software and equipment; `conditions` is a free-form mapping such
+as `weather` and `temp_c`. Values are text, and a hand-written number or boolean is
+accepted. They are what lets two runs at the same site be told apart later, so the record
+also restates them in its body for a reader who never opens the front matter.
+
+## 9. Log attachments
+
+Logs are attached manually by the operator at the end of a run. The field app does not
+discover them.
+
+An attachment has a `kind` - `log` (the default), `photo`, or `file` - which decides the
+subdirectory it is filed under inside the run's own directory:
+
+| kind | directory | what it is |
+|---|---|---|
+| `log` | `runs/<sop_id>/<run_id>/logs/` | instrument and console logs, CSV/TSV/text |
+| `photo` | `runs/<sop_id>/<run_id>/photos/` | photographs of the setup, the site, the reading |
+| `file` | `runs/<sop_id>/<run_id>/attachments/` | anything else: PDF, spreadsheet, screenshot |
+
+The subdirectories are created on demand; an old run with only `logs/` keeps working.
+
+Flow:
+
+1. Operator picks the files and their kind in the app, one kind at a time and any number
+   of files at once.
+2. The app copies each into the directory for its kind, keeping the file's own name. A
+   second file with the same name gets a `-2`, `-3` ... suffix, and picking a file whose
+   `sha256` and kind the run already holds again adds nothing.
+3. The app computes `sha256` and `size` for each and writes a `logs:` entry into the run
+   record, with `kind:` written for a photo or other file (a log, the default, leaves it
+   out). The entry's `path` points into the run directory.
+4. The app commits the run record and the files together, so the record and its data
+   are never separated in history.
+
+`kind` is also what the validator reads to know which subdirectory a `logs:[]` path must
+live under; a path outside it is a warning. A record written before `kind` existed has
+neither the key nor the extra directories, and is read as logs.
+
+Attaching is not limited to a live run. Once a run has ended, a log that was copied off
+the instrument later, a photograph, or another file can still be added, and the run
+record and `record.md` are regenerated with a section naming what arrived after the end
+(section 8.2). The seal over the field record does not move (section 8.1).
+
+`logs/<run_id>/` at the repository root is still read for records written before the
+run directory became self-contained; `logs[].path` is repository-relative either way.
+
+`sha256` is what makes a record trustworthy later: it proves the analysed file is the
+one that was collected. See `docs/LOGS.md` for naming, size limits, the per-kind
+directories, and the Git LFS advice for photographs.
+
+## 10. Write-back rules
+
+These bind the field app, which edits these files under a single-writer assumption
+(one operator drives the app; a team may run experiments in parallel, but never two
+people on the same file).
+
+1. The app may append a step block to a section, or replace exactly one block.
+2. The app must not rewrite any line outside the block it is targeting. Hand-written
+   prose, comments, unusual formatting, and unknown syntax are preserved verbatim.
+3. When the app creates content, it uses the canonical form in this spec so that
+   `git diff` stays readable.
+4. The app writes run records as new files. It must not modify an existing run record
+   except by appending to a trailing section.
+5. On load, the app records the file's `sha256` and mtime. If either changed before a
+   write, it reloads and surfaces the change rather than overwriting.
+
+Rule 2 is the important one. Everything else is convention.
+
+## 11. Promotion of field knowledge
+
+Observations that are not yet proven do not belong in a procedure. Put them in
+`runs/_inbox/` as a short Markdown file, then promote them deliberately:
+
+1. During a run, note the observation in the run record.
+2. At review time, copy the reusable part into `runs/_inbox/`.
+3. When the observation has held up more than once, open a pull request that edits
+   the relevant procedure and deletes the inbox entry.
+
+The inbox is deliberately not a checklist and is never executed. It exists so that
+"we should add this to the SOP" has somewhere to live other than someone's memory.
+
+## 12. Help pages (`help/*.md`)
+
+Help is what an operator reads while working: how to drive the app, the commands worth
+memorising, how to extend the content, and what the validation messages mean. It lives in
+the repository, in the same format as everything else, so it can be extended without
+touching the application and it reviews like any other change.
+
+````markdown
+---
+kind: help
+help_id: attaching-logs
+title: Attaching logs and photos
+section: Using the app
+order: 40
+audience: operator
+summary: How files are attached to a run, and why they are hashed.
+updated: 2026-09-24
+tags: [logs, attachments]
+---
+
+## What counts as a log
+
+Any file that a run produced or that a run depends on.
+````
+
+Required front matter: `kind`, `help_id`, `title`, `section`, `updated`.
+
+Optional: `order`, `audience`, `summary`, `tags`.
+
+- `help_id` must match the filename.
+- `section` is free text and groups the page in the panel. It is deliberately not a
+  controlled vocabulary, because adding a section must not require a spec change.
+- `order` is an integer, default `100`, and is **global across help pages**, not per
+  section: a section appears in the panel wherever its lowest `order` appears. Leave gaps
+  in the numbering rather than using consecutive integers.
+- `audience` is drawn from the vocabulary in section 2.
+
+Help pages carry no `version` and no `applies_to`. There is nothing to reproduce later,
+so there is nothing to freeze, and a page is simply edited in place.
+
+The body is never executed. `##` headings are only headings, and a `yaml step` block in a
+help page is a quoted example rather than a step. A help page may therefore show a
+pre-checked `- [x]` item, which procedures and checklists may not.
+
+The generated manifest carries every page with its section and body, so the panel needs
+one read and no extra file access:
+
+```json
+{
+  "help": [
+    {
+      "help_id": "overview",
+      "title": "What this tool is for",
+      "section": "Getting started",
+      "order": 10,
+      "audience": "operator",
+      "path": "help/overview.md",
+      "body": "A geomagnetic survey produces two things ..."
+    }
+  ],
+  "help_sections": [ { "title": "Getting started", "order": 10 } ]
+}
+```
+
+## 13. Validator checks
+
+`sop validate` enforces:
+
+- front matter parses, and required keys per kind are present;
+- ids are well-formed, and unique within a file and after include resolution;
+- every `##` chapter of a procedure or checklist carries a `yaml step` block, so a
+  chapter that was meant to be a step is never silently passed over;
+- include markers resolve to existing procedures, with no duplicate inclusion;
+- `applies_to` values come from the controlled vocabulary;
+- capture `expected` is only declared on `number`, `integer`, `select`, or `bool`;
+- `expected` ranges are ordered, and a `select` expectation is one of its own options;
+- no `- [x]` pre-checked items appear in a procedure or checklist;
+- a declared `schema` is not newer than the tooling supports;
+- relative Markdown links resolve to files or anchors that exist;
+- run records reference an existing checklist, and their `step` ids exist in the revision
+  they were recorded against (their `snapshot.md`); a record with no snapshot is checked
+  against the current checklist and any difference is a warning;
+- `skipped` and `deviated` results both carry a `reason`; a result may omit `status`, but
+  an unknown value is an error rather than being read as silence;
+- for `complete` runs, every step of the recorded revision has a result, every result
+  carries a `status`, and none is `skipped`; the coverage half of this is a warning for a
+  record with no snapshot;
+- `run_id` matches the filename, and `deviations_count` matches reality;
+- `logs[].path` exists and its `sha256`/`size` match the file on disk;
+- help pages carry the required keys, a valid `help_id` matching the filename, and a
+  non-empty `section`; two help pages claiming the same `order` are a warning;
+- a `project.md`, when present, declares `kind: project`, carries `project_id`, `title`,
+  and `updated`, and any `updated` or `started` it declares is a `YYYY-MM-DD` date;
+- formatting rules from section 3.
+
+Exit code is non-zero if any check fails.
+
+## 14. Project identity (`project.md`)
+
+One file at the repository root names the work. It is what the application shows in its
+title bar, what `sop status` prints, and what a reader of a run record two years from now
+reads to learn which campaign the run belonged to.
+
+````markdown
+---
+kind: project
+project_id: uvic-geomag-survey
+title: Geomagnetic Survey Field Work
+institution: University of Victoria
+lead: leo
+started: 2026-09-01
+updated: 2026-09-25
+summary: Sensor calibration, ground walk surveys, interference and navigation tests.
+applies_to: [calibration, ground-survey, interference, navigation, uav-survey]
+tags: [campaign]
+---
+
+Prose about the campaign.
+````
+
+Required front matter: `kind`, `project_id`, `title`, `updated`.
+
+Optional: `institution`, `lead`, `started`, `summary`, `contact`, and the common
+`applies_to`, `tags`, `schema`. `sites` is an optional list of place names the campaign
+works at; the app offers them in the start-a-run site field, alongside sites recorded by
+earlier runs.
+
+### This is content, not a preference
+
+The project's name is **not** an application setting. It is committed, so every operator
+and every historical record agree about which campaign the work belongs to. If it lived
+in each operator's own configuration, two laptops would disagree, both would look
+correct, and the disagreement would never be reviewed. The application's settings hold
+the *path* to the working copy and the *name* of the git remote, and nothing about the
+project itself.
+
+### Editing
+
+Edit the file in place. `sop project` shows the identity, and `sop project set <field>
+<value>` rewrites one field:
+
+```console
+$ sop project set title "Renfrew Walk 2026"
+project.md: title = Renfrew Walk 2026
+```
+
+Every other byte of the file is left alone: the prose, the key order, the comments, and
+any key this build does not know about. A key that is absent is added inside the front
+matter rather than at the end of the file.
+
+The result is parsed and checked *before* it is written, so a command that reports
+success cannot have left a project file the validator rejects. A value that would fail -
+a `project_id` with a space in it, an `updated` that is not a date - is refused, and the
+file is untouched.
+
+`project_id` is stable. Changing it is a rewrite of the project's name, not the creation
+of a new project, and nothing in the format detects the difference after the fact, so
+prefer not to change it. Adding a *field* is additive and needs no schema bump (see
+`SPEC-COMPAT.md`); the fields above are all optional except the four required ones.

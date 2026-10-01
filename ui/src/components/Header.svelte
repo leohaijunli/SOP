@@ -1,6 +1,8 @@
 <script lang="ts">
   import { text } from "../lib/api";
   import type { Status } from "../lib/types";
+  import { cycleTheme, loadTheme } from "../lib/theme";
+  import type { Theme } from "../lib/theme";
 
   let {
     title,
@@ -11,6 +13,8 @@
     helpOpen,
     onView,
     onToggleHelp,
+    operator,
+    onSwitchOperator,
   }: {
     title: unknown;
     projectId: unknown;
@@ -22,12 +26,20 @@
     helpOpen: boolean;
     onView: (v: string) => void;
     onToggleHelp: () => void;
+    operator: string;
+    onSwitchOperator: () => void;
   } = $props();
+
+  let theme: Theme = $state(loadTheme());
+
+  const toggleTheme = (): void => {
+    theme = cycleTheme(theme);
+  };
 
   // The manage views are behind one more tap on purpose: none of them should be reachable
   // by a mis-tap on a run screen held in a gloved hand.
   let manageOpen = $state(false);
-  const manageViews = ["authoring", "project", "settings"];
+  const manageViews = ["authoring", "settings"];
 
   const choose = (next: string): void => {
     manageOpen = false;
@@ -37,6 +49,7 @@
 
 <header>
   <div class="header-top">
+    <img class="mark" src="/condor.svg" alt="" aria-hidden="true" />
     <h1 id="projectname" title={text(projectId)}>{text(title) || "field-sop"}</h1>
     <span class="tag">desktop</span>
     <span class="counts">{counts()}</span>
@@ -69,6 +82,14 @@
       </span>
     {/if}
     <span class="spacer"></span>
+    {#if operator}
+      <button class="operator" onclick={onSwitchOperator} title="Switch operator">
+        <span class="mono">{operator}</span>
+      </button>
+    {/if}
+    <button class="theme-btn" onclick={toggleTheme} title="Switch theme (auto / light / dark)">
+      {theme === "dark" ? "Dark" : theme === "light" ? "Light" : "Auto"}
+    </button>
     <span class="toolbar nav">
       <button class:primary={view === "testplans"} onclick={() => onView("testplans")}>Test Plans</button>
       <button class:primary={view === "run"} onclick={() => onView("run")}>Run</button>
@@ -78,7 +99,6 @@
         <summary class:active={manageViews.includes(view)}>Manage</summary>
         <div class="menu">
           <button class:primary={view === "authoring"} onclick={() => choose("authoring")}>Edit SOP</button>
-          <button class:primary={view === "project"} onclick={() => choose("project")}>Project</button>
           <button class:primary={view === "settings"} onclick={() => choose("settings")}>Settings</button>
         </div>
       </details>
@@ -95,6 +115,10 @@
 <style>
   header { display: block; padding: 0; background: var(--bg-dark); border-bottom: 1px solid var(--line); }
   .header-top { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; padding: 10px 16px 6px; }
+  .mark {
+    width: 26px; height: 26px; border-radius: 7px; align-self: center;
+    box-shadow: 0 1px 3px var(--shadow);
+  }
   .header-tools {
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
     padding: 2px 16px 8px;
@@ -103,6 +127,9 @@
     font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
     color: var(--muted); margin-right: 4px;
   }
+  .theme-btn { font-size: 11px; padding: 2px 10px; }
+  .operator { font-size: 12px; padding: 2px 10px; }
+  .operator .mono { font-size: 12px; }
   .toolbar { display: flex; gap: 6px; align-items: center; }
   .toolbar button { font-size: 12px; padding: 4px 10px; }
   .manage { position: relative; }
@@ -117,7 +144,7 @@
     position: absolute; right: 0; top: calc(100% + 4px); z-index: 10;
     display: flex; flex-direction: column; gap: 4px; padding: 6px;
     background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 6px 18px var(--shadow);
   }
   .manage .menu button { text-align: left; white-space: nowrap; }
   button.active { border-color: var(--accent); }

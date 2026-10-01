@@ -14,6 +14,7 @@ use sop_repo::{Repo, settings};
 pub struct AppState {
     settings_path: PathBuf,
     root: Mutex<PathBuf>,
+    last_export: Mutex<Option<PathBuf>>,
 }
 
 impl AppState {
@@ -27,6 +28,7 @@ impl AppState {
         Ok(Self {
             settings_path,
             root: Mutex::new(root),
+            last_export: Mutex::new(None),
         })
     }
 
@@ -41,14 +43,33 @@ impl AppState {
         Ok(Repo::open(self.root()?))
     }
 
-    /// The git repository root that holds the `testplan/` tree: the configured testcase
-    /// repository, or the working copy when no separate one is set.
+    /// Remember the folder a summary export just wrote, so the window can open it and
+    /// nothing else: only this path is ever opened for an export result.
+    pub fn set_last_export(&self, path: PathBuf) -> Result<(), String> {
+        let mut last = self
+            .last_export
+            .lock()
+            .map_err(|_| "the export path is locked by another operation".to_owned())?;
+        *last = Some(path);
+        Ok(())
+    }
+
+    /// True when `path` is exactly the folder the most recent export wrote.
+    pub fn is_last_export(&self, path: &Path) -> Result<bool, String> {
+        let last = self
+            .last_export
+            .lock()
+            .map_err(|_| "the export path is locked by another operation".to_owned())?;
+        Ok(last.as_deref() == Some(path))
+    }
+
+    /// The git repository root that holds the `testplan/` tree.
+    ///
+    /// A single repository is used for everything now: the working copy also holds the
+    /// `testplan/` tree, so sync, the plans, and the record pushes all act on the same
+    /// remote. A separately-configured `testcase-repo` is ignored.
     pub fn testcase_repo_root(&self) -> Result<PathBuf, String> {
-        let settings = self.settings()?;
-        match settings.testcase_repo.as_deref() {
-            Some(configured) if !configured.trim().is_empty() => resolve(configured),
-            _ => self.root(),
-        }
+        self.root()
     }
 
     /// The folder that holds the `testplan/` tree.
@@ -86,12 +107,16 @@ impl AppState {
         if sop_core::settings::is_repo_key(key) {
             let root = self.root()?;
             let mut settings = self.settings()?;
-            settings.set(key, value).map_err(|error| error.to_string())?;
+            settings
+                .set(key, value)
+                .map_err(|error| error.to_string())?;
             return settings::save_repo(&root, &settings).map_err(|error| error.to_string());
         }
         let mut settings =
             settings::load(&self.settings_path).map_err(|error| error.to_string())?;
-        settings.set(key, value).map_err(|error| error.to_string())?;
+        settings
+            .set(key, value)
+            .map_err(|error| error.to_string())?;
         self.save(&settings)
     }
 

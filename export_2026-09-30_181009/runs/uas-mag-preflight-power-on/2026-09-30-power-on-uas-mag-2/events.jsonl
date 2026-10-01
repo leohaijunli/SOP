@@ -1,0 +1,4 @@
+{"type":"RunStarted","at":"2026-09-30T23:56:45Z","sop":"uas-mag-preflight-power-on","sop_version":"1","sop_commit":"f93bc59","snapshot_sha256":"a48f2f6bb02c4e1c5f71ce44734f415624e7fe28fe2c3592baeec53eed56552c","operator":"Leo","site":"cfar","plan":"uas-mag-preflight","case":"power-on","sensor":{"model":"UAS-MAG"},"hardware":["Bartington UAS-MAG fluxgate","Flight battery","Field laptop","UAS-MAG"]}
+{"type":"StepOpened","at":"2026-09-30T23:56:45Z","step":"supply"}
+{"type":"StepOpened","at":"2026-10-01T00:26:27Z","step":"supply"}
+{"type":"AttachmentAdded","at":"2026-10-01T00:26:34Z","step":"supply","path":"runs/uas-mag-preflight-power-on/2026-09-30-power-on-uas-mag-2/logs/heading-error.md","sha256":"3bcdcd5cc29a85a2e26a1adfd76214bf82d3acd892d073e51410ba94658d146f","size":647}

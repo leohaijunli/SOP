@@ -86,6 +86,27 @@ pub fn title(repo: &Repo) -> Option<String> {
     (!title.trim().is_empty()).then(|| title.to_owned())
 }
 
+/// The project's stable id, or an empty string when it has none.
+///
+/// Run records are filed under it (`runs/<project_id>/...`), so an empty id means the
+/// records sit directly under `runs/` as before.
+pub fn id(repo: &Repo) -> String {
+    let loaded = load(repo).ok().flatten();
+    let Some(loaded) = loaded else {
+        return String::new();
+    };
+    if loaded.doc.kind.as_deref() != Some("project") {
+        return String::new();
+    }
+    loaded
+        .doc
+        .front
+        .str("project_id")
+        .flatten()
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_default()
+}
+
 /// Rewrite one field of the project file.
 ///
 /// The new text is parsed and checked *before* it is written, so a command that reports

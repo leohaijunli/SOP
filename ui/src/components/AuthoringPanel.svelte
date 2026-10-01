@@ -2,6 +2,7 @@
   import * as api from "../lib/api";
   import { text } from "../lib/text";
   import type { Manifest, ProcedureChoice, StepEntry } from "../lib/types";
+  import DoubleConfirm from "./DoubleConfirm.svelte";
 
   let {
     manifest,
@@ -20,6 +21,9 @@
   let isError = $state(false);
   // One step at a time: the list picks, the editor edits.
   let selected = $state(0);
+  let confirmOpen = $state(false);
+  let confirmMessage = $state("");
+  let confirmAction = $state<(() => void) | null>(null);
 
   // "add a step" form
   let draft = $state({
@@ -153,9 +157,16 @@
     }
   };
 
-  const removeStep = async (step: StepEntry): Promise<void> => {
+  const askRemoveStep = (step: StepEntry): void => {
+    confirmMessage = `Remove step "${text(step.id)}" from ${sourceOf(step)}?`;
+    confirmAction = () => {
+      void doRemoveStep(step);
+    };
+    confirmOpen = true;
+  };
+
+  const doRemoveStep = async (step: StepEntry): Promise<void> => {
     const id = text(step.id);
-    if (!confirm(`Remove step "${id}" from ${sourceOf(step)}?`)) return;
     try {
       await api.stepRemove(sourceOf(step), id);
       say(`removed ${id}`);
@@ -187,7 +198,15 @@
     }
   };
 
-  const removeCapture = async (step: StepEntry, key: string): Promise<void> => {
+  const askRemoveCapture = (step: StepEntry, key: string): void => {
+    confirmMessage = `Remove capture "${key}" from step "${text(step.id)}"?`;
+    confirmAction = () => {
+      void doRemoveCapture(step, key);
+    };
+    confirmOpen = true;
+  };
+
+  const doRemoveCapture = async (step: StepEntry, key: string): Promise<void> => {
     try {
       await api.captureRemove(sourceOf(step), text(step.id), key);
       say(`removed capture ${key}`);
@@ -213,6 +232,13 @@
 
   const current: StepEntry | null = $derived(steps[selected] ?? null);
   const includedCount: number = $derived(procedures.filter((p) => p.included).length);
+
+  const doConfirm = (): void => {
+    confirmOpen = false;
+    const action = confirmAction;
+    confirmAction = null;
+    if (action) action();
+  };
 </script>
 
 <article class="authoring">
@@ -306,7 +332,7 @@
               {#if isLocal(current)}
                 <button title="move up" onclick={() => void move(current, true)} disabled={selected === 0}>&uarr;</button>
                 <button title="move down" onclick={() => void move(current, false)} disabled={selected === steps.length - 1}>&darr;</button>
-                <button title="remove" onclick={() => void removeStep(current)}>&times;</button>
+                <button title="remove" onclick={() => askRemoveStep(current)}>&times;</button>
               {/if}
             </div>
 
@@ -356,7 +382,7 @@
                   <span class="mono">{text(capture.key)}</span>
                   <span>&mdash; {text(capture.label)} ({text(capture.type)})</span>
                   <span class="spacer"></span>
-                  <button onclick={() => void removeCapture(current!, text(capture.key))}>&times;</button>
+                  <button onclick={() => askRemoveCapture(current!, text(capture.key))}>&times;</button>
                 </div>
               {/each}
               <div class="field-row">
@@ -387,6 +413,13 @@
     {/if}
   </section>
 </article>
+
+<DoubleConfirm
+  open={confirmOpen}
+  message={confirmMessage}
+  onConfirm={doConfirm}
+  onCancel={() => (confirmOpen = false)}
+/>
 
 <style>
   .spacer { flex: 1; }

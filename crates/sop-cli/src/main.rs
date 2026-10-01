@@ -5,7 +5,9 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use sop_core::{Settings, Value};
-use sop_repo::{Repo, git, manifest, project, report::display_path, run, settings, validate};
+use sop_repo::{
+    Repo, export, git, manifest, project, report::display_path, run, settings, validate,
+};
 
 mod preview;
 
@@ -49,6 +51,18 @@ enum Command {
         /// Loopback port to listen on.
         #[arg(long, value_name = "PORT", default_value_t = 8731)]
         port: u16,
+    },
+    /// Package a summary and every run into one self-contained folder.
+    Export {
+        /// Where to write the package. It lands in `<out>/export_<label>`.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// The folder-name tag. Defaults to the current UTC time.
+        #[arg(long, value_name = "LABEL")]
+        label: Option<String>,
+        /// Repository root. Defaults to the configured working copy, then to here.
+        #[arg(long, value_name = "PATH")]
+        repo: Option<PathBuf>,
     },
     /// Show the repository's identity, its git state, and what content it holds.
     Status {
@@ -160,6 +174,10 @@ enum RunAction {
         /// The step to attach it to. Omit to attach to the run.
         #[arg(long, value_name = "STEP")]
         step: Option<String>,
+        /// What the file is: `log` (default), `photo`, or `file`. It decides the
+        /// subdirectory the file is filed under.
+        #[arg(long, value_name = "KIND", default_value = "log")]
+        kind: String,
         /// The file to copy in.
         path: PathBuf,
     },
@@ -242,7 +260,11 @@ enum RecordEventAction {
         unit: Option<String>,
     },
     /// Clear a capture value, recording why.
-    Clear { step: String, key: String, reason: String },
+    Clear {
+        step: String,
+        key: String,
+        reason: String,
+    },
     /// Toggle a checkbox on a step.
     Checkbox {
         step: String,
@@ -264,6 +286,7 @@ fn main() -> ExitCode {
         Command::Validate { repo, files } => run_validate(repo, files),
         Command::Index { repo, out } => run_index(repo, out),
         Command::Preview { repo, port } => run_preview(repo, port),
+        Command::Export { out, label, repo } => run_export_package(out, label, repo),
         Command::Status { repo } => run_status(repo),
         Command::Remote { url, name, repo } => run_remote(repo, name, url),
         Command::Project { action, repo } => run_project(repo, action),
@@ -345,6 +368,75 @@ fn repository_for(explicit: Option<PathBuf>, settings: &Settings) -> Repo {
         return Repo::open(repo_root(Some(PathBuf::from(configured))));
     }
     Repo::open(repo_root(None))
+}
+
+/// Package a summary and every run into `<out>/export_<label>/`.
+///
+/// The label defaults to the current UTC time, spelled `YYYY-MM-DD_HHMMSS`, so two
+/// exports from the same second land in the same folder and the next one gets a `-2`.
+/// The summary's timestamps stay in UTC: the CLI has no locale of its own.
+fn run_export_package(out: PathBuf, label: Option<String>, repo: Option<PathBuf>) -> ExitCode {
+    let (_settings_path, settings) = load_settings();
+    let repo = repository_for(repo, &settings);
+    let testcases = Repo::open(repo.root().to_path_buf());
+    let now = sop_core::now_utc_rfc3339();
+    let label = label
+        .map(|label| label.trim().to_owned())
+        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| export_label(&now));
+    let meta = export::repo_meta(&repo, now.clone());
+    match export::export_package(
+        &repo,
+        &testcases,
+        &out,
+        &label,
+        &|time| time.to_owned(),
+        &meta,
+        None,
+    ) {
+        Ok(report) => {
+            println!("{}", report.dir.display());
+            println!(
+                "{} run(s), {} file(s), {}",
+                report.runs,
+                report.files,
+                human_bytes(report.bytes)
+            );
+            if !report.skipped.is_empty() {
+                eprintln!("skipped {} entry/entries", report.skipped.len());
+            }
+            if !report.failed.is_empty() {
+                eprintln!(
+                    "could not find {} run(s): {}",
+                    report.failed.len(),
+                    report.failed.join(", ")
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `2026-09-29T20:31:00Z` as `2026-09-29_203100`, a safe folder tag.
+fn export_label(now: &str) -> String {
+    now.trim_end_matches('Z').replace('T', "_").replace(':', "")
+}
+
+/// Bytes as `1.2 MB`, for a human reading the command's output.
+fn human_bytes(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * 1024;
+    if bytes >= MIB {
+        format!("{:.1} MB", bytes as f64 / MIB as f64)
+    } else if bytes >= KIB {
+        format!("{:.1} KB", bytes as f64 / KIB as f64)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn run_status(repo: Option<PathBuf>) -> ExitCode {
@@ -686,42 +778,62 @@ fn run_index(repo: Option<PathBuf>, out: Option<PathBuf>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-
 fn run_run(repo: Option<PathBuf>, action: RunAction) -> ExitCode {
     let (_, settings) = load_settings();
     let repo = repository_for(repo, &settings);
 
     let result: Result<(), String> = match action {
-        RunAction::Start { sop, run_id, operator, site, r#override } => {
-            run::start(&repo, &sop, &run_id, &operator, &site, r#override.as_deref())
-                .map(|loaded| {
-                    println!("started {run_id} for {sop}");
-                    println!("snapshot {}", loaded.state.snapshot_sha256.as_deref().unwrap_or(""));
-                })
-                .map_err(|error| error.to_string())
-        }
+        RunAction::Start {
+            sop,
+            run_id,
+            operator,
+            site,
+            r#override,
+        } => run::start(
+            &repo,
+            &sop,
+            &run_id,
+            &operator,
+            &site,
+            r#override.as_deref(),
+        )
+        .map(|loaded| {
+            println!("started {run_id} for {sop}");
+            println!(
+                "snapshot {}",
+                loaded.state.snapshot_sha256.as_deref().unwrap_or("")
+            );
+        })
+        .map_err(|error| error.to_string()),
         RunAction::Record { sop, run_id, event } => {
             let event = record_event(event);
             run::record(&repo, &sop, &run_id, &event)
                 .map(|_| println!("recorded on {run_id}"))
                 .map_err(|error| error.to_string())
         }
-        RunAction::Recover { sop, run_id } => {
-            run::load(&repo, &sop, &run_id)
-                .map(|loaded| {
-                    println!(
-                        "recovered {run_id}: {} step(s), {} deviation(s)",
-                        loaded.state.steps.len(),
-                        loaded.state.deviations()
-                    );
-                    for (id, state) in &loaded.state.steps {
-                        println!("  {id}: {}", state.status.as_str());
-                    }
-                })
-                .map_err(|error| error.to_string())
-        }
-        RunAction::Attach { sop, run_id, step, path } => {
-            run::attach(&repo, &sop, &run_id, step.as_deref(), &path)
+        RunAction::Recover { sop, run_id } => run::load(&repo, &sop, &run_id)
+            .map(|loaded| {
+                println!(
+                    "recovered {run_id}: {} step(s), {} deviation(s)",
+                    loaded.state.steps.len(),
+                    loaded.state.deviations()
+                );
+                for (id, state) in &loaded.state.steps {
+                    println!("  {id}: {}", state.status.as_str());
+                }
+            })
+            .map_err(|error| error.to_string()),
+        RunAction::Attach {
+            sop,
+            run_id,
+            step,
+            kind,
+            path,
+        } => match sop_core::run::AttachmentKind::parse(&kind) {
+            None => Err(format!(
+                "'{kind}' is not an attachment kind; use log, photo, or file"
+            )),
+            Some(kind) => run::attach_kind(&repo, &sop, &run_id, step.as_deref(), kind, &path)
                 .map(|attachment| {
                     println!(
                         "attached {} (sha256 {}, {} bytes)",
@@ -730,32 +842,36 @@ fn run_run(repo: Option<PathBuf>, action: RunAction) -> ExitCode {
                         attachment.size
                     );
                 })
-                .map_err(|error| error.to_string())
-        }
-RunAction::End { sop, run_id, status, conclusion, note } => {
-            match (conclusion, note) {
-                (None, None) => {
-                    run::end(&repo, &sop, &run_id, &status, None)
-                        .map(|_| println!("ended {run_id} ({status})"))
-                        .map_err(|error| error.to_string())
-                }
-                (Some(outcome), Some(summary)) => run::end(
-                    &repo,
-                    &sop,
-                    &run_id,
-                    &status,
-                    Some((outcome, summary)),
-                )
+                .map_err(|error| error.to_string()),
+        },
+        RunAction::End {
+            sop,
+            run_id,
+            status,
+            conclusion,
+            note,
+        } => match (conclusion, note) {
+            (None, None) => run::end(&repo, &sop, &run_id, &status, None)
                 .map(|_| println!("ended {run_id} ({status})"))
                 .map_err(|error| error.to_string()),
-                (Some(_), None) => Err("--conclusion requires --note".to_owned()),
-                (None, Some(_)) => Err("--note requires --conclusion".to_owned()),
+            (Some(outcome), Some(summary)) => {
+                run::end(&repo, &sop, &run_id, &status, Some((outcome, summary)))
+                    .map(|_| println!("ended {run_id} ({status})"))
+                    .map_err(|error| error.to_string())
             }
+            (Some(_), None) => Err("--conclusion requires --note".to_owned()),
+            (None, Some(_)) => Err("--note requires --conclusion".to_owned()),
+        },
+        RunAction::Deviations { sop } => {
+            run_deviations(&repo, &sop).map(|count| println!("{count} deviation(s) across {sop}"))
         }
-        RunAction::Deviations { sop } => run_deviations(&repo, &sop)
-            .map(|count| println!("{count} deviation(s) across {sop}")),
         RunAction::Timeline { sop, run_id } => run::load(&repo, &sop, &run_id)
-            .map(|loaded| print!("{}", sop_core::run::timeline_csv(&loaded.state, &loaded.steps)))
+            .map(|loaded| {
+                print!(
+                    "{}",
+                    sop_core::run::timeline_csv(&loaded.state, &loaded.steps)
+                )
+            })
             .map_err(|error| error.to_string()),
         RunAction::Export {
             sop,
@@ -795,29 +911,34 @@ fn record_event(action: RecordEventAction) -> sop_core::RunEvent {
             status: "deviated".to_owned(),
             reason: Some(reason),
         },
-        RecordEventAction::Capture { step, key, value, unit } => {
-            sop_core::RunEvent::CaptureRecorded {
-                at: now(),
-                step,
-                key,
-                value,
-                unit,
-            }
-        }
+        RecordEventAction::Capture {
+            step,
+            key,
+            value,
+            unit,
+        } => sop_core::RunEvent::CaptureRecorded {
+            at: now(),
+            step,
+            key,
+            value,
+            unit,
+        },
         RecordEventAction::Clear { step, key, reason } => sop_core::RunEvent::CaptureCleared {
             at: now(),
             step,
             key,
             reason,
         },
-        RecordEventAction::Checkbox { step, index, checked } => {
-            sop_core::RunEvent::CheckboxToggled {
-                at: now(),
-                step,
-                index,
-                checked,
-            }
-        }
+        RecordEventAction::Checkbox {
+            step,
+            index,
+            checked,
+        } => sop_core::RunEvent::CheckboxToggled {
+            at: now(),
+            step,
+            index,
+            checked,
+        },
         RecordEventAction::Note { step, text } => sop_core::RunEvent::NoteAdded {
             at: now(),
             step,
@@ -839,12 +960,7 @@ fn run_deviations(repo: &Repo, sop: &str) -> Result<usize, String> {
             continue;
         }
         let loaded = repo.load(&path).map_err(|error| error.to_string())?;
-        let run_id = loaded
-            .doc
-            .front
-            .str("run_id")
-            .flatten()
-            .unwrap_or(&rel);
+        let run_id = loaded.doc.front.str("run_id").flatten().unwrap_or(&rel);
         for result in &loaded.doc.results {
             if result.status.as_deref() == Some("deviated") {
                 println!(
@@ -882,7 +998,8 @@ fn run_export(
                         .to_owned(),
                 );
             };
-            let text = run::record_document(repo, sop, run_id).map_err(|error| error.to_string())?;
+            let text =
+                run::record_document(repo, sop, run_id).map_err(|error| error.to_string())?;
             (text, format!("the record for {run_id}"))
         }
     };
@@ -908,12 +1025,7 @@ fn export_captures_csv(repo: &Repo, sop: &str) -> Result<(String, usize), String
             continue;
         }
         let loaded = repo.load(&path).map_err(|error| error.to_string())?;
-        let run_id = loaded
-            .doc
-            .front
-            .str("run_id")
-            .flatten()
-            .unwrap_or(&rel);
+        let run_id = loaded.doc.front.str("run_id").flatten().unwrap_or(&rel);
         for result in &loaded.doc.results {
             let step = result.step.as_deref().unwrap_or("?");
             for (key, value) in &result.captures {

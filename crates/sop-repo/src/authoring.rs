@@ -62,9 +62,7 @@ pub fn editable(repo: &Repo, relative: &str) -> Result<PathBuf, EditError> {
     // Run records are evidence; help pages and repository-root documents are edited by
     // hand rather than through the step editor. Everything else that is markdown -
     // checklists, procedures, and external files loaded via "Open file" - is editable.
-    let forbidden = rel.starts_with("runs/")
-        || rel.starts_with("help/")
-        || !rel.contains('/');
+    let forbidden = rel.starts_with("runs/") || rel.starts_with("help/") || !rel.contains('/');
     if forbidden {
         return Err(EditError::NotEditable(relative.to_owned()));
     }

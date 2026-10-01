@@ -94,8 +94,7 @@ pub fn plans(repo: &Repo) -> Vec<TestPlan> {
 
 /// A plan's display title: a `title` in `plan.md` front matter if there is one.
 fn plan_title(repo: &Repo, dir: &Path) -> Option<String> {
-    plan_doc(repo, dir)
-        .and_then(|doc| doc.front.str("title").flatten().map(str::to_owned))
+    plan_doc(repo, dir).and_then(|doc| doc.front.str("title").flatten().map(str::to_owned))
 }
 
 /// A plan's `order`, from `plan.md` front matter when present.

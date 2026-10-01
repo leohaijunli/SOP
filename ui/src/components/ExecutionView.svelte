@@ -7,6 +7,7 @@
   import MarkdownEditor from "./MarkdownEditor.svelte";
   import PromptModal from "./PromptModal.svelte";
   import * as api from "../lib/api";
+  import { parseDevices, type DeviceStock } from "../lib/devices";
   import type { Drift, Manifest, RunEntry, RunStepView, RunView } from "../lib/types";
 
   let {
@@ -18,6 +19,7 @@
     onResumeRun = () => {},
     resumeRunId = null,
     onResumed = () => {},
+    signedInOperator = "",
   }: {
     manifest: Manifest | null;
     checklist: number;
@@ -40,6 +42,8 @@
     resumeRunId?: string | null;
     /// Called once `resumeRunId` has been loaded, so the shell can clear it.
     onResumed?: () => void;
+    /// The operator signed in on this machine, used to pre-fill the run form.
+    signedInOperator?: string;
   } = $props();
 
   const sop = $derived(
@@ -62,7 +66,7 @@
   let runId = $state("");
   let runIdTouched = $state(false);
   let editingRunId = $state(false);
-  let operator = $state("");
+  let operator = $state(untrack(() => signedInOperator));
   let site = $state("");
   let overrideReason = $state("");
   // True once a previous run of this checklist has pre-filled the form, so the instrument
@@ -72,15 +76,18 @@
   // setting, seeded with the models the lab owns, so a run id and a record only ever
   // carry a name the operator chose from the same menu.
   let sensorsText = $state("UAS-MAG; RM3100");
-  let sensorModel = $state("");
-  let sensorSerial = $state("");
-  let customModel = $state("");
-  let customSerial = $state("");
-  let sensorFirmware = $state("");
+  // Which sensor models this run uses, as a multi-select from the `sensors` setting.
+  let sensorChecked: string[] = $state([]);
+  // The serial chosen for a sensor model that lists more than one, keyed by model.
+  let sensorSerials: Record<string, string> = $state({});
   let sensorTouched = $state(false);
   let equipmentChecked: string[] = $state([]);
-  let extraHardware = $state("");
-  let conditionsText = $state("");
+  // "Other devices" (a GNSS receiver, a base station, a UAV, ...) from the `devices`
+  // setting, and which ones this run used. The label joins the run's `hardware` list.
+  let devicesText = $state("");
+  let devicesChecked: string[] = $state([]);
+  // The serial chosen for a device that lists more than one, keyed by `kind/name`.
+  let deviceSerials: Record<string, string> = $state({});
   // The instrument's clock at run start: what it displayed, and its basis, so a later
   // analysis can align notebook events to the instrument's own timestamps.
   let clockBasis = $state("UTC");
@@ -172,6 +179,7 @@
     currentStep = 0;
     seeded = -1;
     equipmentChecked = [];
+    devicesChecked = [];
   };
 
   const say = (msg: string, bad = false): void => {
@@ -221,24 +229,28 @@
     return out;
   };
 
-  const formatSensors = (stocks: SensorStock[]): string =>
-    stocks
-      .map((stock) => (stock.serials.length ? `${stock.model}: ${stock.serials.join(", ")}` : stock.model))
-      .join("; ");
-
   const sensorOptions: SensorStock[] = $derived(parseSensors(sensorsText));
-  const serialsFor = (model: string): string[] =>
-    sensorOptions.find((stock) => stock.model === model)?.serials ?? [];
-  const usingOtherModel = (): boolean => sensorModel === "__other__";
-  const effectiveModel = (): string => (usingOtherModel() ? customModel.trim() : sensorModel);
-  const effectiveSerial = (): string =>
-    usingOtherModel() || sensorSerial === "__new__" ? customSerial.trim() : sensorSerial;
-
-  const pickModel = (): void => {
-    sensorTouched = true;
-    sensorSerial = "";
-    customSerial = "";
+  const chosenSensorSerial = (stock: SensorStock): string => {
+    if (stock.serials.length <= 1) return stock.serials[0] ?? "";
+    return sensorSerials[stock.model] ?? stock.serials[0] ?? "";
   };
+  const sensorLabel = (stock: SensorStock): string => {
+    const serial = chosenSensorSerial(stock);
+    return serial ? `${stock.model} ${serial}` : stock.model;
+  };
+  const toggleSensor = (stock: SensorStock, checked: boolean): void => {
+    sensorTouched = true;
+    sensorChecked = checked
+      ? [...sensorChecked, stock.model]
+      : sensorChecked.filter((model) => model !== stock.model);
+  };
+  const chosenSensors = (): string[] =>
+    sensorOptions
+      .filter((stock) => sensorChecked.includes(stock.model))
+      .map(sensorLabel);
+  // The run's primary instrument is the first sensor the operator ticked.
+  const primarySensor = (): SensorStock | null =>
+    sensorOptions.find((stock) => sensorChecked.includes(stock.model)) ?? null;
 
   // The checklist already names the equipment it needs, so the form ticks it rather than
   // asking the operator to retype it. The sensor, if the list has it, is preselected.
@@ -253,6 +265,29 @@
       ? [...equipmentChecked, item]
       : equipmentChecked.filter((name) => name !== item);
   };
+
+  // ---- other devices --------------------------------------------------------
+  //
+  // The `devices` setting is `kind/name: serial, serial; name`. A ticked device becomes
+  // one line in the record: `"<kind>: <name> <serial>"`, or `<name> <serial>` when it has
+  // no kind. A device with more than one serial gets a picker.
+  const deviceOptions: DeviceStock[] = $derived(parseDevices(devicesText));
+  const deviceKey = (device: DeviceStock): string => `${device.kind}/${device.name}`;
+  const chosenSerial = (device: DeviceStock): string => {
+    if (device.serials.length <= 1) return device.serials[0] ?? "";
+    return deviceSerials[deviceKey(device)] ?? device.serials[0] ?? "";
+  };
+  const deviceLabel = (device: DeviceStock): string => {
+    const head = device.kind ? `${device.kind}: ${device.name}` : device.name;
+    const serial = chosenSerial(device);
+    return serial ? `${head} ${serial}` : head;
+  };
+  const toggleDevice = (device: DeviceStock, checked: boolean): void => {
+    const key = deviceKey(device);
+    devicesChecked = checked ? [...devicesChecked, key] : devicesChecked.filter((name) => name !== key);
+  };
+  const chosenDevices = (): string[] =>
+    deviceOptions.filter((device) => devicesChecked.includes(deviceKey(device))).map(deviceLabel);
 
   const existingRunIds = (): Set<string> =>
     new Set(
@@ -279,8 +314,9 @@
   // gets `-2`, `-3` so it never collides with an existing run.
   const suggestRunId = (): string => {
     const existing = existingRunIds();
-    const model = effectiveModel();
-    const serial = effectiveSerial();
+    const sensor = primarySensor();
+    const model = sensor?.model ?? "";
+    const serial = sensor ? chosenSensorSerial(sensor) : "";
     // A case started from a plan carries the case in the id, so two cases of one plan on
     // the same instrument the same day never read as the same run.
     const caseId = caseContext ? slug(caseContext.caseId) : "";
@@ -317,12 +353,10 @@
     // reacting only to the checklist changing, not to the values it just wrote.
     untrack(() => {
       equipmentChecked = equipment;
+      devicesChecked = [];
       declaredValues = {};
-      extraHardware = "";
-      sensorModel = "";
-      sensorSerial = "";
-      customModel = "";
-      customSerial = "";
+      sensorChecked = [];
+      sensorSerials = {};
       sensorTouched = false;
       runIdTouched = false;
       editingRunId = false;
@@ -365,15 +399,18 @@
     }
   });
 
-  // Preselect the sensor the checklist names, once the setting has loaded and unless the
-  // operator has chosen one themselves.
+  // Preselect the first sensor the checklist names, once the setting has loaded and unless
+  // the operator has chosen one themselves.
   $effect(() => {
     if (sensorTouched || run) return;
     const names = equipment.map((name) => name.toLowerCase());
     const hit = sensorOptions.find((stock) =>
       names.some((name) => name.includes(stock.model.toLowerCase()))
     );
-    if (hit && hit.model !== sensorModel) sensorModel = hit.model;
+    if (hit && !sensorChecked.includes(hit.model)) {
+      sensorChecked = [hit.model];
+      sensorTouched = true;
+    }
   });
 
   // Keep the id in step with the date, the instrument and the site until it is edited by
@@ -383,67 +420,21 @@
     runId = suggestRunId();
   });
 
-  // One item per line; blank lines and surrounding space are dropped.
-  const parseLines = (value: string): string[] =>
-    value
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line !== "");
-
-  // `key: value` per line, so a checklist can add a dimension without a form change.
-  const parseConditions = (value: string): Record<string, string> => {
-    const out: Record<string, string> = {};
-    for (const line of value.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const separator = trimmed.indexOf(":");
-      if (separator < 0) continue;
-      const key = trimmed.slice(0, separator).trim();
-      const item = trimmed.slice(separator + 1).trim();
-      if (key && item) out[key] = item;
-    }
-    return out;
-  };
-
-  // A serial typed by hand joins the machine's sensor list, so the next run of the same
-  // unit picks it from the menu. The run has already started, so a failure here must not
-  // put an error banner over it.
-  const rememberSerial = async (model: string, serial: string): Promise<void> => {
-    if (!model || !serial) return;
-    const stocks = parseSensors(sensorsText);
-    let stock = stocks.find((item) => item.model === model);
-    if (!stock) {
-      stock = { model, serials: [] };
-      stocks.push(stock);
-    }
-    if (stock.serials.includes(serial)) return;
-    stock.serials.push(serial);
-    try {
-      const rows = await api.settingsSet("sensors", formatSensors(stocks));
-      const saved = rows.find((row) => row.key === "sensors")?.value;
-      if (saved) sensorsText = saved;
-    } catch {
-      /* keeping the list is a convenience, not part of the run */
-    }
-  };
-
   const start = async (): Promise<void> => {
-    const model = effectiveModel();
-    const serial = effectiveSerial();
+    const sensor = primarySensor();
+    const model = sensor?.model ?? "";
+    const serial = sensor ? chosenSensorSerial(sensor) : "";
     try {
       run = await api.runStart(runSop, runId.trim(), operator.trim(), site.trim(), overrideReason.trim() || null, {
         sensorModel: model || null,
         sensorSerial: serial || null,
-        sensorFirmware: sensorFirmware.trim() || null,
-        hardware: [...new Set([...equipmentChecked, ...parseLines(extraHardware)])],
+        sensorFirmware: null,
+        hardware: [...new Set([...equipmentChecked, ...chosenSensors(), ...chosenDevices()])],
         // A declared field wins over the same key typed into the free-form box: the
         // checklist asked for that field explicitly.
-        conditions: {
-          ...parseConditions(conditionsText),
-          ...Object.fromEntries(
-            Object.entries(declaredValues).filter(([, value]) => value.trim() !== "")
-          ),
-        },
+        conditions: Object.fromEntries(
+          Object.entries(declaredValues).filter(([, value]) => value.trim() !== "")
+        ),
         plan: caseContext ? caseContext.planId : null,
         case: caseContext ? caseContext.caseId : null,
         clockInstrumentTime: clockInstrumentTime.trim() || null,
@@ -452,7 +443,6 @@
       currentStep = 0;
       message = `started ${runId.trim()}`;
       isError = false;
-      void rememberSerial(model, serial);
       onRunUpdate();
     } catch (e) {
       say(String(e), true);
@@ -879,30 +869,29 @@
     }
     for (const c of declaredConditions) declared.add(c.key);
     const values = (previous.conditions ?? {}) as Record<string, unknown>;
-    const extra: string[] = [];
     const fields: Record<string, string> = { ...declaredValues };
     for (const [key, value] of Object.entries(values)) {
       const item = text(value);
       if (!item) continue;
       if (declared.has(key)) fields[key] = item;
-      else extra.push(`${key}: ${item}`);
     }
     declaredValues = fields;
-    if (extra.length && !conditionsText.trim()) conditionsText = extra.join("\n");
 
+    // Tick the primary instrument the previous run used, if the setting still has it.
     const sensor = previous.sensor;
     if (sensor && !sensorTouched) {
       const model = text(sensor.model);
       const serial = text(sensor.serial);
       if (model) {
-        sensorModel = model;
+        const stock = sensorOptions.find((s) => s.model === model);
+        if (stock) {
+          sensorChecked = [stock.model];
+          if (serial && stock.serials.length > 1) {
+            sensorSerials = { ...sensorSerials, [stock.model]: serial };
+          }
+        }
         sensorTouched = true;
-        // A run's instrument joins the picker list, the same way a hand-typed serial
-        // does, so the next run finds it in the menu.
-        void rememberSerial(model, serial);
       }
-      if (serial) sensorSerial = serial;
-      if (text(sensor.firmware)) sensorFirmware = text(sensor.firmware);
     }
   }
 
@@ -911,8 +900,10 @@
     void api
       .settingsRows()
       .then((rows) => {
-        const value = rows.find((row) => row.key === "sensors")?.value;
-        if (value) sensorsText = value;
+        const sensors = rows.find((row) => row.key === "sensors")?.value;
+        if (sensors) sensorsText = sensors;
+        const devices = rows.find((row) => row.key === "devices")?.value;
+        if (devices) devicesText = devices;
       })
       .catch(() => {});
     // Seed the form from the last run, then resume the most recent unfinished run of
@@ -956,16 +947,12 @@
   const inheritedSummary = $derived(
     (() => {
       const parts: string[] = [];
-      const model = usingOtherModel() ? customModel : sensorModel;
-      const serial = usingOtherModel() || sensorSerial === "__new__" ? customSerial : sensorSerial;
-      if (model || serial) parts.push([model, serial].filter(Boolean).join(" "));
+      const sensor = primarySensor();
+      if (sensor) parts.push(sensorLabel(sensor));
       if (equipmentChecked.length) parts.push(`${equipmentChecked.length} equipment`);
-      const conditions =
-        Object.values(declaredValues).filter((value) => (value ?? "").trim()).length +
-        conditionsText.split("\n").filter((line) => line.trim()).length;
+      if (devicesChecked.length) parts.push(`${devicesChecked.length} device(s)`);
+      const conditions = Object.values(declaredValues).filter((value) => (value ?? "").trim()).length;
       if (conditions) parts.push(`${conditions} condition${conditions === 1 ? "" : "s"}`);
-      const extra = extraHardware.split("\n").filter((line) => line.trim()).length;
-      if (extra) parts.push(`${extra} extra hardware`);
       return parts.join(" \u00b7 ");
     })()
   );
@@ -1192,41 +1179,40 @@
           {/if}
         </summary>
 
-        <h3>Instrument</h3>
-      <div class="field-row">
-        <div class="field">
-          <label for="sensor-model">sensor model</label>
-          <select id="sensor-model" bind:value={sensorModel} onchange={pickModel}>
-            <option value="">(none)</option>
-            {#each sensorOptions as stock (stock.model)}
-              <option value={stock.model}>{stock.model}</option>
-            {/each}
-            <option value="__other__">Other model&hellip;</option>
-          </select>
-        </div>
-        {#if usingOtherModel()}
+        <h3>Sensors</h3>
+        {#if sensorOptions.length}
           <div class="field">
-            <label for="sensor-model-other">model name</label>
-            <input id="sensor-model-other" placeholder="RM3100" bind:value={customModel} oninput={() => (sensorTouched = true)} />
+            <span class="group-label">sensors this run uses</span>
+            <div class="equipment">
+              {#each sensorOptions as stock (stock.model)}
+                <label class="task">
+                  <input
+                    type="checkbox"
+                    checked={sensorChecked.includes(stock.model)}
+                    onchange={(e) => toggleSensor(stock, (e.currentTarget as HTMLInputElement).checked)}
+                  />
+                  {stock.model}
+                  {#if stock.serials.length > 1}
+                    <select
+                      value={sensorSerials[stock.model] ?? stock.serials[0]}
+                      onchange={(e) => {
+                        sensorSerials = {
+                          ...sensorSerials,
+                          [stock.model]: (e.currentTarget as HTMLSelectElement).value,
+                        };
+                      }}
+                    >
+                      {#each stock.serials as serial (serial)}
+                        <option value={serial}>{serial}</option>
+                      {/each}
+                    </select>
+                  {/if}
+                </label>
+              {/each}
+            </div>
+            <span class="desc">From the <span class="mono">sensors</span> setting. Ticked sensors are written into the record's hardware list; the first is the run's instrument.</span>
           </div>
         {/if}
-        <div class="field">
-          <label for="sensor-serial">serial number</label>
-          {#if usingOtherModel() || sensorSerial === "__new__"}
-            <input id="sensor-serial" placeholder="1001" bind:value={customSerial} />
-          {:else}
-            <select id="sensor-serial" bind:value={sensorSerial}>
-              <option value="">(none)</option>
-              {#each serialsFor(sensorModel) as serial (serial)}
-                <option value={serial}>{serial}</option>
-              {/each}
-              <option value="__new__">New serial&hellip;</option>
-            </select>
-          {/if}
-        </div>
-        <div class="field"><label for="sensor-firmware">firmware</label><input id="sensor-firmware" placeholder="optional" bind:value={sensorFirmware} /></div>
-      </div>
-      <span class="desc">The list comes from the <span class="mono">sensors</span> setting, and a serial entered here is added to it.</span>
 
       <h3>Equipment and conditions</h3>
       {#if equipment.length}
@@ -1247,10 +1233,39 @@
           <span class="desc">Everything not ticked is left out of the record, so drop what the run did not use.</span>
         </div>
       {/if}
-      <div class="field">
-        <label for="extra-hardware">additional hardware (one per line)</label>
-        <textarea id="extra-hardware" rows="2" placeholder="mag_gcs v0.3.1" bind:value={extraHardware}></textarea>
-      </div>
+      {#if deviceOptions.length}
+        <div class="field">
+          <span class="group-label">equipment used</span>
+          <div class="equipment">
+            {#each deviceOptions as device (deviceKey(device))}
+              <label class="task">
+                <input
+                  type="checkbox"
+                  checked={devicesChecked.includes(deviceKey(device))}
+                  onchange={(e) => toggleDevice(device, (e.currentTarget as HTMLInputElement).checked)}
+                />
+                {device.kind ? `${device.kind}: ` : ""}{device.name}
+                {#if device.serials.length > 1}
+                  <select
+                    value={deviceSerials[deviceKey(device)] ?? device.serials[0]}
+                    onchange={(e) => {
+                      deviceSerials = {
+                        ...deviceSerials,
+                        [deviceKey(device)]: (e.currentTarget as HTMLSelectElement).value,
+                      };
+                    }}
+                  >
+                    {#each device.serials as serial (serial)}
+                      <option value={serial}>{serial}</option>
+                    {/each}
+                  </select>
+                {/if}
+              </label>
+            {/each}
+          </div>
+          <span class="desc">From the <span class="mono">devices</span> setting. Ticked devices are written into the record's hardware list.</span>
+        </div>
+      {/if}
       {#if declaredConditions.length}
         <div class="field">
           <span class="group-label">conditions this checklist records</span>
@@ -1273,13 +1288,6 @@
           {/each}
         </div>
       {/if}
-      <div class="field">
-        <label for="conditions">
-          {declaredConditions.length ? "other conditions" : "conditions"}
-          (one <span class="mono">key: value</span> per line)
-        </label>
-        <textarea id="conditions" rows="2" placeholder="weather: clear&#10;temp_c: 12" bind:value={conditionsText}></textarea>
-      </div>
       <div class="field-row">
         <div class="field">
           <label for="clock-basis">instrument time basis</label>
@@ -1479,9 +1487,6 @@
             {/if}
             <span class="divider-btn"></span>
             <button onclick={() => void attach(current)}>Attach data / photo</button>
-            {#if run?.suggestedLogName}
-              <span class="muted" title="Recommended by LOGS.md naming">&#128196; {run.suggestedLogName}</span>
-            {/if}
             <button onclick={() => void mark()} title="Drop a timestamped, labelled marker (m)">Mark <span class="key">m</span></button>
             {#if run?.markers.length}
               <button onclick={() => (showMarkers = !showMarkers)} title="Show the markers dropped this run">
@@ -1684,7 +1689,7 @@
   .outputs .missing { color: var(--warn); }
   .outputs p { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
   .attachment { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; padding: 2px 0; font-size: 13px; }
-  .attachment .name { font-family: var(--mono); font-size: 12px; }
+  .attachment .name { font-family: var(--mono); font-size: 12px; color: var(--accent); }
   .attachment .where { flex-basis: 100%; font-family: var(--mono); font-size: 11px; word-break: break-all; }
   .ended-banner {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;

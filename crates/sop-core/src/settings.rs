@@ -108,6 +108,104 @@ pub fn format_sensors(stocks: &[SensorStock]) -> String {
         .join("; ")
 }
 
+/// One other device and the serial numbers of the units this machine has used: a GNSS
+/// receiver, a base station, a UAV, a battery, a ground station, and so on.
+///
+/// `kind` is a free label (`GNSS receiver`), `name` the make or identifier (`Trimble R10`).
+/// Sensors stay a separate setting because a sensor is what a run is *about* (it names the
+/// run and is measured), while these are the rest of the kit.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DeviceStock {
+    pub kind: String,
+    pub name: String,
+    pub serials: Vec<String>,
+}
+
+/// The characters that mean something in the `devices` line, so a name or serial that
+/// contains one is rejected rather than silently re-parsed into a different device.
+const DEVICE_SEPARATORS: [char; 4] = [';', ':', ',', '/'];
+
+fn device_separator_in(value: &str) -> Option<char> {
+    value.chars().find(|c| DEVICE_SEPARATORS.contains(c))
+}
+
+fn push_device_serials(serials: &mut Vec<String>, rest: &str) {
+    for serial in rest.split(',') {
+        let serial = serial.trim();
+        if !serial.is_empty() && !serials.iter().any(|known| known == serial) {
+            serials.push(serial.to_owned());
+        }
+    }
+}
+
+/// Parse the `devices` setting: `kind/name: serial, serial; kind/name; name`.
+///
+/// The `kind/` prefix is optional, a device with no serials is just its label, and a
+/// device written twice is merged rather than dropped. Two devices merge only when both
+/// their kind and their name match, so a `GNSS receiver/Alpha` and a `base station/Alpha`
+/// stay apart.
+pub fn parse_devices(text: &str) -> Vec<DeviceStock> {
+    let mut out: Vec<DeviceStock> = Vec::new();
+    for entry in text.split(';') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let (head, rest) = match entry.split_once(':') {
+            Some((head, rest)) => (head.trim(), rest),
+            None => (entry, ""),
+        };
+        if head.is_empty() {
+            continue;
+        }
+        let (kind, name) = match head.split_once('/') {
+            Some((kind, name)) => (kind.trim(), name.trim()),
+            None => ("", head),
+        };
+        if name.is_empty() {
+            continue;
+        }
+        match out
+            .iter_mut()
+            .find(|device| device.kind == kind && device.name == name)
+        {
+            Some(device) => push_device_serials(&mut device.serials, rest),
+            None => {
+                let mut serials = Vec::new();
+                push_device_serials(&mut serials, rest);
+                out.push(DeviceStock {
+                    kind: kind.to_owned(),
+                    name: name.to_owned(),
+                    serials,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Render the `devices` setting so that it round-trips through [`parse_devices`].
+pub fn format_devices(devices: &[DeviceStock]) -> String {
+    devices
+        .iter()
+        .filter(|device| !device.name.trim().is_empty())
+        .map(|device| {
+            let kind = device.kind.trim();
+            let name = device.name.trim();
+            let label = if kind.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{kind}/{name}")
+            };
+            match device.serials.is_empty() {
+                true => label,
+                false => format!("{label}: {}", device.serials.join(", ")),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SettingsError {
     #[error("'{0}' is not a setting; run `sop settings` to list them")]
@@ -202,6 +300,12 @@ pub const KEYS: &[(&str, &str)] = &[
          on this machine.",
     ),
     (
+        "devices",
+        "Other equipment and their serial numbers, as `kind/name: serial, serial; name`, for \
+         example `GNSS receiver/Trimble R10: 123; UAV`. Fills the Equipment used picker in \
+         the start-a-run form. Kept on this machine.",
+    ),
+    (
         "recent-repositories",
         "Working copies opened before, most recent first.",
     ),
@@ -239,6 +343,13 @@ impl Settings {
                     .get("sensors")
                     .and_then(Json::as_str)
                     .unwrap_or(DEFAULT_SENSORS)
+                    .to_owned(),
+            ),
+            "devices" => Some(
+                self.extra
+                    .get("devices")
+                    .and_then(Json::as_str)
+                    .unwrap_or("")
                     .to_owned(),
             ),
             _ => self.extra.get(key).map(|value| value.to_string()),
@@ -293,6 +404,38 @@ impl Settings {
                     }
                 };
             }
+            "devices" => {
+                // An empty box means "no other devices", which is the default, not an error.
+                if value.is_empty() {
+                    self.extra.remove("devices");
+                    return Ok(());
+                }
+                let devices = parse_devices(value);
+                if devices.is_empty() {
+                    return Err(SettingsError::Invalid {
+                        key: key.to_owned(),
+                        message: "must name at least one device, for example `GNSS receiver/Trimble R10: 123`"
+                            .to_owned(),
+                    });
+                }
+                for device in &devices {
+                    for field in std::iter::once(&device.kind)
+                        .chain(std::iter::once(&device.name))
+                        .chain(device.serials.iter())
+                    {
+                        if let Some(separator) = device_separator_in(field) {
+                            return Err(SettingsError::Invalid {
+                                key: key.to_owned(),
+                                message: format!(
+                                    "a device kind, name, or serial cannot contain '{separator}'"
+                                ),
+                            });
+                        }
+                    }
+                }
+                self.extra
+                    .insert(key.to_owned(), Json::String(format_devices(&devices)));
+            }
             "recent-repositories" => return Err(SettingsError::NotSettable(key.to_owned())),
             "sensors" => {
                 // An emptied box means "back to the built-in list", not an error that
@@ -332,6 +475,9 @@ impl Settings {
             "recent-repositories" => self.recent_repositories.clear(),
             "sensors" => {
                 self.extra.remove("sensors");
+            }
+            "devices" => {
+                self.extra.remove("devices");
             }
             other => {
                 self.extra.remove(other);

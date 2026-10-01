@@ -13,17 +13,17 @@ equipment:
 
 Measure the sensor's response as it is rotated through 360 degrees at fixed elevation.
 
-## Mount
-
-- [ ] Sensor centered on the rotation table
-- [ ] Table marked at known azimuths
-- [ ] No nearby ferrous objects
-
 ## Rotate
 
 - [ ] Full 360-degree sweep recorded
 - [ ] Azimuth and reading logged at each mark
 - [ ] Peak-to-peak heading error computed
+
+## Mount2
+
+- [ ] Sensor centered on the rotation table
+- [ ] Table marked at known azimuths
+- [ ] No nearby ferrous objects
 
 ## Result
 

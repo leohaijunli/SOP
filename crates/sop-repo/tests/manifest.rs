@@ -160,8 +160,8 @@ fn every_run_record_points_at_a_known_checklist_directory() {
             .and_then(|s| s.as_str())
             .unwrap_or_default();
         assert!(
-            run.path.starts_with(&format!("runs/{sop}/")),
-            "{} is not under runs/{sop}/",
+            run.path.starts_with(&format!("runs/uvic-geomag-survey/{sop}/")),
+            "{} is not under runs/uvic-geomag-survey/{sop}/",
             run.path
         );
     }

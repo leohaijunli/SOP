@@ -13,7 +13,11 @@ fn a_case_carries_the_checklist_id_a_run_of_it_records() {
     let repo = scratch.repo();
     let plan = scratch.path("testplan/preflight");
     fs::create_dir_all(&plan).unwrap();
-    fs::write(plan.join("plan.md"), "---\ntitle: Preflight\norder: 1\n---\n\n").unwrap();
+    fs::write(
+        plan.join("plan.md"),
+        "---\ntitle: Preflight\norder: 1\n---\n\n",
+    )
+    .unwrap();
     // A declared id that differs from the file stem: runs record the declared one, so
     // this is what the History view matches runs against.
     fs::write(

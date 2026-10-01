@@ -5,16 +5,17 @@
   import Detail from "./components/Detail.svelte";
   import HelpPanel from "./components/HelpPanel.svelte";
   import SettingsPanel from "./components/SettingsPanel.svelte";
-  import ProjectPanel from "./components/ProjectPanel.svelte";
   import AuthoringPanel from "./components/AuthoringPanel.svelte";
   import ExecutionView from "./components/ExecutionView.svelte";
   import HistoryView from "./components/HistoryView.svelte";
   import TestPlansView from "./components/TestPlansView.svelte";
+  import Login from "./components/Login.svelte";
   import * as api from "./lib/api";
+  import { getKnownOperators, setOperator, clearOperator, removeOperator } from "./lib/operator";
   import type { ChecklistEntry, Manifest, Status, TestCase, TestPlan } from "./lib/types";
 
   // Which screen the window is showing.
-  type View = "browse" | "testplans" | "run" | "history" | "settings" | "project" | "authoring";
+  type View = "browse" | "testplans" | "run" | "history" | "settings" | "authoring";
 
   let manifest: Manifest | null = $state(null);
   // Git and validation state, shown in the header so the operator sees whether the
@@ -40,6 +41,13 @@
   let help = $state<string | null>(null);
   let helpQuery = $state("");
   let stepQuery = $state("");
+// The operator signed in on this machine. Starts empty so the sign-in card appears on
+// every launch; signing in sets it and the run view picks it up.
+let currentOperator = $state("");
+  // Names this machine has seen, for the sign-in card. Drawn from the local history so
+  // removing an operator from the list really removes it (run records keep the name, but
+  // do not bring it back onto the card).
+  const knownOperators = $derived(getKnownOperators());
   // A run the Execution view asked to resume: the shell switches the checklist, then the
   // view loads it. Cleared by the view once it has the run.
   let resumeRunId = $state<string | null>(null);
@@ -82,7 +90,7 @@
   const openView = (next: string): void => {
     if (
       next === "browse" || next === "testplans" || next === "run" ||
-      next === "history" || next === "settings" || next === "project" || next === "authoring"
+      next === "history" || next === "settings" || next === "authoring"
     ) {
       view = next as View;
     }
@@ -287,6 +295,21 @@
     else if (event.key === "j" && step < steps.length - 1) { step++; }
     else if (event.key === "k" && step > 0) { step--; }
   };
+
+  const handleLogin = (name: string): void => {
+    setOperator(name);
+    currentOperator = name;
+  };
+
+  const switchOperator = (): void => {
+    clearOperator();
+    currentOperator = "";
+  };
+
+  const handleRemoveOperator = (name: string): void => {
+    removeOperator(name);
+    if (currentOperator === name) currentOperator = "";
+  };
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -305,6 +328,8 @@
     projectId={manifest?.project?.project_id ?? null}
     {helpOpen}
     onToggleHelp={() => (helpOpen = !helpOpen)}
+    operator={currentOperator}
+    onSwitchOperator={switchOperator}
   />
 
   {#if sync}
@@ -351,20 +376,22 @@
         onResumeRun={resumeRun}
         {resumeRunId}
         onResumed={() => (resumeRunId = null)}
+        signedInOperator={currentOperator}
       />
       {#if helpOpen}
         <HelpPanel manifest={manifest} {help} {helpQuery} onHelp={(h) => (help = h)} onQuery={(q) => (helpQuery = q)} />
       {/if}
     {:else if view === "history"}
-      <HistoryView {manifest} onChanged={() => void refreshRuns()} />
+      <HistoryView {manifest} workingCopy={status?.workingCopy ?? null} onChanged={() => void refreshRuns()} />
     {:else if view === "settings"}
       <SettingsPanel />
-    {:else if view === "project"}
-      <ProjectPanel />
     {:else}
       <AuthoringPanel manifest={manifest} {checklist} onDone={() => { void refresh(); view = "browse"; }} />
     {/if}
   </main>
+  {#if !currentOperator}
+    <Login {knownOperators} onLogin={handleLogin} onRemove={handleRemoveOperator} />
+  {/if}
 {/if}
 <style>
   .syncbar {

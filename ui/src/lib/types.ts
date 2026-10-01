@@ -167,6 +167,10 @@ export interface RunEntry {
   deviations_count: unknown;
   sensor: { model?: unknown; serial?: unknown; firmware?: unknown } | null;
   conditions: Record<string, unknown> | null;
+  /// Per-kind attachment counts, so the History `files` column needs no extra call.
+  log_count: number;
+  photo_count: number;
+  file_count: number;
   path: string;
   step_count: number;
 }
@@ -333,9 +337,51 @@ export interface RunAttachmentView {
   path: string;
   sha256: string;
   size: number;
+  /// `log` / `photo` / `file`.
+  kind: string;
+  addedAt: string;
+  postRun: boolean;
   tMin: string | null;
   tMax: string | null;
   rowCount: number | null;
+}
+
+/// The kind of an uploaded file. It decides the run subdirectory and the picker filter.
+export type AttachmentKind = "log" | "photo" | "file";
+
+/// One attached file, as the History detail drawer lists it.
+export interface RunFileView {
+  kind: string;
+  name: string;
+  path: string;
+  size: number;
+  addedAt: string;
+  postRun: boolean;
+  step: string | null;
+}
+
+/// One note, as the History detail drawer lists it.
+export interface RunNoteView {
+  text: string;
+  addedAt: string;
+  postRun: boolean;
+  step: string | null;
+}
+
+/// A run's files and notes, with per-kind counts.
+export interface RunFiles {
+  files: RunFileView[];
+  notes: RunNoteView[];
+  logCount: number;
+  photoCount: number;
+  fileCount: number;
+}
+
+/// The result of attaching one file: where it landed, or why it did not.
+export interface AttachResult {
+  source: string;
+  path: string | null;
+  error: string | null;
 }
 
 // A run event as the Rust shell deserializes it: variant tag is PascalCase, fields
@@ -375,6 +421,16 @@ export interface ExportResult {
   path: string;
   bytes: number;
   text: string;
+}
+
+/// The result of packaging a summary and every run into one folder.
+export interface SummaryExportReport {
+  dir: string;
+  runs: number;
+  files: number;
+  bytes: number;
+  skipped: string[];
+  failed: string[];
 }
 
 export interface PushResult {

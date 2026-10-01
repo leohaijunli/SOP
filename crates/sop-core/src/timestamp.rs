@@ -46,8 +46,13 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// the safe answer for a timestamp comparison: nothing overlaps a value we cannot place.
 pub fn epoch_seconds(value: &str) -> Option<i64> {
     let bytes = value.as_bytes();
-    if bytes.len() != 20 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T'
-        || bytes[13] != b':' || bytes[16] != b':' || bytes[19] != b'Z'
+    if bytes.len() != 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'Z'
     {
         return None;
     }
@@ -55,7 +60,11 @@ pub fn epoch_seconds(value: &str) -> Option<i64> {
         bytes[start..end]
             .iter()
             .all(|b| b.is_ascii_digit())
-            .then(|| bytes[start..end].iter().fold(0u64, |n, b| n * 10 + (b - b'0') as u64))
+            .then(|| {
+                bytes[start..end]
+                    .iter()
+                    .fold(0u64, |n, b| n * 10 + (b - b'0') as u64)
+            })
     };
     let year = digits(0, 4)? as i64;
     let month = digits(5, 7)?;
@@ -77,7 +86,7 @@ pub fn epoch_seconds(value: &str) -> Option<i64> {
 fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
-    let yoe = (y - era * 400) as i64;
+    let yoe = y - era * 400;
     let mp = (m + 9) % 12;
     let doy = (153 * mp as i64 + 2) / 5 + d as i64 - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;

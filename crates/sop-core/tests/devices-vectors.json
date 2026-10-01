@@ -1,0 +1,41 @@
+{
+  "parse": [
+    {
+      "input": "GNSS receiver/Trimble R10: 123, 124; Base station/NetRS: 9001",
+      "devices": [
+        { "kind": "GNSS receiver", "name": "Trimble R10", "serials": ["123", "124"] },
+        { "kind": "Base station", "name": "NetRS", "serials": ["9001"] }
+      ]
+    },
+    {
+      "input": "UAV; Battery/6S 5000: A1, A2",
+      "devices": [
+        { "kind": "", "name": "UAV", "serials": [] },
+        { "kind": "Battery", "name": "6S 5000", "serials": ["A1", "A2"] }
+      ]
+    },
+    {
+      "input": "GNSS receiver/Trimble R10: 123; GNSS receiver/Trimble R10: 124, 123",
+      "devices": [
+        { "kind": "GNSS receiver", "name": "Trimble R10", "serials": ["123", "124"] }
+      ]
+    },
+    {
+      "input": "GNSS receiver/Alpha: 1; Base station/Alpha: 2",
+      "devices": [
+        { "kind": "GNSS receiver", "name": "Alpha", "serials": ["1"] },
+        { "kind": "Base station", "name": "Alpha", "serials": ["2"] }
+      ]
+    },
+    { "input": "   ", "devices": [] },
+    { "input": "UAV", "devices": [{ "kind": "", "name": "UAV", "serials": [] }] }
+  ],
+  "normalise": [
+    { "input": "UAV ; Battery/6S 5000: A1,A2 ", "output": "UAV; Battery/6S 5000: A1, A2" },
+    {
+      "input": "GNSS receiver/Trimble R10: 123; GNSS receiver/Trimble R10: 124",
+      "output": "GNSS receiver/Trimble R10: 123, 124"
+    },
+    { "input": "   ", "output": "" }
+  ]
+}

@@ -18,6 +18,10 @@ serde_json.workspace = true
 thiserror.workspace = true
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+# Local-time formatting for the exported summary lives only in this shell; `sop-core`
+# and `sop-repo` stay free of a clock. `default-features = false` keeps the formatting
+# to the system clock only, no `serde` or `unstable-locales`.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

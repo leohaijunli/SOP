@@ -105,7 +105,7 @@
     background: var(--panel);
     color: var(--ink);
   }
-  dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+  dialog::backdrop { background: var(--overlay); }
   h2 { margin: 0 0 6px; font-size: 16px; color: var(--ink-bright); }
   p { margin: 0 0 10px; }
   .choices { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }

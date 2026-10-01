@@ -15,11 +15,11 @@ use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
-use sop_core::run::{
-    render_record, render_notes, Attachment, AttachmentKind, ClockInfo, RecordStep, RunEvent, RunState,
-    SensorIdentity, StepState,
-};
 use sop_core::Document;
+use sop_core::run::{
+    Attachment, AttachmentKind, ClockInfo, RecordStep, RunEvent, RunState, SensorIdentity,
+    StepState, render_notes, render_record,
+};
 use thiserror::Error;
 
 use std::collections::BTreeMap;
@@ -151,13 +151,25 @@ fn run_key(repo: &Repo, sop_id: &str) -> String {
 
 fn run_dir(repo: &Repo, sop_id: &str, run_id: &str) -> PathBuf {
     let key = run_key(repo, sop_id);
-    repo.resolve(&format!("runs/{key}/{run_id}"))
+    repo.resolve(&format!("runs/{}/{}", run_subdir(repo, &key), run_id))
 }
 
 /// The committed record file `runs/<sop_id>/<run_id>.md`, next to the run directory.
 fn committed_record_file(repo: &Repo, sop_id: &str, run_id: &str) -> PathBuf {
     let key = run_key(repo, sop_id);
-    repo.resolve(&format!("runs/{key}/{run_id}.md"))
+    repo.resolve(&format!("runs/{}/{}.md", run_subdir(repo, &key), run_id))
+}
+
+/// The `runs/...` sub-path a checklist is filed under: `<project_id>/<sop_id>` when the
+/// repository declares a project id, or just `<sop_id>` when it does not (so a repo with
+/// no project keeps the old flat layout).
+pub(crate) fn run_subdir(repo: &Repo, key: &str) -> String {
+    let project = crate::project::id(repo);
+    if project.is_empty() {
+        key.to_owned()
+    } else {
+        format!("{project}/{key}")
+    }
 }
 
 /// Freeze a resolved checklist into `snapshot.md` text and the step shapes for replay.
@@ -165,7 +177,10 @@ fn snapshot_of(resolved: &[sop_core::Step]) -> (String, Vec<RecordStep>) {
     let mut text = String::from("---\nkind: snapshot\n---\n\n");
     let mut record_steps = Vec::new();
     for step in resolved {
-        let title = step.title.clone().unwrap_or_else(|| step.id_or_placeholder().to_owned());
+        let title = step
+            .title
+            .clone()
+            .unwrap_or_else(|| step.id_or_placeholder().to_owned());
         text.push_str(&format!("## {title}\n\n"));
         if let Some(id) = &step.id {
             text.push_str("```yaml step\n");
@@ -181,7 +196,9 @@ fn snapshot_of(resolved: &[sop_core::Step]) -> (String, Vec<RecordStep>) {
         let checkbox_count = step
             .prose
             .lines()
-            .filter(|line| line.trim_start().starts_with("- [") || line.trim_start().starts_with("* ["))
+            .filter(|line| {
+                line.trim_start().starts_with("- [") || line.trim_start().starts_with("* [")
+            })
             .count();
         record_steps.push(RecordStep {
             id: step.id.clone().unwrap_or_default(),
@@ -208,11 +225,16 @@ fn seed_steps_from_snapshot(
         let checkbox_count = step
             .prose
             .lines()
-            .filter(|line| line.trim_start().starts_with("- [") || line.trim_start().starts_with("* ["))
+            .filter(|line| {
+                line.trim_start().starts_with("- [") || line.trim_start().starts_with("* [")
+            })
             .count();
         shapes.push(RecordStep {
             id: step.id.clone().unwrap_or_default(),
-            title: step.title.clone().unwrap_or_else(|| step.id_or_placeholder().to_owned()),
+            title: step
+                .title
+                .clone()
+                .unwrap_or_else(|| step.id_or_placeholder().to_owned()),
             body: step.prose.clone(),
             checkbox_count,
         });
@@ -220,11 +242,15 @@ fn seed_steps_from_snapshot(
             .captures
             .iter()
             .map(|capture| {
-                let raw = crate::manifest::json_safe(&sop_core::Value::Mapping(capture.raw.clone()));
+                let raw =
+                    crate::manifest::json_safe(&sop_core::Value::Mapping(capture.raw.clone()));
                 CaptureDef {
                     key: capture.key.clone().unwrap_or_default(),
                     label: capture.label.clone(),
-                    capture_type: capture.capture_type.as_ref().map(|kind| kind.as_str().to_owned()),
+                    capture_type: capture
+                        .capture_type
+                        .as_ref()
+                        .map(|kind| kind.as_str().to_owned()),
                     unit: capture.unit.clone(),
                     required: capture.required.unwrap_or(false),
                     options: capture.options.clone(),
@@ -234,7 +260,10 @@ fn seed_steps_from_snapshot(
             .collect();
         defs.push(ResolvedStepDef {
             id: step.id.clone().unwrap_or_default(),
-            title: step.title.clone().unwrap_or_else(|| step.id_or_placeholder().to_owned()),
+            title: step
+                .title
+                .clone()
+                .unwrap_or_else(|| step.id_or_placeholder().to_owned()),
             prose: step.prose.clone(),
             severity: step.severity.clone(),
             kind: step.key.as_ref().map(|key| key.as_str().to_owned()),
@@ -298,12 +327,14 @@ fn parse_time_cell(cell: &str) -> Option<i64> {
     // Drop a fractional second: `16:03:00.250Z` -> `16:03:00Z`.
     if let Some(dot) = s.find('.') {
         let len = s.len();
-        let end = s[dot + 1..].find(|c| c == 'Z' || c == '+' || c == '-').map_or(len, |n| dot + 1 + n);
+        let end = s[dot + 1..]
+            .find(['Z', '+', '-'])
+            .map_or(len, |n| dot + 1 + n);
         s.replace_range(dot..end, "");
     }
     // Convert a trailing offset to a signed number of seconds.
     let offset_secs = s
-        .find(|c| c == '+' || c == '-')
+        .find(['+', '-'])
         .filter(|pos| *pos > 10)
         .and_then(|pos| {
             let (core, off) = s.split_at(pos);
@@ -334,15 +365,13 @@ fn csv_time_range(bytes: &[u8]) -> Option<(String, String, u64)> {
     let mut lines = text.lines();
     let header = lines.next()?.trim();
     let columns: Vec<&str> = header.split(',').map(str::trim).collect();
-    let index = columns
-        .iter()
-        .position(|name| {
-            let lower = name.to_ascii_lowercase();
-            lower.starts_with("timestamp")
-                || lower.starts_with("time")
-                || lower.starts_with("utc")
-                || lower.starts_with("gps_time")
-        })?;
+    let index = columns.iter().position(|name| {
+        let lower = name.to_ascii_lowercase();
+        lower.starts_with("timestamp")
+            || lower.starts_with("time")
+            || lower.starts_with("utc")
+            || lower.starts_with("gps_time")
+    })?;
     let mut first: Option<i64> = None;
     let mut last: Option<i64> = None;
     let mut rows = 0u64;
@@ -358,7 +387,11 @@ fn csv_time_range(bytes: &[u8]) -> Option<(String, String, u64)> {
         rows += 1;
     }
     let (f, l) = (first?, last?);
-    Some((sop_core::timestamp::rfc3339_from_epoch(f), sop_core::timestamp::rfc3339_from_epoch(l), rows))
+    Some((
+        sop_core::timestamp::rfc3339_from_epoch(f),
+        sop_core::timestamp::rfc3339_from_epoch(l),
+        rows,
+    ))
 }
 
 fn now() -> String {
@@ -368,11 +401,9 @@ fn now() -> String {
 fn write_events(path: &Path, events: &[RunEvent]) -> Result<(), RunError> {
     let mut text = String::new();
     for event in events {
-        let line = serde_json::to_string(event).map_err(|error| {
-            RunError::Io {
-                path: path.to_path_buf(),
-                source: std::io::Error::other(error.to_string()),
-            }
+        let line = serde_json::to_string(event).map_err(|error| RunError::Io {
+            path: path.to_path_buf(),
+            source: std::io::Error::other(error.to_string()),
         })?;
         text.push_str(&line);
         text.push('\n');
@@ -435,17 +466,18 @@ pub fn load(repo: &Repo, sop_id: &str, run_id: &str) -> Result<LoadedRun, RunErr
         return Err(RunError::NoRun(sop_id.to_owned(), run_id.to_owned()));
     }
 
-    let snapshot_text = repo
-        .read_text(&snapshot_path)
-        .map_err(RunError::Repo)?;
+    let snapshot_text = repo.read_text(&snapshot_path).map_err(RunError::Repo)?;
     let (seed, mut defs) = seed_steps_from_snapshot(&snapshot_text)?;
 
     let mut state = RunState::default();
     for step in &seed {
-        state.steps.entry(step.id.clone()).or_insert_with(|| StepState {
-            checkboxes: vec![false; step.checkbox_count],
-            ..StepState::default()
-        });
+        state
+            .steps
+            .entry(step.id.clone())
+            .or_insert_with(|| StepState {
+                checkboxes: vec![false; step.checkbox_count],
+                ..StepState::default()
+            });
     }
 
     let bytes = fs::read(&events_path).map_err(|source| RunError::Io {
@@ -513,7 +545,15 @@ pub fn start(
     site: &str,
     override_reason: Option<&str>,
 ) -> Result<LoadedRun, RunError> {
-    start_with_meta(repo, sop_id, run_id, operator, site, override_reason, &RunMeta::default())
+    start_with_meta(
+        repo,
+        sop_id,
+        run_id,
+        operator,
+        site,
+        override_reason,
+        &RunMeta::default(),
+    )
 }
 
 /// [`start`] with the instrument and conditions the operator recorded up front.
@@ -554,12 +594,7 @@ pub fn start_with_meta(
 
     let (snapshot_text, _record_steps) = snapshot_of(&resolved.steps);
     let snapshot_sha256 = sha256_hex(snapshot_text.as_bytes());
-    let sop_version = loaded
-        .doc
-        .front
-        .str("version")
-        .flatten()
-        .unwrap_or("1");
+    let sop_version = loaded.doc.front.str("version").flatten().unwrap_or("1");
     let sop_commit = git::current_commit(repo.root()).unwrap_or_else(|| "unknown".to_owned());
 
     fs::create_dir_all(dir.join("logs")).map_err(|source| RunError::Io {
@@ -583,7 +618,7 @@ pub fn start_with_meta(
         case: meta.case.clone(),
         // Only carry a sensor block that has something in it; an all-blank entry is
         // noise in the log and would render an empty `sensor:` block in the record.
-sensor: meta.sensor.clone().filter(|sensor| !sensor.is_empty()),
+        sensor: meta.sensor.clone().filter(|sensor| !sensor.is_empty()),
         hardware: meta.hardware.clone(),
         conditions: meta.conditions.clone(),
         clock: meta.clock.clone().filter(|clock| !clock.is_empty()),
@@ -621,18 +656,18 @@ sensor: meta.sensor.clone().filter(|sensor| !sensor.is_empty()),
 ///
 /// The event is appended to `events.jsonl` (see [`append_event`]); the rendered
 /// `record.md` is a convenience, rebuilt from the log afterwards and never the truth.
-pub fn record(repo: &Repo, sop_id: &str, run_id: &str, event: &RunEvent) -> Result<LoadedRun, RunError> {
+pub fn record(
+    repo: &Repo,
+    sop_id: &str,
+    run_id: &str,
+    event: &RunEvent,
+) -> Result<LoadedRun, RunError> {
     record_events(repo, sop_id, run_id, std::slice::from_ref(event))
 }
 
 /// Drop a tagged field marker on the run: a timestamped, labelled moment for aligning a
 /// log to a physical feature (`item 3`).
-pub fn marker(
-    repo: &Repo,
-    sop_id: &str,
-    run_id: &str,
-    label: &str,
-) -> Result<LoadedRun, RunError> {
+pub fn marker(repo: &Repo, sop_id: &str, run_id: &str, label: &str) -> Result<LoadedRun, RunError> {
     let label = label.trim();
     if label.is_empty() {
         return Err(RunError::Core(sop_core::RunError::ReasonRequired("marker")));
@@ -671,7 +706,9 @@ fn record_events(
     // applied to a run that is still open, so only the former refreshes the committed
     // record - `end` writes that record with the seal itself.
     let was_ended = loaded.state.is_ended();
-    let pre_len = fs::metadata(&loaded.events_path).map(|meta| meta.len()).unwrap_or(0);
+    let pre_len = fs::metadata(&loaded.events_path)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
 
     for event in &stamped {
         append_event(&loaded.events_path, event)?;
@@ -700,7 +737,10 @@ fn refresh_committed_record(
         // A record already carrying a prefix seal keeps it verbatim.
         Some((Some(bytes), sha256)) => Seal { bytes, sha256 },
         // A legacy record sealed the whole file, whose length was `pre_len`.
-        Some((None, sha256)) => Seal { bytes: pre_len, sha256 },
+        Some((None, sha256)) => Seal {
+            bytes: pre_len,
+            sha256,
+        },
         // No seal at all: seal the log as it stood before this addition.
         None => Seal {
             bytes: pre_len,
@@ -789,8 +829,9 @@ pub fn attach_kind(
             .unwrap_or(&[]),
         None => loaded.state.run_attachments.as_slice(),
     };
-    if let Some(existing) =
-        held.iter().find(|attachment| attachment.sha256 == digest && attachment.kind == kind)
+    if let Some(existing) = held
+        .iter()
+        .find(|attachment| attachment.sha256 == digest && attachment.kind == kind)
     {
         return Ok(existing.clone());
     }
@@ -846,7 +887,10 @@ pub fn attach_kind(
     // reloaded state so the returned value agrees with what was written.
     let reloaded = record(repo, sop_id, run_id, &event)?;
     let found = match step {
-        Some(id) => reloaded.state.step(id).map(|state| state.attachments.as_slice()),
+        Some(id) => reloaded
+            .state
+            .step(id)
+            .map(|state| state.attachments.as_slice()),
         None => Some(reloaded.state.run_attachments.as_slice()),
     };
     found
@@ -890,17 +934,39 @@ fn same_bytes(path: &Path, bytes: &[u8]) -> bool {
 fn run_file_front(state: &RunState, run_id: &str, seal: Option<&Seal>) -> String {
     let mut out = String::from("---\nkind: run\n");
     out.push_str(&format!("run_id: {}\n", scalar(run_id)));
-    if let Some(value) = &state.sop { out.push_str(&format!("sop: {value}\n")); }
-    if let Some(value) = &state.sop_version { out.push_str(&format!("sop_version: {value}\n")); }
-    if let Some(value) = &state.sop_commit { out.push_str(&format!("sop_commit: {value}\n")); }
-    if let Some(value) = &state.operator { out.push_str(&format!("operator: {value}\n")); }
-    if let Some(value) = &state.site { out.push_str(&format!("site: {value}\n")); }
-    if let Some(value) = &state.plan { out.push_str(&format!("plan: {}\n", scalar(value))); }
-    if let Some(value) = &state.case { out.push_str(&format!("case: {}\n", scalar(value))); }
-    if let Some(value) = &state.started { out.push_str(&format!("started: {value}\n")); }
-    if let Some(value) = &state.ended { out.push_str(&format!("ended: {value}\n")); }
-    if let Some(value) = &state.run_status { out.push_str(&format!("status: {value}\n")); }
-    if let Some(value) = &state.conclusion { out.push_str(&format!("conclusion: {value}\n")); }
+    if let Some(value) = &state.sop {
+        out.push_str(&format!("sop: {value}\n"));
+    }
+    if let Some(value) = &state.sop_version {
+        out.push_str(&format!("sop_version: {value}\n"));
+    }
+    if let Some(value) = &state.sop_commit {
+        out.push_str(&format!("sop_commit: {value}\n"));
+    }
+    if let Some(value) = &state.operator {
+        out.push_str(&format!("operator: {value}\n"));
+    }
+    if let Some(value) = &state.site {
+        out.push_str(&format!("site: {value}\n"));
+    }
+    if let Some(value) = &state.plan {
+        out.push_str(&format!("plan: {}\n", scalar(value)));
+    }
+    if let Some(value) = &state.case {
+        out.push_str(&format!("case: {}\n", scalar(value)));
+    }
+    if let Some(value) = &state.started {
+        out.push_str(&format!("started: {value}\n"));
+    }
+    if let Some(value) = &state.ended {
+        out.push_str(&format!("ended: {value}\n"));
+    }
+    if let Some(value) = &state.run_status {
+        out.push_str(&format!("status: {value}\n"));
+    }
+    if let Some(value) = &state.conclusion {
+        out.push_str(&format!("conclusion: {value}\n"));
+    }
     if let Some(value) = &state.conclusion_note {
         out.push_str(&format!("conclusion_note: {}\n", scalar(value)));
     }
@@ -935,7 +1001,10 @@ fn run_file_front(state: &RunState, run_id: &str, seal: Option<&Seal>) -> String
     {
         out.push_str("clock:\n");
         out.push_str(&format!("  basis: {}\n", scalar(&clock.basis)));
-        out.push_str(&format!("  instrument_time: {}\n", scalar(&clock.instrument_time)));
+        out.push_str(&format!(
+            "  instrument_time: {}\n",
+            scalar(&clock.instrument_time)
+        ));
         out.push_str(&format!("  offset_secs: {}\n", clock.offset_secs));
     }
     if !state.markers.is_empty() {
@@ -962,6 +1031,12 @@ fn run_file_front(state: &RunState, run_id: &str, seal: Option<&Seal>) -> String
         out.push_str("logs:\n");
         for (step_id, attachment) in attachments {
             out.push_str(&format!("  - path: {}\n", scalar(&attachment.path)));
+            // A photo or any other file names its kind so a reader (and the validator)
+            // knows which subdirectory it belongs in without parsing the path. A log is
+            // the default, so its kind is left out and an old record reads unchanged.
+            if attachment.kind != AttachmentKind::Log {
+                out.push_str(&format!("    kind: {}\n", attachment.kind.as_str()));
+            }
             if !step_id.is_empty() {
                 out.push_str(&format!("    step: {}\n", scalar(step_id)));
             }
@@ -1042,7 +1117,9 @@ pub fn end(
     let loaded = record_events(repo, sop_id, run_id, &events)?;
     // The whole log as it stands now is the sealed prefix: everything the run was ended
     // with. Late additions will be appended beyond it.
-    let bytes = fs::metadata(&loaded.events_path).map(|meta| meta.len()).unwrap_or(0);
+    let bytes = fs::metadata(&loaded.events_path)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
     let seal = Seal {
         bytes,
         sha256: hash_first_n(&loaded.events_path, bytes).unwrap_or_default(),
@@ -1094,11 +1171,15 @@ fn seal_for_record(loaded: &LoadedRun) -> Option<Seal> {
     match read_seal_fields(&loaded.record_file) {
         Some((Some(bytes), sha256)) => Some(Seal { bytes, sha256 }),
         Some((None, sha256)) => {
-            let bytes = fs::metadata(&loaded.events_path).map(|meta| meta.len()).unwrap_or(0);
+            let bytes = fs::metadata(&loaded.events_path)
+                .map(|meta| meta.len())
+                .unwrap_or(0);
             Some(Seal { bytes, sha256 })
         }
         None => {
-            let bytes = fs::metadata(&loaded.events_path).map(|meta| meta.len()).unwrap_or(0);
+            let bytes = fs::metadata(&loaded.events_path)
+                .map(|meta| meta.len())
+                .unwrap_or(0);
             hash_first_n(&loaded.events_path, bytes).map(|sha256| Seal { bytes, sha256 })
         }
     }
@@ -1112,7 +1193,12 @@ fn seal_for_record(loaded: &LoadedRun) -> Option<Seal> {
 pub fn record_text(repo: &Repo, sop_id: &str, run_id: &str) -> Result<String, RunError> {
     let loaded = load(repo, sop_id, run_id)?;
     let seal = seal_for_record(&loaded);
-    Ok(run_record_text(&loaded.state, &loaded.steps, run_id, seal.as_ref()))
+    Ok(run_record_text(
+        &loaded.state,
+        &loaded.steps,
+        run_id,
+        seal.as_ref(),
+    ))
 }
 
 /// The experiment record for a run, from wherever it can still be read.
@@ -1242,6 +1328,41 @@ pub fn delete(repo: &Repo, sop_id: &str, run_id: &str) -> Result<Vec<PathBuf>, R
 /// A run's checklist id is the directory it is filed under, so this reads the tree rather
 /// than the records. `runs/_inbox/` is skipped: an inbox entry is an observation, not a
 /// run, and has no run directory.
+/// True when a directory holds run records directly (`.md` files with a run id), which is
+/// what a `runs/<sop_id>/` folder looks like in the flat layout.
+pub(crate) fn dir_has_run_records(dir: &Path) -> bool {
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries.flatten().any(|entry| {
+                entry.path().extension().is_some_and(|ext| ext == "md")
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Collect every `*.md` record file under `dir`, pushing `(sop_id, run_id)` pairs.
+fn collect_run_records(dir: &Path, sop: &str, out: &mut Vec<(String, String)>) {
+    let Ok(files) = fs::read_dir(dir) else {
+        return;
+    };
+    for file in files.flatten() {
+        let file = file.path();
+        if file.extension().is_none_or(|ext| ext != "md") {
+            continue;
+        }
+        let Some(run_id) = file.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        out.push((sop.to_owned(), run_id.to_owned()));
+    }
+}
+
+/// Every run record in the repository, as `(checklist id, run id)`.
+///
+/// A run's checklist id is the directory it is filed under, so this reads the tree rather
+/// than the records. Both layouts are read: the current `runs/<project>/<sop>/` nesting
+/// and the older flat `runs/<sop>/`. `runs/_inbox/` is skipped: an inbox entry is an
+/// observation, not a run, and has no run directory.
 pub fn all_runs(repo: &Repo) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let Ok(dirs) = fs::read_dir(repo.root().join("runs")) else {
@@ -1252,22 +1373,92 @@ pub fn all_runs(repo: &Repo) -> Vec<(String, String)> {
         if !dir.is_dir() {
             continue;
         }
-        let Some(sop) = dir.file_name().and_then(|name| name.to_str()) else { continue };
-        if sop == "_inbox" {
+        let Some(name) = dir.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name == "_inbox" {
             continue;
         }
-        let Ok(files) = fs::read_dir(&dir) else { continue };
-        for file in files.flatten() {
-            let file = file.path();
-            if file.extension().is_none_or(|ext| ext != "md") {
+        if dir_has_run_records(&dir) {
+            // Flat layout: this directory is a checklist.
+            collect_run_records(&dir, name, &mut out);
+        } else {
+            // Project layout: this directory is a project; its subdirs are checklists.
+            let Ok(subs) = fs::read_dir(&dir) else {
                 continue;
+            };
+            for sub in subs.flatten() {
+                let sub = sub.path();
+                if !sub.is_dir() {
+                    continue;
+                }
+                let Some(sop) = sub.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                if sop == "_inbox" {
+                    continue;
+                }
+                collect_run_records(&sub, sop, &mut out);
             }
-            let Some(run_id) = file.file_stem().and_then(|stem| stem.to_str()) else { continue };
-            out.push((sop.to_owned(), run_id.to_owned()));
         }
     }
     out.sort();
     out
+}
+
+/// Move any flat-layout `runs/<sop_id>/` folders under `runs/<project_id>/` now that the
+/// top level is the project. Called whenever the manifest is built, so an old copy is
+/// upgraded on the next open. Returns how many folders were moved.
+pub fn migrate_runs(repo: &Repo) -> usize {
+    let project = crate::project::id(repo);
+    if project.is_empty() {
+        return 0;
+    }
+    let root = repo.root().join("runs");
+    let target = root.join(&project);
+    let Ok(dirs) = fs::read_dir(&root) else {
+        return 0;
+    };
+    let mut moved = 0;
+    for dir in dirs.flatten() {
+        let dir = dir.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Some(name) = dir.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name == "_inbox" || name == project {
+            continue;
+        }
+        // Only move a folder that looks like a checklist in the flat layout, not a project
+        // folder that already nests its checklists.
+        if !dir_has_run_records(&dir) {
+            continue;
+        }
+        let dst = target.join(name);
+        if let Err(_) = fs::create_dir_all(&target) {
+            continue;
+        }
+        if dst.exists() {
+            // Merge: move the folder's contents into the existing target, then drop it.
+            if let Ok(entries) = fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let from = entry.path();
+                    let to = dst.join(from.file_name().unwrap_or_default());
+                    if to.exists() {
+                        let _ = fs::remove_dir_all(&to);
+                    }
+                    let _ = fs::rename(&from, &to);
+                }
+            }
+            let _ = fs::remove_dir_all(&dir);
+        } else {
+            let _ = fs::rename(&dir, &dst);
+        }
+        moved += 1;
+    }
+    moved
 }
 
 /// Remove every run: each record file, run directory, and log directory, in one pass.

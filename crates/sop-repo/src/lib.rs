@@ -2,6 +2,7 @@
 
 pub mod atomic;
 pub mod authoring;
+pub mod export;
 pub mod git;
 pub mod manifest;
 pub mod project;
@@ -88,7 +89,13 @@ pub struct Discovery {
 
 impl Repo {
     pub fn open(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        let repo = Self { root: root.into() };
+        // Upgrade a pre-project run layout (`runs/<sop_id>/`) to the project-nested one
+        // (`runs/<project_id>/<sop_id>/`) as soon as the repository is opened, so reads and
+        // writes both see the same shape. Idempotent; nothing to move on a repo already in
+        // the new layout, or on one with no project id.
+        crate::run::migrate_runs(&repo);
+        repo
     }
 
     pub fn root(&self) -> &Path {
@@ -162,7 +169,22 @@ impl Repo {
                 if path.file_name().is_some_and(|name| name == "_inbox") {
                     continue;
                 }
-                out.runs.extend(markdown_in(&path));
+                if crate::run::dir_has_run_records(&path) {
+                    // Flat layout: this directory is a checklist holding its run records.
+                    out.runs.extend(markdown_in(&path));
+                } else {
+                    // Project layout: this directory is the project; its subdirs hold the
+                    // run records for each checklist.
+                    if let Ok(subs) = fs::read_dir(&path) {
+                        for sub in subs.flatten() {
+                            let sub = sub.path();
+                            if !sub.is_dir() {
+                                continue;
+                            }
+                            out.runs.extend(markdown_in(&sub));
+                        }
+                    }
+                }
             }
         }
         out.runs.sort();
@@ -377,7 +399,7 @@ impl Repo {
         let path = self
             .root
             .join("runs")
-            .join(sop_id)
+            .join(crate::run::run_subdir(self, sop_id))
             .join(run_id)
             .join("snapshot.md");
         let text = self.read_text(&path).ok()?;
@@ -394,11 +416,15 @@ impl Repo {
     ///
     /// The validator uses this to check a `complete` run actually collected each declared
     /// output as an attachment; a checklist edit after the run must not change the answer.
-    pub fn run_snapshot_step_outputs(&self, sop_id: &str, run_id: &str) -> Option<Vec<(String, Vec<String>)>> {
+    pub fn run_snapshot_step_outputs(
+        &self,
+        sop_id: &str,
+        run_id: &str,
+    ) -> Option<Vec<(String, Vec<String>)>> {
         let path = self
             .root
             .join("runs")
-            .join(sop_id)
+            .join(crate::run::run_subdir(self, sop_id))
             .join(run_id)
             .join("snapshot.md");
         let text = self.read_text(&path).ok()?;

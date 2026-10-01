@@ -13,11 +13,13 @@ app are all first-class users.
 `docs/DESIGN.md`.
 
 What works today: `sop validate`, `sop index`, `sop preview`, `sop status`,
-`sop project`, `sop remote`, `sop settings`, and `sop run start|record|recover|attach|end`
-(plus `sop run deviations`, `sop run export`, and `sop run delete`). The desktop app
-(`field-sop`) renders Run / History / Browse / Edit / Project / Settings views, exports a
-run's record, and publishes the working copy with a push, and is packaged as a `.deb` and
-AppImage on tag (`.github/workflows/validate.yml`).
+`sop project`, `sop remote`, `sop settings`, `sop export`, and
+`sop run start|record|recover|attach|end` (plus `sop run deviations`, `sop run export`,
+and `sop run delete`). The desktop app (`field-sop`) renders Run / History / Browse /
+Edit / Project / Settings views, attaches logs/photos/files to a run (during or after
+it), exports a run's record, packages a summary with every run into one folder, and
+publishes the working copy with a push, and is packaged as a `.deb` and AppImage on tag
+(`.github/workflows/validate.yml`).
 
 ## Why this exists
 
@@ -148,6 +150,7 @@ when it is left out, and the current directory after that.
 | `sop validate [files...]` | Check the content against `SPEC.md`. Non-zero exit on any error. |
 | `sop index` | Rebuild `dist/manifest.json`, the one file the field app loads. |
 | `sop preview --port 8731` | Look at the layout, the steps, and the help panel in a browser. |
+| `sop export --out DIR [--label L]` | Package a summary and every run into `DIR/export_<label>/`. |
 | `sop project` | Show the project's identity and the fields that can be set. |
 | `sop project set title "..."` | Rewrite one field of `project.md`, checking first. |
 | `sop status` | Working copy, project, git state, and what content is present. |
@@ -156,7 +159,7 @@ when it is left out, and the current directory after that.
 | `sop run start <sop> <id> <op> <site> [--override REASON]` | Start a run: freeze a snapshot, open the event log. |
 | `sop run record <sop> <id> <event...>` | Append one event (capture / checkbox / done / skip / deviate / note). |
 | `sop run recover <sop> <id>` | Replay the event log to the run's latest state. |
-| `sop run attach <sop> <id> <file>` | Copy a log in, hashed, and record an attachment event. |
+| `sop run attach <sop> <id> <file> [--kind log\|photo\|file]` | Copy a file in, hashed, and record an attachment event. The kind picks `logs/`, `photos/`, or `attachments/`. |
 | `sop run end <sop> <id> <status>` | End the run and write the record file. |
 | `sop run deviations <sop>` | Roll up every deviation across the checklist's runs. |
 | `sop run export <sop> --format csv` | Export run captures as CSV for the processing pipelines. |
@@ -169,17 +172,39 @@ own `equipment:` front matter arrives ticked, and a serial typed by hand joins t
 The run id is built from the date, model and serial (`2026-09-28-uas-mag-1001`) and can
 still be changed by hand.
 
+The `devices` setting is for everything that is not the instrument - GNSS receiver, base
+station, drone, battery, ground station, radio. It holds the same shape,
+`kind/name: serial, serial; kind/name`, and the start form adds a ticked group for each
+device, written into the record's `hardware` list as `kind: name serial`. `devices` and
+`sensors` coexist: `sensors` still decides the run id, the sensor filter, and the record's
+`sensor` block; `devices` only adds to `hardware`.
+
 The app's History screen groups runs under the test plan and case they were started
 from, with anything that does not match a case kept under "Runs outside a test plan".
-Each row has **Export record**, which writes that run's record to
-`exports/<sop_id>-<run_id>.md` (ignored by `git`; the record itself is committed under
-`runs/`), and **Delete**, which removes that run's record, run directory, and attached
-data after asking. The toolbar has **Export summary** (one markdown document: a coverage
-row for every test case, run or not, then one row per run), **Push repo** (`git add -A`,
-commit with the message you give it, push to the configured remote), and **Delete all
-runs** (the whole history in this working copy; `runs/_inbox/` is left alone). Deletion
-cannot be undone. The app holds no credential and runs `git` with
-`GIT_TERMINAL_PROMPT=0`. See `docs/DECISIONS.md` D17.
+Every table shares one column layout (`run id / started / site / sensor / operator /
+outcome / conclusion / dev / files / ▸`), so the cases line up, and the `files` column
+shows the log / photo / file counts with a hint when an ended run has no logs yet.
+
+Each row opens a detail drawer. There the operator can **Add log…**, **Add photos…**, or
+**Add files…** (each multi-select; a file over 50 MB asks first), **Add note…**, see the
+run's files and notes with their size, time, and an `after run` tag, **Open folder** (the
+run's own directory, in the desktop file manager), **Export record**, and **Delete** (that
+one run, after asking). Attaching works whether the run is live or already ended; what was
+added after the end is listed separately in the record, and the seal over the field record
+does not move (`SPEC.md` section 8, `docs/DECISIONS.md` D29).
+
+**Export summary** packages a report and every run into one self-contained folder,
+`<destination>/export_<local time>/`: `summary.md`, `summary.csv`, each run's record and
+whole run directory, and a `MANIFEST.sha256`. The folder picker starts in `exports/`
+(ignored by `git`) and the result is reported as runs / files / size, with a link to open
+the folder. The markdown and CSV tables carry the same columns as History. A failed export
+leaves nothing behind, and a folder that already exists gets a `-2` suffix
+(`docs/DECISIONS.md` D30).
+
+The toolbar also has **Push repo** (`git add -A`, commit with the message you give it,
+push to the configured remote) and **Delete all runs** (the whole history in this working
+copy; `runs/_inbox/` is left alone). Deletion cannot be undone. The app holds no
+credential and runs `git` with `GIT_TERMINAL_PROMPT=0`. See `docs/DECISIONS.md` D17.
 
 ```bash
 ./target/release/sop index

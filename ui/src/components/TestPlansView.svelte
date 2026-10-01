@@ -4,6 +4,7 @@
   import { text } from "../lib/api";
   import { localDay } from "../lib/dates";
   import type { Manifest, RunEntry, TestPlan, TestCase } from "../lib/types";
+  import DoubleConfirm from "./DoubleConfirm.svelte";
 
   let {
     manifest,
@@ -21,6 +22,9 @@
   let message = $state("");
   let isError = $state(false);
   let plans: TestPlan[] = $state([]);
+  let confirmOpen = $state(false);
+  let confirmMessage = $state("");
+  let confirmCase: TestCase | null = $state(null);
 
   const say = (msg: string, bad = false): void => {
     message = msg;
@@ -125,8 +129,15 @@
     }
   };
 
-  const remove = async (c: TestCase): Promise<void> => {
-    if (!confirm(`Delete test case "${text(c.title) || c.id}"?`)) return;
+  const askRemove = (c: TestCase): void => {
+    confirmCase = c;
+    confirmMessage = `Delete test case "${text(c.title) || c.id}"?`;
+    confirmOpen = true;
+  };
+
+  const remove = async (): Promise<void> => {
+    if (!confirmCase) return;
+    const c = confirmCase;
     try {
       await api.deleteTestCase(c.path);
       await synced(`delete case ${c.id}`);
@@ -232,7 +243,7 @@
                     <td class="actions">
                       <button class="primary" onclick={() => start(c)}>Start</button>
                       <button onclick={() => void duplicate(c)} title="Duplicate case">Duplicate</button>
-                      <button onclick={() => void remove(c)} title="Delete case">Delete</button>
+                      <button onclick={() => askRemove(c)} title="Delete case">Delete</button>
                     </td>
                   </tr>
                 {/each}
@@ -243,6 +254,13 @@
       </section>
     </div>
   {/if}
+
+  <DoubleConfirm
+    open={confirmOpen}
+    message={confirmMessage}
+    onConfirm={() => { confirmOpen = false; void remove(); }}
+    onCancel={() => (confirmOpen = false)}
+  />
 </article>
 
 <style>

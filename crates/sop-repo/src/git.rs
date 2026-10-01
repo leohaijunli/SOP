@@ -50,7 +50,10 @@ pub enum GitError {
         command: String,
         seconds: u64,
     },
-    CommandFailed { command: String, message: String },
+    CommandFailed {
+        command: String,
+        message: String,
+    },
 }
 
 impl std::fmt::Display for GitError {
@@ -213,17 +216,15 @@ pub struct PushReport {
 /// The commit is the operator's: their name and email, their message. Credentials are
 /// the operator's too, and `GIT_TERMINAL_PROMPT=0` makes sure a missing one is an error
 /// the window can show rather than a prompt nobody can answer.
-pub fn commit_and_push(
-    root: &Path,
-    remote: &str,
-    message: &str,
-) -> Result<PushReport, GitError> {
+pub fn commit_and_push(root: &Path, remote: &str, message: &str) -> Result<PushReport, GitError> {
     if !state(root, remote).is_repository {
         return Err(GitError::NotARepository(root.display().to_string()));
     }
 
     let mut report = PushReport {
-        branch: run(root, &["symbolic-ref", "--short", "HEAD"]).ok().flatten(),
+        branch: run(root, &["symbolic-ref", "--short", "HEAD"])
+            .ok()
+            .flatten(),
         remote: remote.to_owned(),
         changed: 0,
         commit: None,
@@ -232,7 +233,10 @@ pub fn commit_and_push(
     };
 
     let status = run_capture(root, &["status", "--porcelain"])?;
-    let changed: Vec<&str> = status.lines().filter(|line| !line.trim().is_empty()).collect();
+    let changed: Vec<&str> = status
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
     report.changed = changed.len();
 
     if changed.is_empty() {
@@ -298,7 +302,8 @@ fn run_capture(root: &Path, args: &[&str]) -> Result<String, GitError> {
         .arg(root)
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0");
-    let (status, stdout, stderr) = output_with_timeout(&mut command, NETWORK_TIMEOUT, &label(root, args))?;
+    let (status, stdout, stderr) =
+        output_with_timeout(&mut command, NETWORK_TIMEOUT, &label(root, args))?;
 
     let mut text = String::from_utf8_lossy(&stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&stderr));
@@ -313,9 +318,15 @@ fn run_capture(root: &Path, args: &[&str]) -> Result<String, GitError> {
 
 /// The short commit at `HEAD`, when the working copy is a git repository.
 pub fn current_commit(root: &Path) -> Option<String> {
-    let commit = run(root, &["rev-parse", "--short", "HEAD"]).ok().flatten()?;
+    let commit = run(root, &["rev-parse", "--short", "HEAD"])
+        .ok()
+        .flatten()?;
     let commit = commit.trim();
-    if commit.is_empty() { None } else { Some(commit.to_owned()) }
+    if commit.is_empty() {
+        None
+    } else {
+        Some(commit.to_owned())
+    }
 }
 
 /// True when the URL embeds a username or a token.
@@ -378,7 +389,8 @@ mod tests {
     fn a_quick_command_returns_its_output() {
         let mut command = Command::new("git");
         command.args(["--version"]);
-        let (status, stdout, _) = output_with_timeout(&mut command, LOCAL_TIMEOUT, "git --version").unwrap();
+        let (status, stdout, _) =
+            output_with_timeout(&mut command, LOCAL_TIMEOUT, "git --version").unwrap();
         assert!(status.success());
         assert!(String::from_utf8_lossy(&stdout).contains("git version"));
     }
@@ -389,7 +401,8 @@ mod tests {
         let mut command = Command::new("sleep");
         command.arg("30");
         let started = Instant::now();
-        let error = output_with_timeout(&mut command, Duration::from_millis(150), "sleep 30").unwrap_err();
+        let error =
+            output_with_timeout(&mut command, Duration::from_millis(150), "sleep 30").unwrap_err();
         assert!(matches!(error, GitError::TimedOut { .. }), "{error}");
         assert!(
             started.elapsed() < Duration::from_secs(5),

@@ -1,6 +1,6 @@
 ---
 kind: project
-project_id: replace-me
+project_id: condor
 title: Replace Me
 institution: Replace Me
 lead: replace-me

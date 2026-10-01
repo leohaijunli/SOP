@@ -220,9 +220,16 @@ pub fn run_front_matter(doc: &Document) -> Diagnostics {
                 ),
                 Some(1),
             ),
-            None => out.error("'conclusion' is required alongside 'conclusion_note'", Some(1)),
+            None => out.error(
+                "'conclusion' is required alongside 'conclusion_note'",
+                Some(1),
+            ),
         }
-        if front.get("conclusion_note").and_then(|value| value.as_str()).is_none_or(str::is_empty) {
+        if front
+            .get("conclusion_note")
+            .and_then(|value| value.as_str())
+            .is_none_or(str::is_empty)
+        {
             out.error("'conclusion_note' must be a one-sentence summary", Some(1));
         }
     }
@@ -960,7 +967,10 @@ pub fn missing_step_opened(doc: &Document) -> Diagnostics {
     let mut out = Diagnostics::new();
     for result in &doc.results {
         if result.opened_at.is_none()
-            && matches!(result.status.as_deref(), Some("done" | "skipped" | "deviated"))
+            && matches!(
+                result.status.as_deref(),
+                Some("done" | "skipped" | "deviated")
+            )
         {
             out.warning(
                 format!(
@@ -980,7 +990,8 @@ pub fn missing_step_opened(doc: &Document) -> Diagnostics {
 pub fn time_regression(doc: &Document) -> Diagnostics {
     let mut out = Diagnostics::new();
     for result in &doc.results {
-        let (Some(opened), Some(ended)) = (result.opened_at.as_deref(), result.ended_at.as_deref()) else {
+        let (Some(opened), Some(ended)) = (result.opened_at.as_deref(), result.ended_at.as_deref())
+        else {
             continue;
         };
         match (
@@ -1004,19 +1015,35 @@ pub fn time_regression(doc: &Document) -> Diagnostics {
 /// it was attached to. A file from the wrong day is the usual cause.
 pub fn log_overlap(doc: &Document) -> Diagnostics {
     let mut out = Diagnostics::new();
-    let run_start = doc.front.str("started").flatten().and_then(crate::timestamp::epoch_seconds);
-    let run_end = doc.front.str("ended").flatten().and_then(crate::timestamp::epoch_seconds);
+    let run_start = doc
+        .front
+        .str("started")
+        .flatten()
+        .and_then(crate::timestamp::epoch_seconds);
+    let run_end = doc
+        .front
+        .str("ended")
+        .flatten()
+        .and_then(crate::timestamp::epoch_seconds);
     let logs: Vec<&serde_norway::Value> = match doc.front.get("logs") {
         Some(serde_norway::Value::Sequence(items)) => items.iter().collect(),
         Some(other) => vec![other],
         None => Vec::new(),
     };
     for entry in logs {
-        let Some(map) = entry.as_mapping() else { continue };
+        let Some(map) = entry.as_mapping() else {
+            continue;
+        };
         let (Some(t_min), Some(t_max)) = (
-            map.get("t_min").and_then(|v| v.as_str()).and_then(crate::timestamp::epoch_seconds),
-            map.get("t_max").and_then(|v| v.as_str()).and_then(crate::timestamp::epoch_seconds),
-        ) else { continue };
+            map.get("t_min")
+                .and_then(|v| v.as_str())
+                .and_then(crate::timestamp::epoch_seconds),
+            map.get("t_max")
+                .and_then(|v| v.as_str())
+                .and_then(crate::timestamp::epoch_seconds),
+        ) else {
+            continue;
+        };
         let name = map.get("path").and_then(|v| v.as_str()).unwrap_or("<log>");
         // The window to overlap: the step it was attached to, else the run itself.
         let window = map
@@ -1039,7 +1066,10 @@ pub fn log_overlap(doc: &Document) -> Diagnostics {
 
 /// A step's window as the record states it, by step id.
 fn step_window(doc: &Document, step: &str) -> Option<(i64, i64)> {
-    let result = doc.results.iter().find(|r| r.step.as_deref() == Some(step))?;
+    let result = doc
+        .results
+        .iter()
+        .find(|r| r.step.as_deref() == Some(step))?;
     let opened = crate::timestamp::epoch_seconds(result.opened_at.as_deref()?)?;
     let ended = crate::timestamp::epoch_seconds(result.ended_at.as_deref()?)?;
     Some((opened, ended))
@@ -1143,7 +1173,11 @@ mod tests {
         let document = doc(record);
         let outputs = vec![("s1".to_owned(), vec!["mag_raw.csv".to_owned()])];
         let diags = declared_outputs_present(&document, &outputs);
-        assert_eq!(diags.error_count(), 0, "a missing declared output is pending, not an error");
+        assert_eq!(
+            diags.error_count(),
+            0,
+            "a missing declared output is pending, not an error"
+        );
         assert_eq!(diags.warning_count(), 1);
     }
 

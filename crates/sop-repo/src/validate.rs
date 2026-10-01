@@ -4,6 +4,7 @@
 //! rules themselves live in `sop_core::check` where they only need one document.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use sop_core::{Diagnostic, Document, Value, check};
@@ -374,15 +375,19 @@ fn check_run(
     // run that used it, and the editor would refuse to make the edit at all.
     let snapshot_steps = sop.and_then(|name| repo.run_snapshot_step_ids(name, &stem));
 
-    let expected_place = format!("runs/{}", sop.unwrap_or("None"));
+    let sop_name = sop.unwrap_or("None");
+    let expected_place = format!("runs/{}", crate::run::run_subdir(repo, sop_name));
+    // Both the flat `runs/<sop>/` and the project-nested `runs/<project>/<sop>/` are valid
+    // homes for a record; migration moves folders, it does not forbid the old shape.
+    let flat_place = format!("runs/{sop_name}");
     let actual_place = loaded
         .relpath
         .rsplit_once('/')
         .map_or(String::new(), |(directory, _)| directory.to_owned());
-    if actual_place != expected_place {
+    if actual_place != expected_place && actual_place != flat_place {
         report.error(
             path,
-            format!("run record must live in {expected_place}/"),
+            format!("run record must live in {expected_place}/ or {flat_place}/"),
             None,
         );
     }
@@ -621,6 +626,50 @@ fn check_log_directories(repo: &Repo, records: &BTreeMap<String, PathBuf>, repor
     }
 }
 
+/// Resolve a reference to a run record like `runs/<sop_id>/<run_id>.md` to the actual file.
+///
+/// The record may live at the flat `runs/<sop_id>/` path or, since the top level became
+/// the project, at `runs/<project_id>/<sop_id>/`. The reference is resolved by its run id
+/// across the runs tree, so it holds regardless of which layout the file sits in.
+fn resolve_run_path(repo: &Repo, reference: &str) -> Option<PathBuf> {
+    let path = Path::new(reference);
+    if path.is_absolute() {
+        return path.exists().then(|| path.to_path_buf());
+    }
+    let target = repo.root().join(reference);
+    if target.exists() {
+        return Some(target);
+    }
+    // The flat path is gone (the file was moved under a project folder): find the run
+    // record by its filename stem anywhere under runs/ (skipping _inbox).
+    let name = path.file_name()?.to_string_lossy();
+    let runs_dir = repo.root().join("runs");
+    let entries = fs::read_dir(&runs_dir).ok()?;
+    for entry in entries.flatten() {
+        let first = entry.path();
+        if !first.is_dir() {
+            continue;
+        }
+        let dirs: Vec<PathBuf> = if crate::run::dir_has_run_records(&first) {
+            vec![first]
+        } else {
+            fs::read_dir(&first)
+                .ok()?
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n != "_inbox"))
+                .collect()
+        };
+        for dir in dirs {
+            let hit = dir.join(&*name);
+            if hit.is_file() {
+                return Some(hit);
+            }
+        }
+    }
+    None
+}
+
 fn check_inbox(repo: &Repo, loaded: &Loaded, report: &mut Report) {
     let path = loaded.path.as_path();
     let doc = &loaded.doc;
@@ -645,7 +694,7 @@ fn check_inbox(repo: &Repo, loaded: &Loaded, report: &mut Report) {
 
     for key in ["observed_in", "target"] {
         if let Some(value) = doc.front.str(key).flatten()
-            && !repo.resolve(value).exists()
+            && resolve_run_path(repo, value).is_none()
         {
             report.error(path, format!("'{key}' does not exist: {value}"), Some(1));
         }

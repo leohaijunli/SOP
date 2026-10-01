@@ -17,8 +17,8 @@ use common::Scratch;
 const PROC: &str = "procedures/power-on.md";
 const CAL_SOP: &str = "checklists/mag-sensor-calibration.md";
 const WALK_SOP: &str = "checklists/ground-walk-survey.md";
-const CAL_RUN: &str = "runs/mag-sensor-calibration/2026-09-22-bench-cal01.md";
-const WALK_RUN: &str = "runs/ground-walk-survey/2026-09-24-renfrew-walk01.md";
+const CAL_RUN: &str = "runs/uvic-geomag-survey/mag-sensor-calibration/2026-09-22-bench-cal01.md";
+const WALK_RUN: &str = "runs/uvic-geomag-survey/ground-walk-survey/2026-09-24-renfrew-walk01.md";
 const TESTLINE: &str = "procedures/test-line.md";
 const HELP: &str = "help/px4-operations.md";
 const HELP_2: &str = "help/ubuntu-operations.md";
@@ -54,7 +54,7 @@ fn freeze_run_snapshot(root: &Scratch, record: &str) {
             "## {id}\n\n```yaml step\nid: {id}\nkind: check\nseverity: normal\n```\n\n"
         ));
     }
-    let dir = root.path(&format!("runs/{sop}/{run}"));
+    let dir = root.path(&format!("runs/uvic-geomag-survey/{sop}/{run}"));
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("snapshot.md"), text).unwrap();
 }
@@ -318,6 +318,9 @@ fn every_negative_case_fails_for_the_right_reason() {
     let mut failures = Vec::new();
     for (name, mutate, expected) in cases() {
         let scratch = Scratch::new(name);
+        // Opening the repo upgrades a flat `runs/<sop>/` layout to the project-nested one,
+        // which is where the fixture paths below expect the records to be.
+        scratch.repo();
         mutate(&scratch);
         let (failed, report) = scratch.validate();
         if !failed {
