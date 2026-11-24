@@ -216,9 +216,12 @@ fn cases() -> Vec<Case> {
             "attached log does not exist",
         ),
         (
-            "orphan log directory",
-            |root| fs::create_dir_all(root.path("logs/2026-09-30-nowhere-walk01")).unwrap(),
-            "has no matching run record",
+            "invalid loose-log metadata",
+            |root| {
+                fs::create_dir_all(root.path(".field-sop")).unwrap();
+                fs::write(root.path(".field-sop/log-remarks.json"), "not json").unwrap();
+            },
+            "log remarks are not valid JSON",
         ),
         (
             "unresolved relative link",

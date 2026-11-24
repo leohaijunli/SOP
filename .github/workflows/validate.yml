@@ -58,11 +58,18 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Build the renderer
         run: |
-          cd ui && npm ci && npm run build
+          cd ui
+          npm ci
+          npm run check
+          npm run test:devices
+          npm run test:records
+          npm run test:api
+          npm run test:language
+          npm run build
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked

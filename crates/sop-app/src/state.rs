@@ -1,4 +1,4 @@
-//! Which working copy this window is looking at.
+//! The explicitly selected directory holding the user's logs, plans, and records.
 //!
 //! The window holds one working copy at a time. Opening another one is a setting the
 //! app remembers, so the next launch lands where the last session was: a field laptop
@@ -13,39 +13,85 @@ use sop_repo::{Repo, settings};
 
 pub struct AppState {
     settings_path: PathBuf,
-    root: Mutex<PathBuf>,
+    root: Mutex<Option<PathBuf>>,
     last_export: Mutex<Option<PathBuf>>,
+    log_metadata: Mutex<()>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkingDirectory {
+    pub path: Option<String>,
+    pub configured_path: Option<String>,
+    pub recent: Vec<String>,
 }
 
 impl AppState {
     pub fn load() -> Result<Self, String> {
-        let settings_path = settings::default_path();
+        let state = Self::from_settings(settings::default_path())?;
+        // A launcher flag is also an explicit choice, never a current-dir fallback.
+        if let Ok(path) = std::env::var("FIELD_SOP_WORKDIR") {
+            state.open(&path)?;
+        }
+        Ok(state)
+    }
+
+    fn from_settings(settings_path: PathBuf) -> Result<Self, String> {
         let settings = settings::load(&settings_path).map_err(|error| error.to_string())?;
-        let root = match settings.repository.as_deref() {
-            Some(configured) => resolve(configured)?,
-            None => std::env::current_dir().map_err(|error| error.to_string())?,
-        };
+        // Never use the program's launch directory as a data directory. An unavailable
+        // remembered folder returns to the picker rather than recording somewhere else.
+        let root = settings
+            .repository
+            .as_deref()
+            .and_then(|configured| resolve(configured).ok());
         Ok(Self {
             settings_path,
             root: Mutex::new(root),
             last_export: Mutex::new(None),
+            log_metadata: Mutex::new(()),
         })
     }
 
     pub fn root(&self) -> Result<PathBuf, String> {
         self.root
             .lock()
-            .map(|root| root.clone())
-            .map_err(|_| "the working copy is locked by another operation".to_owned())
+            .map_err(|_| "the working directory is locked by another operation".to_owned())?
+            .clone()
+            .ok_or_else(|| {
+                "Choose a working directory containing your logs and test plans first".to_owned()
+            })
+    }
+
+    pub fn working_directory(&self) -> Result<WorkingDirectory, String> {
+        let settings = settings::load(&self.settings_path).map_err(|error| error.to_string())?;
+        let root = self
+            .root
+            .lock()
+            .map_err(|_| "the working directory is locked".to_owned())?;
+        Ok(WorkingDirectory {
+            path: root.as_ref().map(|path| path.display().to_string()),
+            configured_path: settings.repository,
+            recent: settings.recent_repositories,
+        })
+    }
+
+    pub fn annotate_log(&self, path: &str, remark: &str, tags: &[String]) -> Result<(), String> {
+        let _guard = self
+            .log_metadata
+            .lock()
+            .map_err(|_| "log metadata is locked".to_owned())?;
+        sop_repo::workspace::annotate_log(&self.repo()?, path, remark, tags)
+            .map_err(|error| error.to_string())
     }
 
     pub fn repo(&self) -> Result<Repo, String> {
-        Ok(Repo::open(self.root()?))
+        Ok(Repo::open_data_directory(self.root()?))
     }
 
     /// Remember the folder a summary export just wrote, so the window can open it and
     /// nothing else: only this path is ever opened for an export result.
     pub fn set_last_export(&self, path: PathBuf) -> Result<(), String> {
+        let path = path.canonicalize().unwrap_or(path);
         let mut last = self
             .last_export
             .lock()
@@ -63,11 +109,7 @@ impl AppState {
         Ok(last.as_deref() == Some(path))
     }
 
-    /// The git repository root that holds the `testplan/` tree.
-    ///
-    /// A single repository is used for everything now: the working copy also holds the
-    /// `testplan/` tree, so sync, the plans, and the record pushes all act on the same
-    /// remote. A separately-configured `testcase-repo` is ignored.
+    /// Plans are local files in the same data directory as the logs and notes.
     pub fn testcase_repo_root(&self) -> Result<PathBuf, String> {
         self.root()
     }
@@ -90,7 +132,9 @@ impl AppState {
     pub fn settings(&self) -> Result<Settings, String> {
         let mut settings =
             settings::load(&self.settings_path).map_err(|error| error.to_string())?;
-        settings::apply_repo(&self.root()?, &mut settings).map_err(|error| error.to_string())?;
+        if let Ok(root) = self.root() {
+            settings::apply_repo(&root, &mut settings).map_err(|error| error.to_string())?;
+        }
         Ok(settings)
     }
 
@@ -137,14 +181,10 @@ impl AppState {
     /// Open another working copy, and remember it for next time.
     pub fn open(&self, path: &str) -> Result<PathBuf, String> {
         let root = resolve(path)?;
-        if !looks_like_repository(&root) {
-            return Err(format!(
-                "{} does not look like a field-sop repository: no project.md, \
-                 procedures/, or checklists/ in it",
-                root.display()
-            ));
-        }
-        let mut settings = self.settings()?;
+        // Existing plain directories (including empty ones) are valid. Records create
+        // their own subdirectories lazily; opening a folder never initializes git.
+        let mut settings =
+            settings::load(&self.settings_path).map_err(|error| error.to_string())?;
         settings.repository = Some(root.display().to_string());
         settings.remember(&root.display().to_string());
         self.save(&settings)?;
@@ -152,7 +192,11 @@ impl AppState {
             .root
             .lock()
             .map_err(|_| "the working copy is locked by another operation".to_owned())?;
-        *current = root.clone();
+        *current = Some(root.clone());
+        *self
+            .last_export
+            .lock()
+            .map_err(|_| "the export path is locked".to_owned())? = None;
         Ok(root)
     }
 }
@@ -163,8 +207,11 @@ fn resolve(path: &str) -> Result<PathBuf, String> {
     if path.is_empty() {
         return Err("the path is empty".to_owned());
     }
-    let expanded = if let Some(rest) = path.strip_prefix("~/") {
-        let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_owned())?;
+    let expanded = if let Some(rest) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\"))
+    {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .map_err(|_| "the home directory is not set".to_owned())?;
         PathBuf::from(home).join(rest)
     } else {
         PathBuf::from(path)
@@ -182,14 +229,64 @@ fn resolve(path: &str) -> Result<PathBuf, String> {
     Ok(absolute.canonicalize().unwrap_or(absolute))
 }
 
-/// The content the app needs to find before it will record anything.
-///
-/// Checklists and procedures are no longer required: the app loads them from local
-/// markdown files via "Open file". A working copy just needs to be a writable directory
-/// that can hold the run records and logs the app writes.
-fn looks_like_repository(root: &Path) -> bool {
-    root.join(sop_core::vocab::PROJECT_FILE).is_file()
-        || root.join("runs").is_dir()
-        || root.join("logs").is_dir()
-        || root.join("help").is_dir()
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Scratch(PathBuf);
+    impl Scratch {
+        fn new() -> Self {
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "sop-directory-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_first_launch_requires_an_explicit_data_directory() {
+        let scratch = Scratch::new();
+        let state = AppState::from_settings(scratch.0.join("settings.json")).unwrap();
+        assert!(state.root().is_err());
+        assert!(state.working_directory().unwrap().path.is_none());
+    }
+
+    #[test]
+    fn an_empty_non_git_directory_can_be_selected_and_is_remembered() {
+        let scratch = Scratch::new();
+        let path = scratch.0.join("data");
+        std::fs::create_dir(&path).unwrap();
+        let settings = scratch.0.join("settings.json");
+        let state = AppState::from_settings(settings.clone()).unwrap();
+        let opened = state.open(path.to_str().unwrap()).unwrap();
+        assert_eq!(state.root().unwrap(), opened);
+        assert!(!path.join(".git").exists());
+        let restored = AppState::from_settings(settings).unwrap();
+        assert_eq!(restored.root().unwrap(), opened);
+    }
+
+    #[test]
+    fn an_unavailable_saved_directory_does_not_fall_back_to_the_code_directory() {
+        let scratch = Scratch::new();
+        let path = scratch.0.join("missing");
+        let settings_path = scratch.0.join("settings.json");
+        let settings = Settings {
+            repository: Some(path.display().to_string()),
+            ..Settings::default()
+        };
+        settings::save(&settings_path, &settings).unwrap();
+        let state = AppState::from_settings(settings_path).unwrap();
+        assert!(state.root().is_err());
+        assert!(state.working_directory().unwrap().configured_path.is_some());
+    }
 }

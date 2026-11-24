@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import * as api from "../lib/api";
   import { text } from "../lib/api";
   import { localDay } from "../lib/dates";
@@ -15,24 +15,27 @@
     manifest: Manifest | null;
     onStartCase: (plan: TestPlan, c: TestCase) => void;
     onStartPlan: (plan: TestPlan) => void;
-    onChanged: () => void;
+    onChanged: () => Promise<void>;
   } = $props();
 
   let planIndex = $state(0);
   let message = $state("");
   let isError = $state(false);
-  let plans: TestPlan[] = $state([]);
+  let plans: TestPlan[] = $state(untrack(() => manifest?.testplans ?? []));
   let confirmOpen = $state(false);
   let confirmMessage = $state("");
   let confirmCase: TestCase | null = $state(null);
+  let creatingPlan = $state(false);
+  let planTitle = $state("");
+  let busy = $state(false);
+  let query = $state("");
 
   const say = (msg: string, bad = false): void => {
     message = msg;
     isError = bad;
   };
 
-  // The plans come from the testcase repository (the `testcases` branch), not the
-  // working copy, so they are fetched fresh each time the view opens or a change lands.
+  // Plans are local Markdown files in the selected working directory's testplan/ tree.
   const reload = async (): Promise<void> => {
     try {
       plans = await api.testPlans();
@@ -51,69 +54,22 @@
       .filter((r) => text(r.sop) === sopId)
       .sort((a, b) => text(b.started).localeCompare(text(a.started)));
 
-  const lastRun = (sopId: string): RunEntry | null => runsFor(sopId)[0] ?? null;
-
-  // The sensor serial a run was recorded with, or a placeholder when it was not recorded.
-  // The coverage matrix is case x sensor, so a run without a sensor still needs a column
-  // to live in ("none"): it is a real part of the record, not a gap in the grid.
-  const sensorKey = (r: RunEntry): string => {
-    const serial = r.sensor?.serial;
-    if (serial !== undefined && serial !== null && String(serial).trim() !== "") return String(serial);
-    const model = r.sensor?.model;
-    if (model !== undefined && model !== null && String(model).trim() !== "") return String(model);
-    return "none";
-  };
-
-  // The distinct sensor columns, in the order the runs first appear across the plan's
-  // cases. A stable order keeps the grid from jumping as a new run is added.
-  const sensorColumns: string[] = $derived(
-    (() => {
-      if (!plan) return [];
-      const seen: string[] = [];
-      for (const c of plan.cases) {
-        for (const r of runsFor(c.sop_id)) {
-          const key = sensorKey(r);
-          if (!seen.includes(key)) seen.push(key);
-        }
-      }
-      return seen;
-    })()
-  );
-
-  // The latest run of one case on one sensor, or null. This is the "latest conclusion"
-  // the matrix cell shows - the most recent judgement, not the whole history.
-  const lastOnSensor = (c: TestCase, sensor: string): RunEntry | null =>
-    runsFor(c.sop_id).find((r) => sensorKey(r) === sensor) ?? null;
-
-  // The case a "Run next" should open: the first one whose latest run is not complete.
-  const nextCase = (p: TestPlan): TestCase | null =>
-    p.cases.find((c) => {
-      const last = lastRun(c.sop_id);
-      return !last || text(last.status) !== "complete";
-    }) ?? null;
+  const visibleCases = $derived((plan?.cases ?? []).filter((entry) => `${text(entry.title)} ${entry.id}`.toLowerCase().includes(query.trim().toLowerCase())));
 
   onMount(() => {
     void reload();
   });
 
-  // After a change to the testcase repo, commit + push it so other machines pick it up,
-  // then refresh the view.
-  const synced = async (note: string): Promise<void> => {
-    let pushed = true;
-    try {
-      await api.testcasePush(note);
-    } catch (e) {
-      say(`saved locally, but push failed: ${e}`, true);
-      pushed = false;
-    }
-    // Always reload the local view: the file change already landed on disk, and the list
-    // must reflect it immediately even when the remote push failed.
+  const saved = async (note: string): Promise<void> => {
     await reload();
-    if (pushed) {
-      say(note);
-      isError = false;
-    }
-    onChanged();
+    say(note);
+    await onChanged();
+  };
+  const refreshPlans = async (): Promise<void> => {
+    if (busy) return;
+    busy = true;
+    try { await reload(); await onChanged(); }
+    finally { busy = false; }
   };
 
   const start = (c: TestCase): void => {
@@ -123,7 +79,7 @@
   const duplicate = async (c: TestCase): Promise<void> => {
     try {
       const newPath = await api.duplicateTestCase(c.path);
-      await synced(`duplicate case ${newPath.split(/[\\/]/).pop()}`);
+      await saved(`Case duplicated: ${newPath.split(/[\\/]/).pop()}`);
     } catch (e) {
       say(String(e), true);
     }
@@ -140,7 +96,7 @@
     const c = confirmCase;
     try {
       await api.deleteTestCase(c.path);
-      await synced(`delete case ${c.id}`);
+      await saved(`Case deleted: ${c.id}`);
     } catch (e) {
       say(String(e), true);
     }
@@ -152,22 +108,23 @@
     if (!source) return;
     try {
       const newPath = await api.importTestCase(plan.path, source);
-      await synced(`import case ${newPath.split(/[\\/]/).pop()}`);
+      await saved(`Case imported: ${newPath.split(/[\\/]/).pop()}`);
     } catch (e) {
       say(String(e), true);
     }
   };
 
   const newPlan = async (): Promise<void> => {
-    const name = prompt("New plan id (lowercase, hyphens ok):");
-    if (!name) return;
-    const title = prompt("Plan title (blank uses the id):") ?? "";
+    if (busy || !planTitle.trim()) return;
+    busy = true;
     try {
-      await api.createTestPlan(name.trim(), title);
-      await synced(`create plan ${name.trim()}`);
+      await api.createTestPlan("", planTitle.trim());
+      creatingPlan = false;
+      await saved(`Plan created: ${planTitle.trim()}`);
+      planTitle = "";
     } catch (e) {
       say(String(e), true);
-    }
+    } finally { busy = false; }
   };
 </script>
 
@@ -175,52 +132,50 @@
   <div class="toolbar">
     <h1 style="margin:0">Test Plans</h1>
     <span class="spacer"></span>
-    <button onclick={() => plan && onStartPlan(plan)} disabled={!plan || !plan.cases.length} title="Run every case in this plan in order">Run plan</button>
-    {#if plan}
-      {@const next = nextCase(plan)}
-      <button onclick={() => next && start(next)} disabled={!next} title="Run the first case whose latest run is not complete">Run next</button>
-    {/if}
-    <button onclick={() => void newPlan()}>New plan</button>
-    <button onclick={() => void addCase()} disabled={!plan}>Add case</button>
+    <button onclick={() => plan && onStartPlan(plan)} disabled={busy || !plan || !plan.cases.length} title="Run this plan's cases in order">Run plan</button>
+    <button onclick={() => creatingPlan = !creatingPlan} disabled={busy}>New plan</button>
+    <button onclick={() => void addCase()} disabled={busy || !plan}>Import case…</button>
+    <button onclick={() => void refreshPlans()} disabled={busy}>Refresh local plans</button>
   </div>
+  <p class="muted">Local Markdown plans and cases are loaded automatically from the working directory's testplan/ folder. Plain MD without front matter is supported. No repo synchronization is needed; use Test Notes for a lightweight experiment.</p>
+  {#if creatingPlan}<form class="toolbar" onsubmit={(event) => { event.preventDefault(); void newPlan(); }}><input aria-label="Plan name" bind:value={planTitle} placeholder="Plan name (ID generated automatically)" disabled={busy} /><button class="primary" disabled={busy || !planTitle.trim()}>Create plan</button><button type="button" onclick={() => creatingPlan = false}>Cancel</button></form>{/if}
   {#if message}
     <p class={isError ? "err" : "muted"}>{message}</p>
   {/if}
 
   {#if !plans.length}
-    <p class="empty">No test plans yet. Use "New plan" to create one, or add folders under testplan/ with a case md in each.</p>
+    <p class="empty">No test plans yet. Create a plan and import Markdown cases, or add a plan folder under testplan/.</p>
   {:else}
     <div class="layout">
       <nav class="plan-list">
         {#each plans as p, i (p.id)}
           <button class:current={i === planIndex} onclick={() => (planIndex = i)}>
             <span class="title">{text(p.title) || p.id}</span>
-            <span class="mono muted">{p.cases.length} case(s) &middot; {p.id}</span>
+            <span class="mono muted">{p.cases.length} cases</span>
           </button>
         {/each}
       </nav>
 
       <section class="cases">
         {#if !plan}
-          <p class="empty">select a plan</p>
+          <p class="empty">Select a test plan</p>
         {:else}
           <h2>{text(plan.title) || plan.id}</h2>
+          <input class="case-search" type="search" aria-label="Search test cases" bind:value={query} placeholder="Search test cases…" />
           {#if !plan.cases.length}
-            <p class="empty">no test cases in this plan yet &mdash; use "Add case"</p>
+            <p class="empty">This plan has no cases yet. Use Import case to add one.</p>
           {:else}
             <table class="matrix">
               <thead>
                 <tr>
-                  <th>case</th>
-                  {#each sensorColumns as s}
-                    <th class="mono" title="sensor serial">{s}</th>
-                  {/each}
-                  <th>last run</th>
+                  <th>Test case</th>
+                  <th>Latest record</th>
+                  <th>Logs</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {#each plan.cases as c (c.path)}
+                {#each visibleCases as c (c.path)}
                   {@const runs = runsFor(c.sop_id)}
                   {@const last = runs[0] ?? null}
                   <tr>
@@ -228,22 +183,14 @@
                       <span class="title">{text(c.title) || c.id}</span>
                       <span class="mono muted">{c.id}</span>
                     </td>
-                    {#each sensorColumns as s}
-                      {@const cell = lastOnSensor(c, s)}
-                      <td class="cell" title={cell ? `${text(cell.started)} · ${text(cell.operator) ?? ""}` : ""}>
-                        <span class="verdict {cell ? String(cell.conclusion ?? "") : "none"}">
-                          {cell ? String(cell.conclusion ?? "in progress") : "\u2014"}
-                        </span>
-                      </td>
-                    {/each}
                     <td class="mono" title={last ? text(last.started) : ""}>
                       {last ? localDay(last.started) : "\u2014"}
-                      <span class="muted">{runs.length} run(s)</span>
+                      <span class="muted">{runs.length} records{last?.conclusion ? ` · ${text(last.conclusion)}` : ""}</span>
                     </td>
+                    <td>{last?.log_count ?? 0}</td>
                     <td class="actions">
-                      <button class="primary" onclick={() => start(c)}>Start</button>
-                      <button onclick={() => void duplicate(c)} title="Duplicate case">Duplicate</button>
-                      <button onclick={() => askRemove(c)} title="Delete case">Delete</button>
+                      <button class="primary" onclick={() => start(c)}>Start test</button>
+                      <details><summary>Manage case</summary><button onclick={() => void duplicate(c)}>Duplicate</button><button onclick={() => askRemove(c)}>Delete…</button></details>
                     </td>
                   </tr>
                 {/each}
@@ -278,15 +225,10 @@
   td.mono { font-family: var(--mono); font-size: 12px; }
   .title { display: block; }
   .muted { display: block; font-size: 11px; }
-  .cell { text-align: center; }
-  .verdict {
-    display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px;
-    font-family: var(--mono); border: 1px solid var(--line); color: var(--muted);
-  }
-  .verdict.pass { color: var(--ok); border-color: var(--ok); }
-  .verdict.fail { color: var(--critical); border-color: var(--critical); }
-  .verdict.inconclusive { color: var(--warn); border-color: var(--warn); }
-  .verdict.none { color: var(--muted); border-color: var(--line); font-style: italic; }
   .actions { white-space: nowrap; }
   .actions button { font-size: 12px; margin-right: 4px; }
+  .actions details { display: inline-block; font-size: 12px; }
+  .actions summary { cursor: pointer; color: var(--muted); }
+  .case-search { width: 100%; margin-bottom: 12px; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
 </style>

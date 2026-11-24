@@ -134,7 +134,9 @@ fn a_package_holds_the_summary_every_run_and_a_manifest() {
     let manifest = fs::read_to_string(report.dir.join("MANIFEST.sha256")).unwrap();
     assert!(manifest.contains("  summary.md"), "{manifest}");
     assert!(
-        manifest.contains(&format!("  runs/uvic-geomag-survey/{SOP}/{RUN}/photos/plot.jpg")),
+        manifest.contains(&format!(
+            "  runs/uvic-geomag-survey/{SOP}/{RUN}/photos/plot.jpg"
+        )),
         "{manifest}"
     );
 }
@@ -149,7 +151,8 @@ fn a_failed_copy_leaves_no_package_and_no_partial() {
     // Make one copied file unreadable so the copy fails part way through. A test that
     // runs as root can read anything, so in that case there is nothing to prove here.
     let victim = scratch.path(&format!("runs/uvic-geomag-survey/{SOP}/{RUN}/events.jsonl"));
-    let mut perms = fs::metadata(&victim).unwrap().permissions();
+    let original_permissions = fs::metadata(&victim).unwrap().permissions();
+    let mut perms = original_permissions.clone();
     perms.set_readonly(true);
     #[cfg(unix)]
     {
@@ -159,13 +162,7 @@ fn a_failed_copy_leaves_no_package_and_no_partial() {
     fs::set_permissions(&victim, perms).unwrap();
     if fs::File::open(&victim).is_ok() {
         // Running as a user who can read anything; restore and skip.
-        let mut perms = fs::metadata(&victim).unwrap().permissions();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            perms.set_mode(0o644);
-        }
-        fs::set_permissions(&victim, perms).unwrap();
+        fs::set_permissions(&victim, original_permissions).unwrap();
         return;
     }
 
@@ -183,13 +180,7 @@ fn a_failed_copy_leaves_no_package_and_no_partial() {
     );
 
     // Restore the file so the scratch directory can be cleaned up.
-    let mut perms = fs::metadata(&victim).unwrap().permissions();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        perms.set_mode(0o644);
-    }
-    fs::set_permissions(&victim, perms).unwrap();
+    fs::set_permissions(&victim, original_permissions).unwrap();
 
     assert!(result.is_err(), "an unreadable file must fail the export");
     assert!(
@@ -243,12 +234,7 @@ fn a_symlink_inside_a_run_is_not_followed() {
         let report = export_one(&repo, &dest, "linked");
 
         assert!(
-            !report
-                .dir
-                .join(RUN_DIR)
-                .join(RUN)
-                .join("leak.txt")
-                .exists(),
+            !report.dir.join(RUN_DIR).join(RUN).join("leak.txt").exists(),
             "the link itself is not copied"
         );
         assert!(

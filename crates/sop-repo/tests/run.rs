@@ -96,7 +96,8 @@ fn a_run_starts_opens_and_records_a_result() {
             .is_file(),
         "the human record is written next to the run directory"
     );
-    let record = scratch.read("runs/uvic-geomag-survey/ground-walk-survey/2026-09-25-test-run/record.md");
+    let record =
+        scratch.read("runs/uvic-geomag-survey/ground-walk-survey/2026-09-25-test-run/record.md");
     assert!(record.contains("step: cond-location"), "{record}");
     assert!(record.contains("session_location: hill top"), "{record}");
     assert!(record.contains("status: done"), "{record}");
@@ -215,7 +216,8 @@ fn an_open_step_keeps_its_captures_and_has_no_outcome() {
     )
     .unwrap();
 
-    let record = scratch.read("runs/uvic-geomag-survey/ground-walk-survey/2026-09-25-open/record.md");
+    let record =
+        scratch.read("runs/uvic-geomag-survey/ground-walk-survey/2026-09-25-open/record.md");
     assert!(
         record.contains("session_location: hill top"),
         "the data someone typed must survive: {record}"
@@ -419,6 +421,11 @@ fn concurrent_writers_do_not_lose_events() {
     for writer in 0..WRITERS {
         assert_eq!(captures[&format!("cap_{writer}")].value, writer.to_string());
     }
+    assert_eq!(
+        fs::read_to_string(&loaded.record_file).unwrap().trim_end(),
+        run::record_text(&repo, SOP, run_id).unwrap().trim_end(),
+        "the last published index must include every concurrent event"
+    );
 }
 
 #[test]
@@ -502,7 +509,11 @@ fn a_record_without_a_run_directory_is_read_from_the_file() {
     // The hand-written run in the fixture has a record file and no run directory, which
     // is the shape SPEC.md section 8 says to expect from before runs were self-contained.
     let existing = "2026-09-24-renfrew-walk01";
-    assert!(!scratch.path(&format!("runs/uvic-geomag-survey/{SOP}/{existing}")).exists());
+    assert!(
+        !scratch
+            .path(&format!("runs/uvic-geomag-survey/{SOP}/{existing}"))
+            .exists()
+    );
     assert_eq!(
         run::record_document(&repo, SOP, existing).unwrap(),
         scratch.read(&format!("runs/uvic-geomag-survey/{SOP}/{existing}.md")),
@@ -601,7 +612,11 @@ fn a_run_started_from_a_file_path_is_filed_under_the_checklists_sop_id() {
     )
     .unwrap();
 
-    assert!(scratch.path("runs/uvic-geomag-survey/uas-mag-preflight-power-on").is_dir());
+    assert!(
+        scratch
+            .path("runs/uvic-geomag-survey/uas-mag-preflight-power-on")
+            .is_dir()
+    );
     assert!(
         scratch
             .path("runs/uvic-geomag-survey/uas-mag-preflight-power-on/2026-09-28-site-01.md")
@@ -649,7 +664,10 @@ fn an_attachment_is_saved_under_its_own_name_and_listed_in_the_record() {
     // A different file with the same name must not overwrite the first.
     fs::write(&source, b"other\n").unwrap();
     let second = run::attach(&repo, SOP, RUN, Some("cond-location"), &source).unwrap();
-    assert_eq!(second.path, format!("runs/uvic-geomag-survey/{SOP}/{RUN}/logs/mag_raw-2.csv"));
+    assert_eq!(
+        second.path,
+        format!("runs/uvic-geomag-survey/{SOP}/{RUN}/logs/mag_raw-2.csv")
+    );
     assert_eq!(scratch.read(&attachment.path), "a,b\n1,2\n");
 
     // Picking the same file again is the same attachment, not a second copy.
@@ -706,8 +724,16 @@ fn deleting_every_run_removes_the_history_and_leaves_the_inbox_alone() {
     let removed = run::delete_all(&repo).unwrap();
     assert!(!removed.is_empty());
     assert!(run::all_runs(&repo).is_empty(), "every run record is gone");
-    assert!(!scratch.path(&format!("runs/uvic-geomag-survey/{SOP}/{RUN}.md")).exists());
-    assert!(!scratch.path(&format!("runs/uvic-geomag-survey/{SOP}/{RUN}")).exists());
+    assert!(
+        !scratch
+            .path(&format!("runs/uvic-geomag-survey/{SOP}/{RUN}.md"))
+            .exists()
+    );
+    assert!(
+        !scratch
+            .path(&format!("runs/uvic-geomag-survey/{SOP}/{RUN}"))
+            .exists()
+    );
     assert!(
         scratch
             .path("runs/_inbox/2026-09-24-wind-oscillation.md")
@@ -755,7 +781,8 @@ fn acknowledging_an_out_of_range_capture_is_recorded() {
         "the acknowledgement replay reaches the state"
     );
     run::end(&repo, SOP, "2026-09-25-acknowledge", "partial", None).unwrap();
-    let record = scratch.read("runs/uvic-geomag-survey/ground-walk-survey/2026-09-25-acknowledge.md");
+    let record =
+        scratch.read("runs/uvic-geomag-survey/ground-walk-survey/2026-09-25-acknowledge.md");
     assert!(
         record.contains("acknowledged:\n  - session_location"),
         "{record}"
@@ -827,7 +854,8 @@ fn a_run_ended_with_a_conclusion_records_it_in_front_matter_and_body() {
     )
     .unwrap();
 
-    let record = scratch.read("runs/uvic-geomag-survey/ground-walk-survey/2026-09-25-conclusion.md");
+    let record =
+        scratch.read("runs/uvic-geomag-survey/ground-walk-survey/2026-09-25-conclusion.md");
     assert!(record.contains("conclusion: inconclusive"), "{record}");
     assert!(
         record.contains("conclusion_note: mains noise drifted all afternoon"),
@@ -917,7 +945,8 @@ fn a_closed_step_renders_its_window_in_the_record_and_csv() {
     .unwrap();
     run::end(&repo, SOP, RUN, "complete", None).unwrap();
 
-    let record = scratch.read("runs/uvic-geomag-survey/ground-walk-survey/2026-09-25-test-run/record.md");
+    let record =
+        scratch.read("runs/uvic-geomag-survey/ground-walk-survey/2026-09-25-test-run/record.md");
     assert!(record.contains("## Timeline"), "{record}");
     assert!(record.contains("cond-location"), "{record}");
     // The window is recorded in the step's result block and rendered in the timeline.
@@ -1122,8 +1151,10 @@ fn an_ended_run_seals_its_event_log_hash_into_the_record() {
     );
 
     // A non-late event past the seal is the field record being rewritten: an error.
-    let events = scratch.path("runs/uvic-geomag-survey/ground-walk-survey/2026-09-25-test-run/events.jsonl");
-    let mut text = scratch.read("runs/uvic-geomag-survey/ground-walk-survey/2026-09-25-test-run/events.jsonl");
+    let events =
+        scratch.path("runs/uvic-geomag-survey/ground-walk-survey/2026-09-25-test-run/events.jsonl");
+    let mut text =
+        scratch.read("runs/uvic-geomag-survey/ground-walk-survey/2026-09-25-test-run/events.jsonl");
     text.push_str(
         "{\"type\":\"StepOpened\",\"at\":\"2026-09-25T12:03:00Z\",\"step\":\"cond-location\"}\n",
     );
@@ -1137,7 +1168,8 @@ fn an_ended_run_seals_its_event_log_hash_into_the_record() {
 
     // Tamper with the sealed prefix itself: the hash no longer matches. Change one byte
     // of the first event, so the whole-file check hashes different bytes.
-    let mut text = scratch.read("runs/uvic-geomag-survey/ground-walk-survey/2026-09-25-test-run/events.jsonl");
+    let mut text =
+        scratch.read("runs/uvic-geomag-survey/ground-walk-survey/2026-09-25-test-run/events.jsonl");
     text = text.replacen("RunStarted", "RunStartex", 1);
     std::fs::write(&events, text).unwrap();
     let (failed, report) = scratch.validate();

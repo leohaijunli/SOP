@@ -57,7 +57,7 @@
       const entry = manifest?.checklists[checklist];
       if (!entry) return "";
       const p = api.text(entry.path);
-      const external = p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p);
+      const external = p.startsWith("/") || p.startsWith("\\\\") || /^[A-Za-z]:[\\/]/.test(p);
       return external ? p : api.text(entry.sop_id);
     })()
   );

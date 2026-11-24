@@ -1,11 +1,8 @@
-//! Asking `git` about the working copy, and asking it to do one thing.
+//! Optional local git metadata for the legacy CLI and record provenance.
 //!
-//! The app does not implement git. It reads state that `git` already knows, and when it
-//! changes the remote or publishes the working copy it asks `git` to do it, so the URL
-//! stays in the repository's own configuration and the commit stays in the operator's
-//! identity. Publishing is the only operation here that reaches the network, and even
-//! that is `git push` doing it: the app holds no credentials and, because it runs with
-//! `GIT_TERMINAL_PROMPT=0`, cannot be made to ask for any.
+//! There is no repository synchronization, staging, committing, pulling, or pushing.
+//! These queries do not contact a remote. The legacy CLI can still edit a local remote
+//! URL, but the desktop notebook does not need or expose git configuration.
 //!
 //! A repository that is not a git repository at all is a normal state - a working copy
 //! copied to a laptop as a plain directory is still usable - so nothing here fails hard
@@ -18,11 +15,6 @@ use std::time::{Duration, Instant};
 
 /// How long a local `git` query may take before it is killed.
 const LOCAL_TIMEOUT: Duration = Duration::from_secs(15);
-
-/// How long a command that touches the network may take. An unreachable remote can hang
-/// for a long time in DNS, TCP, or ssh; without a bound the thread is stuck until the
-/// connection eventually gives up, and the operator only sees a spinner.
-const NETWORK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What the app knows about the working copy's git state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -44,7 +36,6 @@ pub struct GitState {
 #[derive(Debug)]
 pub enum GitError {
     NotAvailable(String),
-    NotARepository(String),
     /// The command was still running at the deadline and was killed.
     TimedOut {
         command: String,
@@ -60,14 +51,9 @@ impl std::fmt::Display for GitError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GitError::NotAvailable(message) => write!(formatter, "git is not available: {message}"),
-            GitError::NotARepository(root) => write!(
-                formatter,
-                "{root} is not a git working copy; run `git init` there first"
-            ),
-            GitError::TimedOut { command, seconds } => write!(
-                formatter,
-                "`{command}` did not finish within {seconds}s - is the network reachable?"
-            ),
+            GitError::TimedOut { command, seconds } => {
+                write!(formatter, "`{command}` did not finish within {seconds}s")
+            }
             GitError::CommandFailed { command, message } => {
                 write!(formatter, "`{command}` failed: {}", message.trim())
             }
@@ -192,130 +178,6 @@ pub fn state(root: &Path, remote: &str) -> GitState {
     state
 }
 
-/// What one publish did, in the order it happened, for the app to show the operator.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PushReport {
-    pub branch: Option<String>,
-    pub remote: String,
-    /// How many paths `git status` reported, and so how many went into the commit.
-    pub changed: usize,
-    /// The short commit this publish made, when there was something to commit.
-    pub commit: Option<String>,
-    /// True when `git push` ran and said there was nothing new on the remote.
-    pub up_to_date: bool,
-    /// One line per thing that happened, in order. This is what the window renders.
-    pub log: Vec<String>,
-}
-
-/// Stage everything, commit it when there is anything to commit, then push.
-///
-/// Staging is `git add -A` from the repository root, so a publish puts the working copy
-/// in the state `git status` showed and nothing else. The push names `HEAD` rather than a
-/// configured upstream, so a repository that has never been pushed still works.
-///
-/// The commit is the operator's: their name and email, their message. Credentials are
-/// the operator's too, and `GIT_TERMINAL_PROMPT=0` makes sure a missing one is an error
-/// the window can show rather than a prompt nobody can answer.
-pub fn commit_and_push(root: &Path, remote: &str, message: &str) -> Result<PushReport, GitError> {
-    if !state(root, remote).is_repository {
-        return Err(GitError::NotARepository(root.display().to_string()));
-    }
-
-    let mut report = PushReport {
-        branch: run(root, &["symbolic-ref", "--short", "HEAD"])
-            .ok()
-            .flatten(),
-        remote: remote.to_owned(),
-        changed: 0,
-        commit: None,
-        up_to_date: false,
-        log: Vec::new(),
-    };
-
-    let status = run_capture(root, &["status", "--porcelain"])?;
-    let changed: Vec<&str> = status
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .collect();
-    report.changed = changed.len();
-
-    if changed.is_empty() {
-        report.log.push("nothing to commit".to_owned());
-    } else {
-        run_capture(root, &["add", "-A"])?;
-        run_capture(root, &["commit", "-m", message])?;
-        report.commit = run(root, &["rev-parse", "--short", "HEAD"]).ok().flatten();
-        let on = report.branch.as_deref().unwrap_or("HEAD");
-        report.log.push(format!(
-            "committed {} path(s) on {on}{}",
-            changed.len(),
-            report
-                .commit
-                .as_deref()
-                .map(|commit| format!(" as {commit}"))
-                .unwrap_or_default()
-        ));
-    }
-
-    let answer = run_capture(root, &["push", remote, "HEAD"])?;
-    report.up_to_date = answer.contains("Everything up-to-date");
-    report.log.push(if report.up_to_date {
-        format!("{remote} is up to date")
-    } else if answer.is_empty() {
-        format!("pushed to {remote}")
-    } else {
-        format!("pushed to {remote}: {}", answer.replace('\n', "; "))
-    });
-
-    Ok(report)
-}
-
-/// Pull the current branch from a remote, fast-forward only.
-///
-/// Fast-forward keeps history linear; a divergent branch is reported as an error so the
-/// operator can decide how to reconcile it rather than the app silently merging.
-pub fn pull(root: &Path, remote: &str) -> Result<Vec<String>, GitError> {
-    if !state(root, remote).is_repository {
-        return Err(GitError::NotARepository(root.display().to_string()));
-    }
-    let branch = run(root, &["symbolic-ref", "--short", "HEAD"])
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "HEAD".to_owned());
-    let answer = run_capture(root, &["pull", "--ff-only", remote, branch.as_str()])?;
-    let log: Vec<String> = if answer.is_empty() {
-        vec!["already up to date".to_owned()]
-    } else {
-        answer.split('\n').map(str::to_owned).collect()
-    };
-    Ok(log)
-}
-
-/// Run `git` and hand back what it printed, or the command and its complaint.
-///
-/// Unlike [`run`], a failure is an error rather than a `None`: a publish that fails has
-/// to say why, and the reason is usually a sentence from `git` on standard error.
-fn run_capture(root: &Path, args: &[&str]) -> Result<String, GitError> {
-    let mut command = Command::new("git");
-    command
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0");
-    let (status, stdout, stderr) =
-        output_with_timeout(&mut command, NETWORK_TIMEOUT, &label(root, args))?;
-
-    let mut text = String::from_utf8_lossy(&stdout).into_owned();
-    text.push_str(&String::from_utf8_lossy(&stderr));
-    if status.success() {
-        return Ok(text.trim().to_owned());
-    }
-    Err(GitError::CommandFailed {
-        command: label(root, args),
-        message: text,
-    })
-}
-
 /// The short commit at `HEAD`, when the working copy is a git repository.
 pub fn current_commit(root: &Path) -> Option<String> {
     let commit = run(root, &["rev-parse", "--short", "HEAD"])
@@ -397,9 +259,15 @@ mod tests {
 
     #[test]
     fn a_command_that_overruns_is_killed() {
-        // `sleep` stands in for a `git pull` at a remote that never answers.
-        let mut command = Command::new("sleep");
-        command.arg("30");
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("powershell");
+            command.args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"]);
+            command
+        } else {
+            let mut command = Command::new("sleep");
+            command.arg("30");
+            command
+        };
         let started = Instant::now();
         let error =
             output_with_timeout(&mut command, Duration::from_millis(150), "sleep 30").unwrap_err();
@@ -414,8 +282,19 @@ mod tests {
     fn output_larger_than_a_pipe_buffer_does_not_deadlock() {
         // 300 KB is several times the usual 64 KB pipe buffer; the reader threads have to
         // drain it while the process is still running.
-        let mut command = Command::new("head");
-        command.args(["-c", "300000", "/dev/zero"]);
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("powershell");
+            command.args([
+                "-NoProfile",
+                "-Command",
+                "[Console]::OpenStandardOutput().Write([byte[]]::new(300000), 0, 300000)",
+            ]);
+            command
+        } else {
+            let mut command = Command::new("head");
+            command.args(["-c", "300000", "/dev/zero"]);
+            command
+        };
         let (status, stdout, _) = output_with_timeout(&mut command, LOCAL_TIMEOUT, "head").unwrap();
         assert!(status.success());
         assert_eq!(stdout.len(), 300000);

@@ -714,3 +714,21 @@ step.
 Cost: an export now copies every attachment, so a run with large photos produces a large
 folder; the report says how many files and bytes, and the window shows it. There is no
 incremental re-export: it is a snapshot, by design.
+
+## D31 - A local notebook first, with an explicit data directory
+
+Date: 2026-11-24. Supersedes D5/D17's desktop repository publishing and D27's Test Plans
+landing screen. The primary UI and current documentation use English; user content is not translated.
+
+- The common layout is Notes / Logs / Search, with plans, SOP authoring and settings
+  behind Manage. There is no sign-in window or automatic repository synchronization.
+- The user explicitly chooses the data directory, which contains logs and optional
+  test plans. Remember it, but never fall back to the program's current directory.
+- A lightweight experiment needs only a title; optional context and notes reuse the
+  append-only run recorder with an empty snapshot. Existing SOP records remain usable.
+- Log history is time-ordered, tags are visible/clickable, and each file has editable
+  remarks and tags without changing its raw bytes. Loose logs need not belong to a run.
+- Notes, file names, remarks, tags and context are searchable from the index. Reading
+  large log bodies or hashing every attachment is not part of routine navigation.
+- Full exports include loose logs, local plans and the sidecar metadata, not just runs.
+  Single-record deletion remains explicit and confirmed; there is no home-page delete-all.

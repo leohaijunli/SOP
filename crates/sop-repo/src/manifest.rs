@@ -20,6 +20,9 @@ pub struct Manifest {
     /// Test plans and their cases, from the `testplan/` directory tree.
     pub testplans: Vec<crate::testplan::TestPlan>,
     pub runs: Vec<RunEntry>,
+    /// Loose logs not already claimed by a record, managed without a checklist.
+    pub workspace_files: Vec<crate::run::RunFile>,
+    pub workspace_error: Option<String>,
     /// Help pages for the side panel, in panel order.
     pub help: Vec<HelpEntry>,
     /// The panel's section headings, in panel order.
@@ -105,6 +108,8 @@ pub struct ChecklistEntry {
 #[derive(Debug, Serialize)]
 pub struct RunEntry {
     pub run_id: Option<Json>,
+    pub title: Option<Json>,
+    pub notebook: bool,
     pub sop: Option<Json>,
     pub sop_version: Option<Json>,
     pub operator: Option<Json>,
@@ -114,6 +119,7 @@ pub struct RunEntry {
     pub started: Option<Json>,
     pub status: Option<Json>,
     pub conclusion: Option<Json>,
+    pub conclusion_note: Option<Json>,
     pub deviations_count: Option<Json>,
     /// The instrument recorded at start, so a new run can be seeded from the last one.
     pub sensor: Option<Json>,
@@ -126,6 +132,9 @@ pub struct RunEntry {
     pub file_count: usize,
     pub path: String,
     pub step_count: usize,
+    pub notes: Vec<crate::run::RunNote>,
+    pub files: Vec<crate::run::RunFile>,
+    pub editable: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -165,9 +174,8 @@ fn kind_count(front: &sop_core::FrontMatter, kind: &str) -> usize {
 }
 
 pub fn build(repo: &Repo) -> Manifest {
-    // Upgrade a pre-project run layout before reading, so records filed under the old flat
-    // `runs/<sop_id>/` still show after the top level became the project.
-    crate::run::migrate_runs(repo);
+    // Index both layouts without moving user data. The legacy CLI may explicitly
+    // choose its migrating Repo::open path; the desktop uses open_data_directory.
     let found = repo.discover();
 
     let project = found.project.as_ref().and_then(|path| {
@@ -242,8 +250,13 @@ pub fn build(repo: &Repo) -> Manifest {
             continue;
         };
         let front = &loaded.doc.front;
+        let sop = front.str("sop").flatten().unwrap_or("");
+        let run_id = front.str("run_id").flatten().unwrap_or("");
+        let indexed = crate::run::files(repo, sop, run_id).unwrap_or_default();
         runs.push(RunEntry {
             run_id: front.get("run_id").map(yaml_to_json),
+            title: front.get("title").map(yaml_to_json),
+            notebook: front.get("notebook").and_then(Value::as_bool) == Some(true),
             sop: front.get("sop").map(yaml_to_json),
             sop_version: front.get("sop_version").map(yaml_to_json),
             operator: front.get("operator").map(yaml_to_json),
@@ -253,6 +266,7 @@ pub fn build(repo: &Repo) -> Manifest {
             started: front.get("started").map(yaml_to_json),
             status: front.get("status").map(yaml_to_json),
             conclusion: front.get("conclusion").map(yaml_to_json),
+            conclusion_note: front.get("conclusion_note").map(yaml_to_json),
             deviations_count: if front.contains("deviations_count") {
                 front.get("deviations_count").map(yaml_to_json)
             } else {
@@ -260,11 +274,26 @@ pub fn build(repo: &Repo) -> Manifest {
             },
             sensor: front.get("sensor").map(yaml_to_json),
             conditions: front.get("conditions").map(yaml_to_json),
-            log_count: kind_count(front, "log"),
-            photo_count: kind_count(front, "photo"),
-            file_count: kind_count(front, "file"),
+            log_count: if indexed.editable {
+                indexed.log_count
+            } else {
+                kind_count(front, "log")
+            },
+            photo_count: if indexed.editable {
+                indexed.photo_count
+            } else {
+                kind_count(front, "photo")
+            },
+            file_count: if indexed.editable {
+                indexed.file_count
+            } else {
+                kind_count(front, "file")
+            },
             path: loaded.relpath.clone(),
             step_count: loaded.doc.results.len(),
+            notes: indexed.notes,
+            files: indexed.files,
+            editable: indexed.editable,
         });
     }
     runs.sort_by_key(|entry| py_str(&entry.run_id));
@@ -328,6 +357,23 @@ pub fn build(repo: &Repo) -> Manifest {
         .map(|(title, order)| HelpSection { title, order })
         .collect();
 
+    let (workspace_files, workspace_error) = match crate::workspace::logs(repo) {
+        Ok(files) => {
+            let claimed: std::collections::BTreeSet<&str> = runs
+                .iter()
+                .flat_map(|run| run.files.iter().map(|file| file.path.as_str()))
+                .collect();
+            (
+                files
+                    .into_iter()
+                    .filter(|file| !claimed.contains(file.path.as_str()))
+                    .collect(),
+                None,
+            )
+        }
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
+
     Manifest {
         schema: 1,
         project,
@@ -335,6 +381,8 @@ pub fn build(repo: &Repo) -> Manifest {
         checklists,
         testplans: crate::testplan::plans(repo),
         runs,
+        workspace_files,
+        workspace_error,
         help,
         help_sections,
     }

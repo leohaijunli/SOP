@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use sop_repo::testplan;
+use sop_repo::{manifest, run, testplan};
 
 mod common;
 use common::Scratch;
@@ -47,4 +47,44 @@ fn a_case_carries_the_checklist_id_a_run_of_it_records() {
         "{cases:?}"
     );
     assert!(cases.contains(&("mount", "mount")), "{cases:?}");
+}
+
+#[test]
+fn plain_markdown_plans_are_auto_loaded_and_their_cases_can_record_logs() {
+    let scratch = Scratch::empty("testplan-plain-md");
+    let folder = scratch.path("testplan/quick");
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(folder.join("plan.md"), "# Field test plan\n").unwrap();
+    fs::write(folder.join("quick-check.md"), "# Quick check\n\n## Preparation\n\n- [ ] Connect the instrument\n\n## Measurement\n\nCollect a short log.\n").unwrap();
+    let repo = scratch.repo();
+    let plans = testplan::plans(&repo);
+    assert_eq!(plans.len(), 1);
+    assert_eq!(plans[0].cases[0].sop_id, "quick-check");
+    assert_eq!(plans[0].cases[0].step_count, 2);
+    assert_eq!(
+        manifest::build(&repo).testplans.len(),
+        1,
+        "opening the workspace automatically indexes local MD plans"
+    );
+    let loaded = run::start(
+        &repo,
+        "quick-check",
+        "2026-11-24-quick",
+        "operator",
+        "lab",
+        None,
+    )
+    .unwrap();
+    assert_eq!(loaded.defs.len(), 2);
+    let source = scratch.path("measurement.log");
+    fs::write(&source, "measured data").unwrap();
+    run::attach(&repo, "quick-check", "2026-11-24-quick", None, &source).unwrap();
+    assert_eq!(
+        run::files(&repo, "quick-check", "2026-11-24-quick")
+            .unwrap()
+            .log_count,
+        1
+    );
+    let (failed, report) = scratch.validate();
+    assert!(!failed, "{report}");
 }

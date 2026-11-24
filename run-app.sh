@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Start the field-sop desktop app.
 #
-#   ./run-app.sh [--repo /path/to/working-copy] [--release]
+#   ./run-app.sh [--workdir /path/to/test-data] [--release]
 #
 # The app is a Tauri shell: it loads the Svelte renderer built into ui/dist/. This script
 # (re)builds the frontend if needed, builds the Rust binary, and starts the window. It
@@ -17,12 +17,12 @@ if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
 fi
 
 # 2. Arguments.
-repo="${FIELD_SOP_REPO:-}"
+repo="${FIELD_SOP_WORKDIR:-${FIELD_SOP_REPO:-}}"
 profile="dev"
 isolate=1
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo) repo="$2"; shift 2 ;;
+    --workdir|--repo) repo="$2"; shift 2 ;;
     --release) profile="release"; shift ;;
     --no-isolate) isolate=0; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -39,10 +39,10 @@ if [ ! -f ui/dist/index.html ] || [ "${REBUILD_UI:-0}" = "1" ]; then
   (cd ui && npm run build)
 fi
 
-# 4. Pick the working copy: --repo wins, then the configured one (via the app), else here.
+# 4. An explicit data directory; otherwise the app restores its selection or asks.
 if [ -n "$repo" ]; then
   repo="$(cd "$repo" 2>/dev/null && pwd || echo "$repo")"
-  printf '==> working copy: %s\n' "$repo"
+   printf '==> working directory: %s\n' "$repo"
 fi
 
 # 5. Build the Rust binary. Cargo names the default "dev" profile's output dir "debug".
@@ -63,9 +63,8 @@ if [ "$isolate" = "1" ]; then
   echo "==> isolated XDG: config=$cfg data=$data"
 fi
 
-# 7. Launch. The app has no CLI args: it opens the configured working copy, else the
-#    current directory. For --repo we cd there first so the app lands on that copy.
+# 7. Launch. Never infer the data directory from the program's current directory.
 if [ -n "$repo" ]; then
-  cd "$repo"
+  export FIELD_SOP_WORKDIR="$repo"
 fi
 exec "$bin"

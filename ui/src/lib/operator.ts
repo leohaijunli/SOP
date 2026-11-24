@@ -1,6 +1,4 @@
-// Who is using this machine. A run records the current operator automatically, so the
-// field operator signs in once instead of typing their name on every run. The choice is
-// remembered across launches and can be switched from the header.
+// An optional default name, not a login or account. It is edited inline in Manage.
 
 const KEY = "field-sop:operator";
 const HISTORY_KEY = "field-sop:operators";
@@ -17,7 +15,8 @@ const readList = (): string[] => {
 };
 
 export const getOperator = (): string => {
-  return localStorage.getItem(KEY) ?? "";
+  try { return localStorage.getItem(KEY) ?? ""; }
+  catch { return ""; }
 };
 
 export const getKnownOperators = (): string[] => {

@@ -1,25 +1,26 @@
 # field-sop
 
-Digitized field-test SOPs for geomagnetic survey work: **checklists that carry their
-own instructions**, plus execution records that can be reviewed and fed back into the
-SOPs themselves.
+A lightweight local experiment notebook focused on **test notes, log remarks and tags,
+search, and file management**. No sign-in or Git repository is required. Repository
+synchronization, automatic pulls, and pushes have been removed.
 
-Every customizable part of this repo is a plain Markdown file. No build step is
-required to read or edit it; a human with a text editor, a code review, and the desktop
-app are all first-class users.
+The main navigation is **Test Notes / Logs / Search**, with test plans and the full SOP
+workflow under **Manage**. A title is enough to create a note; operator, location,
+equipment, and experiment details are optional. Existing SOP records remain readable,
+can receive notes and logs, and can be exported.
 
-**Status:** content and format are validated; the CLI, the event-sourced run recorder
-(P2/P3), and the desktop app (P4, execution + history views) are implemented. Start with
-`docs/DESIGN.md`.
+On first use, explicitly select the **data directory containing logs and test plans**.
+The app never treats its launch directory as the data directory by default. Your choice
+is remembered locally and can be changed from the header or **Manage → Working Directory & Settings**.
 
-What works today: `sop validate`, `sop index`, `sop preview`, `sop status`,
-`sop project`, `sop remote`, `sop settings`, `sop export`, and
-`sop run start|record|recover|attach|end` (plus `sop run deviations`, `sop run export`,
-and `sop run delete`). The desktop app (`field-sop`) renders Run / History / Browse /
-Edit / Project / Settings views, attaches logs/photos/files to a run (during or after
-it), exports a run's record, packages a summary with every run into one folder, and
-publishes the working copy with a push, and is packaged as a `.deb` and AppImage on tag
-(`.github/workflows/validate.yml`).
+Log history defaults to newest first and can be reversed, using log time or import time.
+Each file supports remarks and multiple visible, clickable tags. Search covers titles,
+notes, file names, remarks, tags, locations, and equipment without reading large log bodies.
+
+Quick start: [`docs/NOTEBOOK.md`](docs/NOTEBOOK.md).
+CLI validation, indexing, preview, export, and the existing SOP workflow remain available
+for compatibility with your data and scripts. All application-owned interface text is English;
+existing note text, file names, and tags are kept exactly as stored.
 
 ## Why this exists
 
@@ -30,24 +31,28 @@ Field procedures were previously paper or verbal, which meant:
 - nothing was traceable, so a bad dataset could not be traced back to a step, a
   sensor, or a site.
 
-This repo holds the procedures under version control and gives the field app a place
-to write records back into.
+A full SOP is useful when step-by-step traceability is needed. An ordinary experiment
+does not require a checklist: a title, a few notes, and log files are enough.
 
 ## Layout
 
 ```
-procedures/       Reusable step blocks. The atomic unit of the whole system.
-checklists/       One experiment type = procedures to include + local steps.
-runs/             Execution records and their data, one directory per run. Never overwritten.
-  _inbox/         Field observations that are candidates for promotion into procedures/.
-  <sop_id>/<run_id>/
-                  events.jsonl, snapshot.md, record.md, and logs/ - the attached files.
-help/             In-app documentation, shown in the app's help panel. Never executed.
-project.md        The repository's identity: which campaign this is, and who leads it.
-templates/        Starting points for authoring new files by hand.
-crates/           The Rust domain, repository access, and `sop` CLI.
-docs/             Design, features, scenarios, decisions, log policy.
-SPEC.md           The authoritative format specification. Read this first.
+working-directory/
+  logs/           Independent logs, optionally grouped by date or equipment.
+  testplan/       Test plans and Markdown cases (optional).
+  runs/           Test notes and existing execution records, one directory per record.
+    [project_id/]<sop_id>/<run_id>/
+                  events.jsonl, snapshot.md, record.md, notes.md, and attachment folders.
+  .field-sop/log-remarks.json
+                  Remarks and tags for independent logs; include this in backups.
+  exports/        Exported records and complete working-directory backups.
+
+application-source/
+  ui/             Svelte desktop interface.
+  crates/         Rust recorder, file access, CLI, and Tauri shell.
+  help/           In-app help content.
+  docs/           Usage, design decisions, and log policy.
+  SPEC.md         Content format specification.
 ```
 
 Attached files live in `logs/` inside the run directory, so one run is one
@@ -58,22 +63,17 @@ self-contained directory; see `docs/DESIGN.md` section 5 and `docs/LOGS.md`.
 | Document | Contents |
 |---|---|
 | `SPEC.md` | The authoritative content format. Read this first. |
-| `docs/DESIGN.md` | Architecture, crate layout, stack choices, phases, risks |
-| `docs/FEATURES.md` | Expected feature list with priorities |
-| `docs/SCENARIOS.md` | Six typical situations the tool is built for |
+| `docs/NOTEBOOK.md` | Working directories, notes, logs, tags, search, and backups |
 | `docs/DECISIONS.md` | Decisions that are expensive to revisit |
 | `docs/LOGS.md` | Attachment naming, hashing, and size policy |
-| `docs/IMPROVEMENTS.md` | Review notes: improvements for field engineers, ordered by value |
+| `docs/USAGE-zh.md` | Archived legacy CLI examples; use the current notebook guide for the desktop UI |
 | `help/*.md` | Documentation for people using the tool, shown in the app's help panel |
 
 ## Current content
 
-| Checklist | Status | Purpose |
-|---|---|---|
-| `checklists/mag-sensor-calibration.md` | draft | Sensor-level calibration of a geomagnetic sensor |
-| `checklists/ground-walk-survey.md` | draft | Hand-carried ground magnetic walk survey |
-
-Planned: interference test, navigation test, UAV-mounted survey.
+Demo checklists are not required. Plans load from the selected working directory's
+`testplan/` folder, and you can open your own Markdown checklists. Ordinary test notes
+do not need a checklist.
 
 ## Working with it
 
@@ -118,12 +118,14 @@ cargo build -p sop-app --release
 ```bash
 ./run-app.sh --release
 # or point it at the working copy explicitly:
-./run-app.sh --repo /path/to/working-copy --release
+./run-app.sh --workdir /path/to/test-data --release
 ```
 
 `run-app.sh` installs the frontend deps, builds the renderer if missing, builds the Rust
-binary, and starts the window. Add `--no-isolate` to use the machine's real settings
-instead of a throwaway XDG directory.
+binary, and starts the window. `--workdir` explicitly selects and remembers the data
+directory; the old `--repo` spelling remains an alias. Without a flag, the app restores
+the selected folder or opens the folder picker, never the code directory. Add
+`--no-isolate` to use the machine's real settings instead of a throwaway XDG directory.
 
 **5. Package installers (`.deb` and AppImage):**
 
@@ -154,7 +156,7 @@ when it is left out, and the current directory after that.
 | `sop project` | Show the project's identity and the fields that can be set. |
 | `sop project set title "..."` | Rewrite one field of `project.md`, checking first. |
 | `sop status` | Working copy, project, git state, and what content is present. |
-| `sop remote [url]` | Show or set the git remote URL, through `git` itself. |
+| `sop remote [url]` | Legacy local git-configuration helper; does not synchronize or publish. |
 | `sop settings [set KEY VALUE]` | Show or change this application's own preferences. |
 | `sop run start <sop> <id> <op> <site> [--override REASON]` | Start a run: freeze a snapshot, open the event log. |
 | `sop run record <sop> <id> <event...>` | Append one event (capture / checkbox / done / skip / deviate / note). |
@@ -179,43 +181,37 @@ device, written into the record's `hardware` list as `kind: name serial`. `devic
 `sensors` coexist: `sensors` still decides the run id, the sensor filter, and the record's
 `sensor` block; `devices` only adds to `hardware`.
 
-The app's History screen groups runs under the test plan and case they were started
-from, with anything that does not match a case kept under "Runs outside a test plan".
-Every table shares one column layout (`run id / started / site / sensor / operator /
-outcome / conclusion / dev / files / ▸`), so the cases line up, and the `files` column
-shows the log / photo / file counts with a hint when an ended run has no logs yet.
+Test Notes uses a chronological record list and a detail pane instead of a ten-column
+history table. Add Markdown notes, multiple logs/photos/attachments, open folders, or
+export from the selected record. Logs lists both attached files and independent files
+under `logs/`, and supports multi-file imports without first creating an experiment.
 
-Each row opens a detail drawer. There the operator can **Add log…**, **Add photos…**, or
-**Add files…** (each multi-select; a file over 50 MB asks first), **Add note…**, see the
-run's files and notes with their size, time, and an `after run` tag, **Open folder** (the
-run's own directory, in the desktop file manager), **Export record**, and **Delete** (that
-one run, after asking). Attaching works whether the run is live or already ended; what was
-added after the end is listed separately in the record, and the seal over the field record
-does not move (`SPEC.md` section 8, `docs/DECISIONS.md` D29).
+Imports keep the originals and suffix same-name conflicts with different contents.
+Edit remarks and tags inline without changing log bytes. Files larger than 50 MB ask
+before copying. Notes and logs can be added after completion without moving the event
+seal. Single-record deletion is under More and requires two confirmations; there is
+no home-page delete-all action.
 
-**Export summary** packages a report and every run into one self-contained folder,
+**Export working directory** packages a report and every run into one self-contained folder,
 `<destination>/export_<local time>/`: `summary.md`, `summary.csv`, each run's record and
 whole run directory, and a `MANIFEST.sha256`. The folder picker starts in `exports/`
 (ignored by `git`) and the result is reported as runs / files / size, with a link to open
-the folder. The markdown and CSV tables carry the same columns as History. A failed export
+the folder. The Markdown and CSV tables provide a record overview. A failed export
 leaves nothing behind, and a folder that already exists gets a `-2` suffix
 (`docs/DECISIONS.md` D30).
 
-The toolbar also has **Push repo** (`git add -A`, commit with the message you give it,
-push to the configured remote) and **Delete all runs** (the whole history in this working
-copy; `runs/_inbox/` is left alone). Deletion cannot be undone. The app holds no
-credential and runs `git` with `GIT_TERMINAL_PROMPT=0`. See `docs/DECISIONS.md` D17.
+A full export also includes independent `logs/`, `testplan/`, the project file, and
+remark/tag metadata. The app does not pull, commit, or push data. Backups do not depend
+on a network or Git. D31 supersedes the publishing behavior from D17.
 
 ```bash
 ./target/release/sop index
 ./target/release/sop project set title "Geomagnetic Survey Field Work"
-./target/release/sop remote https://github.com/<you>/field-sop.git
 ```
 
-The project's name is repository content, not a preference: it is committed, so every
-operator and every old record agrees about which campaign the work belongs to. The
-settings file holds the path to the working copy and the *name* of the remote, and never
-a URL or a token - `git` keeps the URL, where it belongs. See `docs/DECISIONS.md` D14.
+The project name can still live in `project.md`, but is not required to create notes.
+Legacy CLI local git metadata/configuration remains available; the desktop no longer
+exposes remote or branch settings.
 
 ```bash
 ./target/release/sop settings            # where the settings file is, and what it holds
@@ -226,6 +222,19 @@ Run the tooling's own tests, which include a negative case for every rule:
 
 ```bash
 cargo test
+```
+
+Frontend checks and helper tests (the test scripts use Node 24's TypeScript support):
+
+```bash
+cd ui
+npm ci
+npm run check
+npm run test:records
+npm run test:devices
+npm run test:api
+npm run test:language
+npm run build
 ```
 
 The Rust implementation is the only implementation of the format. The transitional

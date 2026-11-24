@@ -1,5 +1,10 @@
 # field-sop 使用说明（中文）
 
+> **Archived legacy reference.** The current desktop uses Test Notes / Logs / Search,
+> requires an explicit working directory, and has no sign-in or repo synchronization.
+> See the current English [notebook guide](NOTEBOOK.md). The original examples below
+> are retained for historical data/script compatibility and do not describe the current UI.
+
 field-sop 是一套管理"野外操作规程 + 检查清单 + 记录"的工具。内容全部是 Markdown
 （格式见 `SPEC.md`），规则（校验、原子写、git）在 Rust 侧，界面只负责渲染。整套系统分
 两层：

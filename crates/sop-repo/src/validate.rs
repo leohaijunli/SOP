@@ -128,8 +128,8 @@ pub fn validate_repository(repo: &Repo) -> Validation {
 /// Validate specific files, or the whole repository when `files` is empty.
 ///
 /// Passing files does not change the rules, only which files are checked. Repository
-/// level rules such as "every log directory has a run record" need the whole picture,
-/// so they only run for a full pass.
+/// level checks of the loose-log metadata need the whole picture, so they only run
+/// for a full pass. A log does not have to belong to a test record.
 pub fn validate(repo: &Repo, files: &[PathBuf]) -> Validation {
     let full = files.is_empty();
     let groups = if full {
@@ -182,8 +182,8 @@ pub fn validate(repo: &Repo, files: &[PathBuf]) -> Validation {
         }
     }
 
-    if full {
-        check_log_directories(repo, &records, &mut report);
+    if full && let Err(error) = crate::workspace::logs(repo) {
+        report.error(repo.root(), error.to_string(), None);
     }
 
     check_help_ordering(repo, &groups.help, &mut report);
@@ -351,8 +351,13 @@ fn check_run(
     }
 
     let sop = doc.front.str("sop").flatten();
+    let snapshot_steps = sop.and_then(|name| repo.run_snapshot_step_ids(name, &stem));
+    let notebook = sop == Some(crate::run::NOTE_SOP)
+        && doc.front.get("notebook").and_then(Value::as_bool) == Some(true)
+        && snapshot_steps.as_ref().is_some_and(Vec::is_empty);
     let mut checklist_steps: Option<Vec<String>> = None;
     match sop {
+        _ if notebook => {}
         // The checklist a run names can be a `checklists/` file or a `testplan/` case;
         // both record their `sop_id`, and both have to resolve here.
         Some(name) if repo.checklist_path(name).is_some() => {
@@ -373,7 +378,6 @@ fn check_run(
     // ids with it, are defined by that revision). Resolving against the working copy
     // instead would mean that every later edit to the checklist retroactively broke every
     // run that used it, and the editor would refuse to make the edit at all.
-    let snapshot_steps = sop.and_then(|name| repo.run_snapshot_step_ids(name, &stem));
 
     let sop_name = sop.unwrap_or("None");
     let expected_place = format!("runs/{}", crate::run::run_subdir(repo, sop_name));
@@ -427,7 +431,7 @@ fn check_run(
     // A run that has just started has no results yet, and that is the normal state of a
     // record on disk mid-run. Only a finished run with nothing recorded is worth a
     // second look.
-    if doc.results.is_empty() && doc.front.contains("ended") {
+    if !notebook && doc.results.is_empty() && doc.front.contains("ended") {
         report.warning(path, "run record has no step results", None);
     }
 
@@ -595,34 +599,6 @@ fn check_log_entry(repo: &Repo, path: &Path, run_id: &str, entry: &Value, report
             ),
             None,
         );
-    }
-}
-
-fn check_log_directories(repo: &Repo, records: &BTreeMap<String, PathBuf>, report: &mut Report) {
-    let logs_root = repo.root().join("logs");
-    let Ok(entries) = std::fs::read_dir(&logs_root) else {
-        return;
-    };
-    let mut names: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
-    names.sort();
-
-    for path in names {
-        if !path.is_dir() {
-            continue;
-        }
-        let name = match path.file_name().and_then(|name| name.to_str()) {
-            Some(name) => name.to_owned(),
-            None => continue,
-        };
-        if !records.contains_key(&name) {
-            report.push(
-                Some(path.clone()),
-                Diagnostic::error(
-                    format!("log directory '{name}' has no matching run record in runs/"),
-                    None,
-                ),
-            );
-        }
     }
 }
 

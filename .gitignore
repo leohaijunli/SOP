@@ -9,8 +9,9 @@ node_modules/
 # Atomic-write siblings (a crash can leave one behind).
 *.tmp
 
-# Machine-local settings written by the desktop app.
+# Workspace metadata (log remarks/tags are included in full workspace exports).
 .field-sop/
+**/.record.lock
 
 # Project + settings written by the Confirm button on the Project/Settings pages.
 configure.json

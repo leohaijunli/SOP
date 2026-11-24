@@ -54,7 +54,14 @@ pub enum RunError {
     BadSnapshot(String, String),
     #[error("event {line} in the run log is not a well-formed event")]
     BadEvent { line: usize },
+    #[error("'{0}' is not a file inside the selected working directory")]
+    UnsafeFile(String),
+    #[error("'{0}' is not a safe record identifier; use a single directory name, not a path")]
+    UnsafeIdentifier(String),
 }
+
+/// Lightweight records use an empty snapshot, not a checklist the operator must author.
+pub const NOTE_SOP: &str = "test-notes";
 
 /// The events and the state they produce, for one run.
 #[derive(Debug)]
@@ -87,6 +94,48 @@ pub struct RunMeta {
     pub case: Option<String>,
     /// The instrument's clock, when the operator recorded it at run start.
     pub clock: Option<ClockInfo>,
+}
+
+/// The same file/note shapes are used by the manifest and the desktop detail view.
+/// The index never reads the contents of an attached log just to search its name.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunFile {
+    pub kind: String,
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    pub added_at: String,
+    pub post_run: bool,
+    pub step: Option<String>,
+    pub remark: String,
+    pub remark_at: Option<String>,
+    pub missing: bool,
+    pub tags: Vec<String>,
+    /// Instrument time when available; otherwise the file's modification time.
+    pub file_time: String,
+    pub time_source: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunNote {
+    pub text: String,
+    pub added_at: String,
+    pub post_run: bool,
+    pub step: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunFiles {
+    pub files: Vec<RunFile>,
+    pub notes: Vec<RunNote>,
+    pub log_count: usize,
+    pub photo_count: usize,
+    pub file_count: usize,
+    /// Hand-written legacy records can be read/exported, but have no event log to amend.
+    pub editable: bool,
 }
 
 impl RunMeta {
@@ -135,7 +184,7 @@ fn run_key(repo: &Repo, sop_id: &str) -> String {
     let path = Path::new(sop_id);
     if path.is_file() {
         if let Some(id) = repo
-            .load(path)
+            .load_standalone(path)
             .ok()
             .and_then(|loaded| loaded.doc.front.str("sop_id").flatten().map(str::to_owned))
         {
@@ -149,15 +198,27 @@ fn run_key(repo: &Repo, sop_id: &str) -> String {
     }
 }
 
-fn run_dir(repo: &Repo, sop_id: &str, run_id: &str) -> PathBuf {
+pub(crate) fn run_dir(repo: &Repo, sop_id: &str, run_id: &str) -> PathBuf {
     let key = run_key(repo, sop_id);
-    repo.resolve(&format!("runs/{}/{}", run_subdir(repo, &key), run_id))
+    let current = repo.resolve(&format!("runs/{}/{}", run_subdir(repo, &key), run_id));
+    let flat = repo.resolve(&format!("runs/{key}/{run_id}"));
+    if !current.is_dir() && flat.is_dir() {
+        flat
+    } else {
+        current
+    }
 }
 
 /// The committed record file `runs/<sop_id>/<run_id>.md`, next to the run directory.
-fn committed_record_file(repo: &Repo, sop_id: &str, run_id: &str) -> PathBuf {
+pub(crate) fn committed_record_file(repo: &Repo, sop_id: &str, run_id: &str) -> PathBuf {
     let key = run_key(repo, sop_id);
-    repo.resolve(&format!("runs/{}/{}.md", run_subdir(repo, &key), run_id))
+    let current = repo.resolve(&format!("runs/{}/{}.md", run_subdir(repo, &key), run_id));
+    let flat = repo.resolve(&format!("runs/{key}/{run_id}.md"));
+    if !current.is_file() && flat.is_file() {
+        flat
+    } else {
+        current
+    }
 }
 
 /// The `runs/...` sub-path a checklist is filed under: `<project_id>/<sop_id>` when the
@@ -165,11 +226,37 @@ fn committed_record_file(repo: &Repo, sop_id: &str, run_id: &str) -> PathBuf {
 /// no project keeps the old flat layout).
 pub(crate) fn run_subdir(repo: &Repo, key: &str) -> String {
     let project = crate::project::id(repo);
-    if project.is_empty() {
+    if project.is_empty() || !safe_component(&project) {
         key.to_owned()
     } else {
         format!("{project}/{key}")
     }
+}
+
+fn safe_component(value: &str) -> bool {
+    !value.is_empty()
+        && !value.contains(['/', '\\', '\0'])
+        && value != "."
+        && value != ".."
+        && matches!(
+            Path::new(value).components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+        && Path::new(value).components().count() == 1
+}
+
+pub(crate) fn ensure_run_scope(repo: &Repo, sop: &str, run_id: &str) -> Result<(), RunError> {
+    let key = run_key(repo, sop);
+    let project = crate::project::id(repo);
+    for value in [key.as_str(), run_id] {
+        if !safe_component(value) {
+            return Err(RunError::UnsafeIdentifier(value.to_owned()));
+        }
+    }
+    if !project.is_empty() && !safe_component(&project) {
+        return Err(RunError::UnsafeIdentifier(format!("project_id: {project}")));
+    }
+    Ok(())
 }
 
 /// Freeze a resolved checklist into `snapshot.md` text and the step shapes for replay.
@@ -334,8 +421,8 @@ fn parse_time_cell(cell: &str) -> Option<i64> {
     }
     // Convert a trailing offset to a signed number of seconds.
     let offset_secs = s
-        .find(['+', '-'])
-        .filter(|pos| *pos > 10)
+        .get(10..)
+        .and_then(|tail| tail.find(['+', '-']).map(|pos| pos + 10))
         .and_then(|pos| {
             let (core, off) = s.split_at(pos);
             let sign = if off.starts_with('+') { 1i64 } else { -1i64 };
@@ -383,7 +470,7 @@ fn csv_time_range(bytes: &[u8]) -> Option<(String, String, u64)> {
         let cell = trimmed.split(',').nth(index)?.trim();
         let epoch = parse_time_cell(cell)?;
         first = Some(first.map_or(epoch, |seen| seen.min(epoch)));
-        last = Some(epoch);
+        last = Some(last.map_or(epoch, |seen| seen.max(epoch)));
         rows += 1;
     }
     let (f, l) = (first?, last?);
@@ -457,6 +544,7 @@ fn append_event(path: &Path, event: &RunEvent) -> Result<(), RunError> {
 
 /// Load a run: read the log, seed step shapes from the snapshot, replay to a state.
 pub fn load(repo: &Repo, sop_id: &str, run_id: &str) -> Result<LoadedRun, RunError> {
+    ensure_run_scope(repo, sop_id, run_id)?;
     let dir = run_dir(repo, sop_id, run_id);
     let events_path = dir.join("events.jsonl");
     let snapshot_path = dir.join("snapshot.md");
@@ -480,7 +568,22 @@ pub fn load(repo: &Repo, sop_id: &str, run_id: &str) -> Result<LoadedRun, RunErr
             });
     }
 
-    let bytes = fs::read(&events_path).map_err(|source| RunError::Io {
+    // Windows file locks are mandatory, unlike Unix advisory locks. Readers take a
+    // shared lock so a concurrent append cannot fail with ERROR_LOCK_VIOLATION.
+    let mut log = fs::File::open(&events_path).map_err(|source| RunError::Io {
+        path: events_path.clone(),
+        source,
+    })?;
+    log.lock_shared().map_err(|source| RunError::Io {
+        path: events_path.clone(),
+        source,
+    })?;
+    let mut bytes = Vec::new();
+    log.read_to_end(&mut bytes).map_err(|source| RunError::Io {
+        path: events_path.clone(),
+        source,
+    })?;
+    log.unlock().map_err(|source| RunError::Io {
         path: events_path.clone(),
         source,
     })?;
@@ -566,6 +669,9 @@ pub fn start_with_meta(
     override_reason: Option<&str>,
     meta: &RunMeta,
 ) -> Result<LoadedRun, RunError> {
+    if !sop_core::vocab::is_valid_id(run_id) {
+        return Err(RunError::BadRunId(run_id.to_owned()));
+    }
     let checklist_path = if Path::new(sop_id).is_file() {
         PathBuf::from(sop_id)
     } else if let Some(path) = repo.checklist_path(sop_id) {
@@ -575,7 +681,9 @@ pub fn start_with_meta(
     } else {
         return Err(RunError::NoChecklist(sop_id.to_owned()));
     };
-    let loaded = repo.load(&checklist_path).map_err(RunError::Repo)?;
+    let loaded = repo
+        .load_standalone(&checklist_path)
+        .map_err(RunError::Repo)?;
     let resolved = resolve_checklist(repo, &loaded);
     let status = loaded.doc.front.str("status").flatten();
     if status == Some("draft") && override_reason.is_none() {
@@ -586,6 +694,7 @@ pub fn start_with_meta(
     // external file loaded via "Open file" names the checklist in its front matter; the
     // run directory and record use that id so History and later run commands can find it.
     let display_sop = run_key(repo, sop_id);
+    ensure_run_scope(repo, &display_sop, run_id)?;
 
     let dir = run_dir(repo, &display_sop, run_id);
     if dir.is_dir() {
@@ -652,6 +761,307 @@ pub fn start_with_meta(
     Ok(loaded_run)
 }
 
+/// Create a notebook entry in a plain data directory. Only the title is required;
+/// operator, site, instrument, and the first note are optional. No git command runs.
+pub fn create_note(
+    repo: &Repo,
+    run_id: &str,
+    title: &str,
+    operator: &str,
+    site: &str,
+    note: &str,
+    meta: &RunMeta,
+) -> Result<LoadedRun, RunError> {
+    if !sop_core::vocab::is_valid_id(run_id) {
+        return Err(RunError::BadRunId(run_id.to_owned()));
+    }
+    ensure_run_scope(repo, NOTE_SOP, run_id)?;
+    let title = title.trim();
+    if title.is_empty() || title.contains(['\n', '\r']) {
+        return Err(RunError::Core(sop_core::RunError::TitleRequired));
+    }
+    let dir = run_dir(repo, NOTE_SOP, run_id);
+    if dir.exists() || committed_record_file(repo, NOTE_SOP, run_id).exists() {
+        return Err(RunError::RunExists(run_id.to_owned(), NOTE_SOP.to_owned()));
+    }
+    let parent = dir.parent().expect("a run directory has a parent");
+    fs::create_dir_all(parent).map_err(|source| RunError::Io {
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    // Reserve the exact entry directory, so two windows cannot overwrite each other.
+    fs::create_dir(&dir).map_err(|source| RunError::Io {
+        path: dir.clone(),
+        source,
+    })?;
+    let snapshot = "---\nkind: snapshot\nnotebook: true\n---\n\n";
+    atomic::write(&dir.join("snapshot.md"), snapshot).map_err(|error| RunError::Io {
+        path: dir.join("snapshot.md"),
+        source: error.source,
+    })?;
+    let at = now();
+    let mut events = vec![
+        RunEvent::RunStarted {
+            at: at.clone(),
+            sop: NOTE_SOP.to_owned(),
+            sop_version: "1".to_owned(),
+            sop_commit: "unknown".to_owned(),
+            snapshot_sha256: sha256_hex(snapshot.as_bytes()),
+            operator: operator.trim().to_owned(),
+            site: site.trim().to_owned(),
+            plan: None,
+            case: None,
+            sensor: meta.sensor.clone().filter(|sensor| !sensor.is_empty()),
+            hardware: meta.hardware.clone(),
+            conditions: meta.conditions.clone(),
+            clock: None,
+        },
+        RunEvent::RunTitleSet {
+            at: at.clone(),
+            title: title.to_owned(),
+        },
+    ];
+    if !note.trim().is_empty() {
+        events.push(RunEvent::NoteAdded {
+            at,
+            step: None,
+            text: note.trim().to_owned(),
+        });
+    }
+    write_events(&dir.join("events.jsonl"), &events)?;
+    let loaded = load(repo, NOTE_SOP, run_id)?;
+    write_record(&loaded)?;
+    atomic::write(
+        &loaded.record_file,
+        &run_record_text(&loaded.state, &[], run_id, None),
+    )
+    .map_err(|error| RunError::Io {
+        path: loaded.record_file.clone(),
+        source: error.source,
+    })?;
+    Ok(loaded)
+}
+
+/// Read every note and registered file, including records without an event log.
+pub fn files(repo: &Repo, sop_id: &str, run_id: &str) -> Result<RunFiles, RunError> {
+    match load(repo, sop_id, run_id) {
+        Ok(loaded) => {
+            let mut files = Vec::new();
+            let mut notes = Vec::new();
+            for (id, step) in &loaded.state.steps {
+                for attachment in &step.attachments {
+                    files.push(file_view(repo, attachment, Some(id)));
+                }
+                for note in &step.notes {
+                    notes.push(RunNote {
+                        text: note.text.clone(),
+                        added_at: note.at.clone(),
+                        post_run: note.post_run,
+                        step: Some(id.clone()),
+                    });
+                }
+            }
+            for attachment in &loaded.state.run_attachments {
+                files.push(file_view(repo, attachment, None));
+            }
+            for note in &loaded.state.run_notes {
+                notes.push(RunNote {
+                    text: note.text.clone(),
+                    added_at: note.at.clone(),
+                    post_run: note.post_run,
+                    step: None,
+                });
+            }
+            files.sort_by(|a, b| a.added_at.cmp(&b.added_at).then(a.path.cmp(&b.path)));
+            notes.sort_by(|a, b| a.added_at.cmp(&b.added_at));
+            Ok(file_counts(files, notes, true))
+        }
+        Err(RunError::NoRun(..)) => {
+            let text = record_document(repo, sop_id, run_id)?;
+            let doc = Document::parse(&text)
+                .map_err(|error| RunError::BadSnapshot(text.clone(), error.to_string()))?;
+            let entries = match doc.front.get("logs") {
+                Some(sop_core::Value::Sequence(entries)) => entries.as_slice(),
+                Some(entry) => std::slice::from_ref(entry),
+                _ => &[],
+            };
+            let files = entries
+                .iter()
+                .filter_map(|entry| {
+                    let map = entry.as_mapping()?;
+                    let value = |key: &str| {
+                        map.get(key)
+                            .and_then(sop_core::Value::as_str)
+                            .unwrap_or("")
+                            .to_owned()
+                    };
+                    let path = value("path");
+                    if path.is_empty() {
+                        return None;
+                    }
+                    let (file_time, time_source) = if !value("t_min").is_empty() {
+                        (value("t_min"), "data")
+                    } else if let Some(time) = file_modified(&repo.resolve(&path)) {
+                        (time, "modified")
+                    } else {
+                        (
+                            doc.front.str("started").flatten().unwrap_or("").to_owned(),
+                            "record",
+                        )
+                    };
+                    Some(RunFile {
+                        kind: if value("kind").is_empty() {
+                            "log".to_owned()
+                        } else {
+                            value("kind")
+                        },
+                        name: file_name(&path),
+                        missing: !repo.resolve(&path).is_file(),
+                        path,
+                        size: map
+                            .get("size")
+                            .and_then(sop_core::Value::as_u64)
+                            .unwrap_or(0),
+                        added_at: String::new(),
+                        post_run: false,
+                        step: None,
+                        remark: value("remark"),
+                        remark_at: None,
+                        tags: map
+                            .get("tags")
+                            .and_then(sop_core::Value::as_sequence)
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .filter_map(sop_core::Value::as_str)
+                                    .map(str::to_owned)
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        file_time,
+                        time_source: time_source.to_owned(),
+                    })
+                })
+                .collect();
+            let notes = if doc.body.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec![RunNote {
+                    text: doc.body.trim().to_owned(),
+                    added_at: doc.front.str("started").flatten().unwrap_or("").to_owned(),
+                    post_run: false,
+                    step: None,
+                }]
+            };
+            Ok(file_counts(files, notes, false))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn file_name(path: &str) -> String {
+    path.rsplit(['/', '\\']).next().unwrap_or(path).to_owned()
+}
+
+fn file_view(repo: &Repo, attachment: &Attachment, step: Option<&str>) -> RunFile {
+    let (file_time, time_source) = if let Some(at) = &attachment.t_min {
+        (at.clone(), "data")
+    } else if let Some(at) = file_modified(&repo.resolve(&attachment.path)) {
+        (at, "modified")
+    } else {
+        (attachment.at.clone(), "added")
+    };
+    RunFile {
+        kind: attachment.kind.as_str().to_owned(),
+        name: file_name(&attachment.path),
+        path: attachment.path.clone(),
+        size: attachment.size,
+        added_at: attachment.at.clone(),
+        post_run: attachment.post_run,
+        step: step.map(str::to_owned),
+        remark: attachment.remark.clone(),
+        remark_at: attachment.remark_at.clone(),
+        missing: !repo.resolve(&attachment.path).is_file(),
+        tags: attachment.tags.clone(),
+        file_time,
+        time_source: time_source.to_owned(),
+    }
+}
+
+pub(crate) fn file_modified(path: &Path) -> Option<String> {
+    let time = fs::metadata(path).ok()?.modified().ok()?;
+    let seconds = time.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    Some(sop_core::timestamp::rfc3339_from_epoch(seconds as i64))
+}
+
+/// Remarks and tags are one append-only event, including edits made after a test ends.
+pub fn annotate_file(
+    repo: &Repo,
+    sop_id: &str,
+    run_id: &str,
+    path: &str,
+    remark: &str,
+    tags: Vec<String>,
+) -> Result<LoadedRun, RunError> {
+    record(
+        repo,
+        sop_id,
+        run_id,
+        &RunEvent::AttachmentRemarkSet {
+            at: String::new(),
+            path: path.to_owned(),
+            remark: remark.to_owned(),
+            tags: Some(tags),
+        },
+    )
+}
+
+fn file_counts(files: Vec<RunFile>, notes: Vec<RunNote>, editable: bool) -> RunFiles {
+    let count = |kind: &str| files.iter().filter(|file| file.kind == kind).count();
+    RunFiles {
+        log_count: count("log"),
+        photo_count: count("photo"),
+        file_count: count("file"),
+        files,
+        notes,
+        editable,
+    }
+}
+
+/// Resolve only a registered file inside this workspace. The caller opens its folder,
+/// not the file itself, so an uploaded script is never executed by the application.
+pub fn attachment_path(
+    repo: &Repo,
+    sop_id: &str,
+    run_id: &str,
+    path: &str,
+) -> Result<PathBuf, RunError> {
+    if !files(repo, sop_id, run_id)?
+        .files
+        .iter()
+        .any(|file| file.path == path)
+    {
+        return Err(RunError::Core(sop_core::RunError::NoAttachment(
+            path.to_owned(),
+        )));
+    }
+    let root = repo.root().canonicalize().map_err(|source| RunError::Io {
+        path: repo.root().to_path_buf(),
+        source,
+    })?;
+    let target = repo
+        .resolve(path)
+        .canonicalize()
+        .map_err(|source| RunError::Io {
+            path: repo.resolve(path),
+            source,
+        })?;
+    if !target.starts_with(root) || !target.is_file() {
+        return Err(RunError::UnsafeFile(path.to_owned()));
+    }
+    Ok(target)
+}
+
 /// Append one event to the run and regenerate the record.
 ///
 /// The event is appended to `events.jsonl` (see [`append_event`]); the rendered
@@ -691,6 +1101,40 @@ fn record_events(
     run_id: &str,
     events: &[RunEvent],
 ) -> Result<LoadedRun, RunError> {
+    let _lock = write_lock(repo, sop_id, run_id)?;
+    record_events_locked(repo, sop_id, run_id, events)
+}
+
+/// Serialize validation, append, and all derived files as one operation. This prevents
+/// a slower writer publishing an older notebook index after a newer writer finished.
+fn write_lock(repo: &Repo, sop_id: &str, run_id: &str) -> Result<fs::File, RunError> {
+    ensure_run_scope(repo, sop_id, run_id)?;
+    let dir = run_dir(repo, sop_id, run_id);
+    if !dir.is_dir() {
+        return Err(RunError::NoRun(sop_id.to_owned(), run_id.to_owned()));
+    }
+    let path = dir.join(".record.lock");
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|source| RunError::Io {
+            path: path.clone(),
+            source,
+        })?;
+    file.lock()
+        .map_err(|source| RunError::Io { path, source })?;
+    Ok(file)
+}
+
+fn record_events_locked(
+    repo: &Repo,
+    sop_id: &str,
+    run_id: &str,
+    events: &[RunEvent],
+) -> Result<LoadedRun, RunError> {
     let loaded = load(repo, sop_id, run_id)?;
     let mut next = loaded.state.clone();
     // The tool's clock is the authority: the renderer sends no timestamp, and any it
@@ -718,6 +1162,17 @@ fn record_events(
     write_record(&reloaded)?;
     if was_ended {
         refresh_committed_record(&reloaded, run_id, pre_len)?;
+    } else {
+        // The manifest reads this file even during a test. Keep notes and file counts
+        // current, rather than leaving discovery stuck at the empty start record.
+        atomic::write(
+            &reloaded.record_file,
+            &run_record_text(&reloaded.state, &reloaded.steps, run_id, None),
+        )
+        .map_err(|error| RunError::Io {
+            path: reloaded.record_file.clone(),
+            source: error.source,
+        })?;
     }
     Ok(reloaded)
 }
@@ -812,6 +1267,7 @@ pub fn attach_kind(
     kind: AttachmentKind,
     source: &Path,
 ) -> Result<sop_core::run::Attachment, RunError> {
+    let _lock = write_lock(repo, sop_id, run_id)?;
     let loaded = load(repo, sop_id, run_id)?;
     let bytes = fs::read(source).map_err(|error| RunError::Io {
         path: source.to_path_buf(),
@@ -854,6 +1310,11 @@ pub fn attach_kind(
             path: dest.clone(),
             source: error,
         })?;
+        // Preserve the source clock for chronological log history. The import time is
+        // separately recorded in AttachmentAdded, and annotations never touch the file.
+        if let Ok(modified) = fs::metadata(source).and_then(|meta| meta.modified()) {
+            let _ = file.set_times(fs::FileTimes::new().set_modified(modified));
+        }
     }
 
     // The data's own time span, when the file carries a parseable time column. Only a log
@@ -885,7 +1346,7 @@ pub fn attach_kind(
     };
     // The event's timestamp is stamped by `record`; read the attachment back from the
     // reloaded state so the returned value agrees with what was written.
-    let reloaded = record(repo, sop_id, run_id, &event)?;
+    let reloaded = record_events_locked(repo, sop_id, run_id, std::slice::from_ref(&event))?;
     let found = match step {
         Some(id) => reloaded
             .state
@@ -934,6 +1395,12 @@ fn same_bytes(path: &Path, bytes: &[u8]) -> bool {
 fn run_file_front(state: &RunState, run_id: &str, seal: Option<&Seal>) -> String {
     let mut out = String::from("---\nkind: run\n");
     out.push_str(&format!("run_id: {}\n", scalar(run_id)));
+    if state.sop.as_deref() == Some(NOTE_SOP) {
+        out.push_str("notebook: true\n");
+    }
+    if let Some(value) = &state.title {
+        out.push_str(&format!("title: {}\n", scalar(value)));
+    }
     if let Some(value) = &state.sop {
         out.push_str(&format!("sop: {value}\n"));
     }
@@ -944,10 +1411,10 @@ fn run_file_front(state: &RunState, run_id: &str, seal: Option<&Seal>) -> String
         out.push_str(&format!("sop_commit: {value}\n"));
     }
     if let Some(value) = &state.operator {
-        out.push_str(&format!("operator: {value}\n"));
+        out.push_str(&format!("operator: {}\n", scalar(value)));
     }
     if let Some(value) = &state.site {
-        out.push_str(&format!("site: {value}\n"));
+        out.push_str(&format!("site: {}\n", scalar(value)));
     }
     if let Some(value) = &state.plan {
         out.push_str(&format!("plan: {}\n", scalar(value)));
@@ -1042,6 +1509,15 @@ fn run_file_front(state: &RunState, run_id: &str, seal: Option<&Seal>) -> String
             }
             out.push_str(&format!("    sha256: {}\n", scalar(&attachment.sha256)));
             out.push_str(&format!("    size: {}\n", attachment.size));
+            if !attachment.remark.is_empty() {
+                out.push_str(&format!("    remark: {}\n", scalar(&attachment.remark)));
+            }
+            if !attachment.tags.is_empty() {
+                out.push_str("    tags:\n");
+                for tag in &attachment.tags {
+                    out.push_str(&format!("      - {}\n", scalar(tag)));
+                }
+            }
             if let Some(min) = &attachment.t_min {
                 out.push_str(&format!("    t_min: {}\n", scalar(min)));
             }
@@ -1103,6 +1579,7 @@ pub fn end(
     status: &str,
     conclusion: Option<(String, String)>,
 ) -> Result<LoadedRun, RunError> {
+    let _lock = write_lock(repo, sop_id, run_id)?;
     let mut events = vec![RunEvent::RunEnded {
         at: now(),
         status: status.to_owned(),
@@ -1114,7 +1591,7 @@ pub fn end(
             summary,
         });
     }
-    let loaded = record_events(repo, sop_id, run_id, &events)?;
+    let loaded = record_events_locked(repo, sop_id, run_id, &events)?;
     // The whole log as it stands now is the sealed prefix: everything the run was ended
     // with. Late additions will be appended beyond it.
     let bytes = fs::metadata(&loaded.events_path)
@@ -1168,6 +1645,9 @@ fn read_seal_fields(record_file: &Path) -> Option<(Option<u64>, String)> {
 /// The seal a run's record should carry when it is re-rendered: the one it already has,
 /// or - for a run that never sealed - the whole log as it stands.
 fn seal_for_record(loaded: &LoadedRun) -> Option<Seal> {
+    if !loaded.state.is_ended() {
+        return None;
+    }
     match read_seal_fields(&loaded.record_file) {
         Some((Some(bytes), sha256)) => Some(Seal { bytes, sha256 }),
         Some((None, sha256)) => {
@@ -1253,7 +1733,7 @@ pub fn drift(repo: &Repo, sop_id: &str, run_id: &str) -> Result<Drift, RunError>
     let loaded = load(repo, sop_id, run_id)?;
     let state = &loaded.state;
     let key = state.sop.clone().unwrap_or_else(|| run_key(repo, sop_id));
-    let current = find_checklist(repo, &key).and_then(|path| repo.load(&path).ok());
+    let current = find_checklist(repo, &key).and_then(|path| repo.load_standalone(&path).ok());
     let (current_sha256, current_version) = match &current {
         Some(loaded) => {
             let resolved = resolve_checklist(repo, loaded);
@@ -1305,6 +1785,7 @@ pub fn delete(repo: &Repo, sop_id: &str, run_id: &str) -> Result<Vec<PathBuf>, R
     if !sop_core::vocab::is_valid_id(run_id) {
         return Err(RunError::BadRunId(run_id.to_owned()));
     }
+    ensure_run_scope(repo, sop_id, run_id)?;
     let present = existing_paths(repo, sop_id, run_id);
     if present.is_empty() {
         return Err(RunError::NoRun(sop_id.to_owned(), run_id.to_owned()));
@@ -1333,9 +1814,9 @@ pub fn delete(repo: &Repo, sop_id: &str, run_id: &str) -> Result<Vec<PathBuf>, R
 pub(crate) fn dir_has_run_records(dir: &Path) -> bool {
     fs::read_dir(dir)
         .map(|entries| {
-            entries.flatten().any(|entry| {
-                entry.path().extension().is_some_and(|ext| ext == "md")
-            })
+            entries
+                .flatten()
+                .any(|entry| entry.path().extension().is_some_and(|ext| ext == "md"))
         })
         .unwrap_or(false)
 }
@@ -1411,7 +1892,7 @@ pub fn all_runs(repo: &Repo) -> Vec<(String, String)> {
 /// upgraded on the next open. Returns how many folders were moved.
 pub fn migrate_runs(repo: &Repo) -> usize {
     let project = crate::project::id(repo);
-    if project.is_empty() {
+    if project.is_empty() || !safe_component(&project) {
         return 0;
     }
     let root = repo.root().join("runs");
@@ -1437,7 +1918,7 @@ pub fn migrate_runs(repo: &Repo) -> usize {
             continue;
         }
         let dst = target.join(name);
-        if let Err(_) = fs::create_dir_all(&target) {
+        if fs::create_dir_all(&target).is_err() {
             continue;
         }
         if dst.exists() {

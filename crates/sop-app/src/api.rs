@@ -16,23 +16,7 @@ pub struct Status {
     pub project_title: Option<String>,
     pub project_id: Option<String>,
     pub institution: Option<String>,
-    pub git: GitInfo,
     pub content: ContentCounts,
-    /// The current validation pass, so the header can show a badge without a second call.
-    pub validation: ValidationCounts,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GitInfo {
-    pub is_repository: bool,
-    pub branch: Option<String>,
-    pub remote: String,
-    pub url: Option<String>,
-    pub url_has_credentials: bool,
-    pub dirty: bool,
-    pub ahead: Option<u64>,
-    pub behind: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -43,14 +27,6 @@ pub struct ContentCounts {
     pub runs: usize,
     pub help: usize,
     pub log_directories: usize,
-}
-
-/// How many problems a full validation pass found.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ValidationCounts {
-    pub errors: usize,
-    pub warnings: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -105,6 +81,7 @@ pub enum ExpectedInput {
 #[serde(rename_all = "camelCase")]
 pub struct RunView {
     pub sop: String,
+    pub title: Option<String>,
     pub run_id: String,
     pub operator: Option<String>,
     pub site: Option<String>,
@@ -261,6 +238,8 @@ pub struct RunAttachmentView {
     pub t_min: Option<String>,
     pub t_max: Option<String>,
     pub row_count: Option<u64>,
+    pub remark: String,
+    pub tags: Vec<String>,
 }
 
 /// A whole step, as the "add step" form sends it.
@@ -337,42 +316,7 @@ impl From<StepPatch> for StepChanges {
     }
 }
 
-/// One attached file, for the History detail drawer.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RunFileView {
-    /// `log` / `photo` / `file`.
-    pub kind: String,
-    pub name: String,
-    pub path: String,
-    pub size: u64,
-    pub added_at: String,
-    pub post_run: bool,
-    /// The step it was attached to, or `None` for a run-level file.
-    pub step: Option<String>,
-}
-
-/// One note, for the History detail drawer.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RunNoteView {
-    pub text: String,
-    pub added_at: String,
-    pub post_run: bool,
-    /// The step it was attached to, or `None` for a run-level note.
-    pub step: Option<String>,
-}
-
-/// A run's files and notes, with a per-kind count the `files` column shows.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RunFiles {
-    pub files: Vec<RunFileView>,
-    pub notes: Vec<RunNoteView>,
-    pub log_count: usize,
-    pub photo_count: usize,
-    pub file_count: usize,
-}
+pub use sop_repo::run::RunFiles;
 
 /// The result of attaching one file: where it landed, or why it did not.
 #[derive(Debug, Serialize)]

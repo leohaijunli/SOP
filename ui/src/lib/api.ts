@@ -14,7 +14,6 @@ import type {
   Manifest,
   ProcedureChoice,
   ProjectView,
-  PushResult,
   RunEventInput,
   RunFiles,
   RunMetaInput,
@@ -25,6 +24,7 @@ import type {
   StepPatch,
   SummaryExportReport,
   TestPlan,
+  WorkingDirectory,
 } from "./types";
 
 const text = (value: unknown): string =>
@@ -62,12 +62,11 @@ export const settingsSet = (key: string, value: string): Promise<SettingRow[]> =
 export const settingsUnset = (key: string): Promise<SettingRow[]> =>
   invoke<SettingRow[]>("settings_unset", { key });
 
-export const openRepository = (path: string): Promise<Status> =>
-  invoke<Status>("open_repository", { repo: path });
+export const workingDirectory = (): Promise<WorkingDirectory> =>
+  invoke<WorkingDirectory>("working_directory");
 
-export const remoteUrl = (): Promise<string | null> => invoke<string | null>("remote_url");
-
-export const remoteSet = (url: string): Promise<string> => invoke<string>("remote_set", { url });
+export const openWorkingDirectory = (path: string): Promise<WorkingDirectory> =>
+  invoke<WorkingDirectory>("open_working_directory", { path });
 
 // ---- project ----------------------------------------------------------------
 
@@ -174,6 +173,27 @@ export const runAttachMany = (
 export const runNoteAdd = (sop: string, runId: string, note: string): Promise<RunFiles> =>
   invoke<RunFiles>("run_note_add", { sop, runId, note });
 
+export const runNoteCreate = (
+  title: string,
+  note: string,
+  operator: string,
+  site: string,
+  meta: RunMetaInput
+): Promise<RunView> => invoke<RunView>("run_note_create", { title, note, operator, site, meta });
+
+export const runFileUpdate = (
+  sop: string, runId: string, path: string, remark: string, tags: string[]
+): Promise<RunFiles> => invoke<RunFiles>("run_file_update", { sop, runId, path, remark, tags });
+
+export const workspaceLogUpdate = (path: string, remark: string, tags: string[]): Promise<void> =>
+  invoke<void>("workspace_log_update", { path, remark, tags });
+
+export const workspaceLogImport = (paths: string[]): Promise<AttachResult[]> =>
+  invoke<AttachResult[]>("workspace_log_import", { paths });
+
+export const openFileFolder = (path: string, sop: string | null, runId: string | null): Promise<string> =>
+  invoke<string>("open_file_folder", { path, sop, runId });
+
 // The files and notes recorded for a run, with per-kind counts.
 export const runFiles = (sop: string, runId: string): Promise<RunFiles> =>
   invoke<RunFiles>("run_files", { sop, runId });
@@ -210,7 +230,7 @@ export const pickFiles = async (kind: AttachmentKind): Promise<string[]> => {
     kind === "photo"
       ? [{ name: "Images", extensions: ["jpg", "jpeg", "png", "heic", "webp", "tif", "tiff"] }]
       : undefined;
-  const picked = await open({ multiple: true, filters });
+  const picked = await open({ title: kind === "log" ? "Add log files (multiple selection)" : "Add photos or attachments (multiple selection)", multiple: true, filters });
   if (!picked) return [];
   return Array.isArray(picked) ? picked : [picked];
 };
@@ -223,13 +243,6 @@ export const pickFilesAny = async (): Promise<string[]> => {
 };
 
 export const testPlans = (): Promise<TestPlan[]> => invoke<TestPlan[]>("test_plans");
-
-// Pull the working copy (main) and the testcase repo (testcases), fast-forward only.
-export const syncPull = (): Promise<string> => invoke<string>("sync_pull");
-
-// Commit + push the testcase repo after a case/plan change.
-export const testcasePush = (message: string): Promise<string> =>
-  invoke<string>("testcase_push", { message });
 
 export const duplicateTestCase = (path: string): Promise<string> =>
   invoke<string>("duplicate_test_case", { path });
@@ -289,7 +302,7 @@ export const runExportPackageDialog = async (
 
 // Pick any directory with the native folder picker. Returns null when the operator cancels.
 export const pickDirectory = async (): Promise<string | null> => {
-  const path = await open({ directory: true, multiple: false });
+  const path = await open({ title: "Choose the working directory containing logs and test plans", directory: true, multiple: false });
   if (!path || Array.isArray(path)) return null;
   return path;
 };
@@ -317,9 +330,6 @@ export const openExternalMdDialog = async (): Promise<ChecklistEntry | null> => 
   const text = await invoke<string | null>("load_external_md", { path });
   return text ? JSON.parse(text) : null;
 };
-
-export const repoPush = (message: string): Promise<PushResult> =>
-  invoke<PushResult>("repo_push", { message });
 
 // ---- helpers ----------------------------------------------------------------
 

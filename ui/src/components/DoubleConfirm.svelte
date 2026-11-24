@@ -8,7 +8,7 @@
   let {
     open,
     message = null,
-    confirmLabel = "Delete",
+  confirmLabel = "Delete",
     onConfirm,
     onCancel,
   }: {
@@ -49,27 +49,27 @@
 <dialog
   bind:this={dialog}
   class:stage2={stage === 2}
-  aria-label={stage === 1 ? "Confirm action" : "Confirm again"}
+  aria-label={stage === 1 ? "Confirm deletion" : "Confirm deletion again"}
   oncancel={(event) => {
     event.preventDefault();
     abort();
   }}
 >
   {#if stage === 1}
-    <h2>Hold on…</h2>
-    <p class="muted">{message ?? "This cannot be undone. Probably. Maybe. Definitely."}</p>
-    <p class="muted">Are you absolutely, positively, no-take-backs sure?</p>
+    <h2>Confirm deletion</h2>
+    <p class="muted">{message ?? "This action cannot be undone."}</p>
+    <p class="muted">Check what will be deleted. Other records will not be affected.</p>
     <div class="actions">
-      <button type="button" class="primary" onclick={proceed}>Yeah, I guess</button>
+      <button type="button" class="primary" onclick={proceed}>Continue</button>
       <button type="button" onclick={abort}>Cancel (Esc)</button>
     </div>
   {:else}
     <h2 class="danger">Really {confirmLabel.toLowerCase()}?</h2>
-    <p class="muted">{message ?? "This cannot be undone. Probably. Maybe. Definitely."}</p>
-    <p class="warn">It's gone forever. No recycle bin. No time machine. No crying.</p>
+    <p class="muted">{message ?? "This action cannot be undone."}</p>
+    <p class="warn">The selected content will be permanently removed, not moved to the recycle bin. Export a backup first if needed.</p>
     <div class="actions">
-      <button type="button" class="danger" onclick={finish}>Yes, delete it all</button>
-      <button type="button" onclick={abort}>Go back (Esc)</button>
+      <button type="button" class="danger" onclick={finish}>Confirm {confirmLabel.toLowerCase()}</button>
+      <button type="button" onclick={abort}>Cancel (Esc)</button>
     </div>
   {/if}
 </dialog>
@@ -87,7 +87,7 @@
   }
   dialog::backdrop { background: var(--overlay); }
   /* Second pass appears somewhere else, so a rehearsed tap in the old spot misses. */
-  dialog.stage2 { transform: translate(26vw, 8vh); }
+  dialog.stage2 { transform: translate(min(5vw, 48px), min(5vh, 32px)); }
   h2 { margin: 0 0 6px; font-size: 16px; color: var(--ink-bright); }
   h2.danger { color: var(--critical); }
   p { margin: 0 0 8px; }

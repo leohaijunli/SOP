@@ -309,7 +309,8 @@ would then collide.
 
 ## 8. Run records (`runs/<sop_id>/<run_id>.md`)
 
-One file per execution. The file is created once and then only appended to.
+One file per execution. The append-only event log is authoritative; the Markdown record
+is regenerated atomically after each event, including while a run is still open.
 
 ````markdown
 ---
@@ -371,9 +372,10 @@ the hash disagree. It is written together with `ended` and `status`, and only on
 
 Events recorded *after* the run ended are appended beyond the sealed prefix and do not
 move it. A log, photo, or other file copied off the instrument after the fact, a note
-written later, and a late verdict (`RunConcluded`) are all allowed then; anything that
+written later, a display-title update (`RunTitleSet`), file remarks/tags
+(`AttachmentRemarkSet`), and a late verdict (`RunConcluded`) are all allowed then; anything that
 would change what the run *did* - a checkbox, a capture, a step status, a new step - is
-refused. A line after the seal that is not one of those three event types is an error,
+refused. A line after the seal that is not one of those allowed event types is an error,
 because a record that grew an unexpected event is not a record anyone should trust.
 
 A record written before prefix sealing carries `events_sha256` but no
@@ -474,10 +476,25 @@ as `weather` and `temp_c`. Values are text, and a hand-written number or boolean
 accepted. They are what lets two runs at the same site be told apart later, so the record
 also restates them in its body for a reader who never opens the front matter.
 
+### 8.3 Lightweight notebook records
+
+A notebook entry uses `kind: run`, `notebook: true`, `sop: test-notes`, an optional
+display `title`, and an empty frozen snapshot. It does not require an existing checklist.
+The title is required when the entry is created; operator, site, instrument and the
+first note may be blank. The existing run ids, events, attachment hashing and end seal
+are reused, so a notebook can be read/exported like other records.
+
+`RunTitleSet` updates only the display title, never the run id or frozen revision.
+`AttachmentRemarkSet` identifies a previously attached file by its exact recorded path,
+sets its `remark`, and optionally sets its `tags`. Omitting `tags` preserves them; an
+empty array clears them. The current values are also rendered in `logs:` front matter
+and a `File remarks` section. These events may be appended after the end without moving
+the seal. Original file bytes are never changed.
+
 ## 9. Log attachments
 
-Logs are attached manually by the operator at the end of a run. The field app does not
-discover them.
+Logs can be added during or after a test. The selected working directory's independent
+`logs/` files are also listed, without requiring a matching run record.
 
 An attachment has a `kind` - `log` (the default), `photo`, or `file` - which decides the
 subdirectory it is filed under inside the run's own directory:
@@ -500,8 +517,8 @@ Flow:
 3. The app computes `sha256` and `size` for each and writes a `logs:` entry into the run
    record, with `kind:` written for a photo or other file (a log, the default, leaves it
    out). The entry's `path` points into the run directory.
-4. The app commits the run record and the files together, so the record and its data
-   are never separated in history.
+4. The app writes the record and files locally. A full workspace export keeps them
+   together; the app does not commit or synchronize a repository.
 
 `kind` is also what the validator reads to know which subdirectory a `logs:[]` path must
 live under; a path outside it is a warning. A record written before `kind` existed has
@@ -517,7 +534,17 @@ run directory became self-contained; `logs[].path` is repository-relative either
 
 `sha256` is what makes a record trustworthy later: it proves the analysed file is the
 one that was collected. See `docs/LOGS.md` for naming, size limits, the per-kind
-directories, and the Git LFS advice for photographs.
+directories, chronological history, remarks, and tags.
+
+Loose logs under the working directory's `logs/` may have subfolders. Their remarks and
+tags live in `.field-sop/log-remarks.json`, keyed by working-directory-relative path.
+This metadata is atomically updated, included in a full workspace export, and never
+written into the raw log. Invalid existing JSON is reported, not silently replaced.
+
+Log history defaults to newest first and may be reversed. Data timestamps are preferred
+for recorded CSV logs; otherwise the file modification time is used and labeled. Import
+time remains a separate field, and imports preserve the source modification time when
+supported. Search covers indexed notes and metadata, not raw log contents.
 
 ## 10. Write-back rules
 

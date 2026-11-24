@@ -1,37 +1,43 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import Header from "./components/Header.svelte";
+  import { onMount, tick } from "svelte";
+  import Header from "./components/AppHeader.svelte";
   import StepsNav from "./components/StepsNav.svelte";
   import Detail from "./components/Detail.svelte";
   import HelpPanel from "./components/HelpPanel.svelte";
-  import SettingsPanel from "./components/SettingsPanel.svelte";
+  import ManagePanel from "./components/ManagePanel.svelte";
   import AuthoringPanel from "./components/AuthoringPanel.svelte";
   import ExecutionView from "./components/ExecutionView.svelte";
-  import HistoryView from "./components/HistoryView.svelte";
+  import RecordsView from "./components/RecordsView.svelte";
   import TestPlansView from "./components/TestPlansView.svelte";
-  import Login from "./components/Login.svelte";
+  import WorkingDirectoryPicker from "./components/WorkingDirectoryPicker.svelte";
   import * as api from "./lib/api";
-  import { getKnownOperators, setOperator, clearOperator, removeOperator } from "./lib/operator";
-  import type { ChecklistEntry, Manifest, Status, TestCase, TestPlan } from "./lib/types";
+  import { getOperator, setOperator, clearOperator } from "./lib/operator";
+  import type { ChecklistEntry, Manifest, Status, TestCase, TestPlan, WorkingDirectory } from "./lib/types";
 
   // Which screen the window is showing.
-  type View = "browse" | "testplans" | "run" | "history" | "settings" | "authoring";
+  type View = "notes" | "logs" | "search" | "browse" | "testplans" | "run" | "settings" | "authoring";
 
   let manifest: Manifest | null = $state(null);
-  // Git and validation state, shown in the header so the operator sees whether the
-  // working copy is committed and whether the content is clean.
   let status: Status | null = $state(null);
   let error: string | null = $state(null);
-  // Sync status: pull/push result shown as a non-intrusive banner.
-  let sync = $state("");
-  let syncBad = $state(false);
+  let notice = $state("");
+  let directory = $state<WorkingDirectory | null>(null);
+  let selectingDirectory = $state(false);
+  let initializing = $state(true);
+  let recordsView = $state<{ focusSearch: () => void; newNote: () => void } | null>(null);
+  let refreshTicket = 0;
+  let pendingOperations = $state(0);
+  const operationChanged = (started: boolean): void => {
+    pendingOperations = Math.max(0, pendingOperations + (started ? 1 : -1));
+  };
+  const chooseDirectory = (): void => { if (pendingOperations === 0) selectingDirectory = true; };
   // Checklists the operator loaded from local markdown files via "Open file" or "Start".
   // They are not part of the repository, so they are merged back in after every manifest
   // refresh and would otherwise be lost whenever the view changes.
   let externalChecklists: ChecklistEntry[] = $state([]);
-  // Land on Test Plans: the morning starts by picking what to run, not by editing content.
-  let view: View = $state("testplans");
-  let helpOpen = $state(true);
+  // Notebook first. Plans and the full SOP workflow are optional management tools.
+  let view: View = $state("notes");
+  let helpOpen = $state(false);
   // Steps are always enabled on the Browse view; there is no toggle for them.
   const showSteps = true;
 
@@ -41,13 +47,7 @@
   let help = $state<string | null>(null);
   let helpQuery = $state("");
   let stepQuery = $state("");
-// The operator signed in on this machine. Starts empty so the sign-in card appears on
-// every launch; signing in sets it and the run view picks it up.
-let currentOperator = $state("");
-  // Names this machine has seen, for the sign-in card. Drawn from the local history so
-  // removing an operator from the list really removes it (run records keep the name, but
-  // do not bring it back onto the card).
-  const knownOperators = $derived(getKnownOperators());
+  let currentOperator = $state(getOperator());
   // A run the Execution view asked to resume: the shell switches the checklist, then the
   // view loads it. Cleared by the view once it has the run.
   let resumeRunId = $state<string | null>(null);
@@ -83,21 +83,16 @@ let currentOperator = $state("");
   const counts = (): string => {
     const m = manifest;
     if (!m) return "";
-    const planCount = m.testplans.length;
-    return `${planCount} test plan(s) \u00b7 ${m.runs.length} run(s) \u00b7 ${m.checklists.length} checklist(s) \u00b7 ${m.help.length} help page(s)`;
+    const logs = m.runs.reduce((count, run) => count + run.log_count, 0) + (m.workspace_files?.length ?? 0);
+    return `${m.runs.length} records · ${logs} logs${m.testplans.length ? ` · ${m.testplans.length} plans` : ""}`;
   };
 
   const openView = (next: string): void => {
     if (
-      next === "browse" || next === "testplans" || next === "run" ||
-      next === "history" || next === "settings" || next === "authoring"
+      next === "notes" || next === "logs" || next === "search" || next === "browse" || next === "testplans" || next === "run" ||
+      next === "settings" || next === "authoring"
     ) {
       view = next as View;
-    }
-    // Refresh the manifest whenever the operator moves to a screen that reads it, so the
-    // counts in the header and the History table match the working copy on disk.
-    if (next === "browse" || next === "testplans" || next === "run" || next === "history") {
-      void refreshRuns();
     }
   };
 
@@ -123,7 +118,7 @@ let currentOperator = $state("");
       checklist = manifest.checklists.findIndex((c) => api.text(c.sop_id) === api.text(entry.sop_id));
       view = "run";
     } catch (e) {
-      console.warn("start case:", e);
+      notice = `Could not start the test: ${e}`;
     }
   };
 
@@ -168,13 +163,18 @@ let currentOperator = $state("");
     void startCase(planRun.cases[next].path, { ...planRun, index: next });
   };
 
-  const refresh = async (): Promise<void> => {
+  const refresh = async (reloadExternal = false): Promise<void> => {
+    const ticket = ++refreshTicket;
+    const currentPath = directory?.path;
+    if (!currentPath) return;
     try {
-      const base = await api.manifest();
+      const activeSop = api.text(manifest?.checklists[checklist]?.sop_id);
+      const [base, freshStatus] = await Promise.all([api.manifest(), api.status()]);
       // Re-read external files from disk so edits written to them by the Authoring page
       // show up in Browse/Run; otherwise the in-memory copy stays stale.
       const reloaded: ChecklistEntry[] = [];
       for (const entry of externalChecklists) {
+        if (!reloadExternal) { reloaded.push(entry); continue; }
         try {
           const fresh = await api.loadExternalMd(entry.path);
           if (fresh) reloaded.push(fresh);
@@ -183,6 +183,7 @@ let currentOperator = $state("");
           reloaded.push(entry);
         }
       }
+      if (ticket !== refreshTicket || currentPath !== directory?.path) return;
       externalChecklists = reloaded;
       manifest = {
         ...base,
@@ -193,10 +194,13 @@ let currentOperator = $state("");
           ...externalChecklists,
         ],
       };
-      status = await api.status();
+      const activeIndex = manifest.checklists.findIndex((entry) => api.text(entry.sop_id) === activeSop);
+      checklist = activeIndex >= 0 ? activeIndex : 0;
+      step = Math.min(step, Math.max(0, (manifest.checklists[checklist]?.steps.length ?? 0) - 1));
+      status = freshStatus;
       error = null;
     } catch (e) {
-      error = String(e);
+      if (ticket === refreshTicket) error = String(e);
     }
   };
 
@@ -209,8 +213,7 @@ let currentOperator = $state("");
   const resumeRun = (sopId: string, runId: string): void => {
     const index = (manifest?.checklists ?? []).findIndex((c) => api.text(c.sop_id) === sopId);
     if (index < 0) {
-      sync = `cannot resume ${runId}: checklist ${sopId} is not loaded. Open it with "Open file" first.`;
-      syncBad = true;
+      notice = `Cannot resume ${runId}: checklist ${sopId} is not loaded. Open its Markdown file in Manage → Run Checklist first.`;
       return;
     }
     checklist = index;
@@ -220,31 +223,27 @@ let currentOperator = $state("");
     view = "run";
   };
 
-  // Pull the working copy and the testcase repo, and report what happened. Called on
-  // start and after edits so all machines stay in step; the result is shown as a banner.
-  const doSync = async (): Promise<void> => {
-    // A field laptop is often offline. `git pull` at an unreachable remote sits in DNS
-    // and TCP until it times out, so skip it outright when the system already knows there
-    // is no connection; the git command has its own bound as a backstop when this is
-    // wrong. Sync stays one tap away for when the network comes back.
-    if (!navigator.onLine) {
-      sync = "offline - skipped sync";
-      syncBad = false;
-      return;
-    }
-    try {
-      const report = await api.syncPull();
-      sync = report;
-      syncBad = report.toLowerCase().includes("error") || report.includes("diverged");
-    } catch (e) {
-      sync = String(e);
-      syncBad = true;
-    }
+  const openDirectory = async (path: string): Promise<void> => {
+    if (pendingOperations > 0) throw new Error("Finish saving or adding files before switching working directories.");
+    const opened = await api.openWorkingDirectory(path);
+    refreshTicket++;
+    directory = opened;
+    status = null;
+    manifest = null; externalChecklists = []; planRun = null; resumeRunId = null;
+    checklist = 0; step = 0; view = "notes"; error = null; notice = "";
+    await refresh();
+    selectingDirectory = false;
   };
 
   onMount(() => {
-    void refresh();
-    void doSync();
+    void (async () => {
+      try {
+        directory = await api.workingDirectory();
+        if (directory.path) await refresh();
+        else selectingDirectory = true;
+      } catch (e) { error = String(e); selectingDirectory = true; }
+      finally { initializing = false; }
+    })();
   });
 
   // Deep links and keyboard shortcuts mirror the preview server.
@@ -255,7 +254,7 @@ let currentOperator = $state("");
       const index = manifest.checklists.findIndex((c) => api.text(c.sop_id) === sopId);
       if (index >= 0) checklist = index;
     }
-    const steps = manifest.checklists[checklist].steps;
+    const steps = manifest.checklists[checklist]?.steps ?? [];
     if (stepRef !== undefined && stepRef !== "") {
       const byId = steps.findIndex((candidate) => api.text(candidate.id) === stepRef);
       const idx = Number(stepRef);
@@ -268,6 +267,7 @@ let currentOperator = $state("");
   const writeHash = (): void => {
     if (!manifest) return;
     const c = manifest.checklists[checklist];
+    if (!c) return;
     const parts = [api.text(c.sop_id), String(step)];
     if (help) parts.push(help);
     history.replaceState(null, "", `#${parts.join("/")}`);
@@ -284,66 +284,61 @@ let currentOperator = $state("");
   });
 
   const onKey = (event: KeyboardEvent): void => {
+    if (selectingDirectory || document.querySelector("dialog[open]")) return;
+    const command = event.ctrlKey || event.metaKey;
+    if (command && (event.key.toLowerCase() === "k" || event.key.toLowerCase() === "n")) {
+      event.preventDefault();
+      const creating = event.key.toLowerCase() === "n";
+      view = creating ? "notes" : "search";
+      void tick().then(() => creating ? recordsView?.newNote() : recordsView?.focusSearch());
+      return;
+    }
     if ((event.target as HTMLElement).matches("input, select, textarea")) {
       if (event.key === "Escape") (event.target as HTMLElement).blur();
       return;
     }
     const steps = manifest?.checklists[checklist]?.steps ?? [];
-    if (event.key === "F1") { event.preventDefault(); helpOpen = !helpOpen; }
-    else if (event.key === "/") { event.preventDefault(); helpOpen = true; }
+    if (event.key === "F1" && (view === "browse" || view === "run")) { event.preventDefault(); helpOpen = !helpOpen; }
+    else if (event.key === "/") { event.preventDefault(); view = "search"; void tick().then(() => recordsView?.focusSearch()); }
     else if (view !== "browse") { /* the active view handles its own keys */ }
     else if (event.key === "j" && step < steps.length - 1) { step++; }
     else if (event.key === "k" && step > 0) { step--; }
   };
 
-  const handleLogin = (name: string): void => {
-    setOperator(name);
-    currentOperator = name;
-  };
-
-  const switchOperator = (): void => {
-    clearOperator();
-    currentOperator = "";
-  };
-
-  const handleRemoveOperator = (name: string): void => {
-    removeOperator(name);
-    if (currentOperator === name) currentOperator = "";
+  const updateOperator = (name: string): void => {
+    currentOperator = name.trim();
+    if (currentOperator) setOperator(currentOperator);
+    else clearOperator();
   };
 </script>
 
 <svelte:window onkeydown={onKey} />
 
-{#if error}
-  <main class="fatal">
-    <p class="err">Could not load the manifest: {error}</p>
-  </main>
-{:else}
   <Header
     {counts}
-    {status}
     view={view}
     onView={openView}
     title={manifest?.project?.title ?? null}
-    projectId={manifest?.project?.project_id ?? null}
+    workingCopy={directory?.path ?? ""}
     {helpOpen}
     onToggleHelp={() => (helpOpen = !helpOpen)}
     operator={currentOperator}
-    onSwitchOperator={switchOperator}
+    directoryLocked={pendingOperations > 0}
+    onDirectory={chooseDirectory}
   />
 
-  {#if sync}
-    <div class:syncbad={syncBad} class="syncbar">
-      <span>{sync}</span>
-      <button onclick={() => void doSync()} title="Sync now">Sync</button>
-    </div>
-  {/if}
+  {#if error}<div class="app-message err" role="alert"><span>Could not read the working directory: {error}</span><button onclick={() => void refresh()}>Retry</button><button onclick={() => selectingDirectory = true}>Choose directory</button></div>{/if}
+  {#if notice}<div class="app-message" role="status"><span>{notice}</span><button onclick={() => notice = ""}>Dismiss</button></div>{/if}
 
   <main
     class:with-steps={showSteps && view === "browse"}
     class:with-help={helpOpen && (view === "browse" || view === "run")}
   >
-    {#if view === "browse"}
+    {#if initializing || !directory?.path}
+      <article class="setup"><h1>{initializing ? "Loading working directory…" : "Choose a working directory"}</h1><p class="muted">Select the folder containing your logs and test plans to begin.</p>{#if !initializing}<button class="primary" onclick={() => selectingDirectory = true}>Choose working directory…</button>{/if}</article>
+    {:else if view === "notes" || view === "logs" || view === "search"}
+      {#key directory.path}<RecordsView bind:this={recordsView} {manifest} workingCopy={directory.path} mode={view} signedInOperator={currentOperator} onMode={openView} onChanged={refreshRuns} onResumeRun={resumeRun} onBusy={operationChanged} />{/key}
+    {:else if view === "browse"}
       {#if showSteps}
         <StepsNav
           manifest={manifest}
@@ -364,7 +359,7 @@ let currentOperator = $state("");
         {manifest}
         onStartCase={startPlanCase}
         onStartPlan={startPlan}
-        onChanged={() => void refresh()}
+        onChanged={refreshRuns}
       />
     {:else if view === "run"}
       <ExecutionView
@@ -381,24 +376,16 @@ let currentOperator = $state("");
       {#if helpOpen}
         <HelpPanel manifest={manifest} {help} {helpQuery} onHelp={(h) => (help = h)} onQuery={(q) => (helpQuery = q)} />
       {/if}
-    {:else if view === "history"}
-      <HistoryView {manifest} workingCopy={status?.workingCopy ?? null} onChanged={() => void refreshRuns()} />
     {:else if view === "settings"}
-      <SettingsPanel />
+      <ManagePanel {manifest} workingCopy={status?.workingCopy ?? directory.path} operator={currentOperator} onOperator={updateOperator} onDirectory={chooseDirectory} onChanged={refreshRuns} />
     {:else}
-      <AuthoringPanel manifest={manifest} {checklist} onDone={() => { void refresh(); view = "browse"; }} />
+      <AuthoringPanel manifest={manifest} {checklist} onDone={() => { void refresh(true); view = "browse"; }} />
     {/if}
   </main>
-  {#if !currentOperator}
-    <Login {knownOperators} onLogin={handleLogin} onRemove={handleRemoveOperator} />
-  {/if}
-{/if}
+  <WorkingDirectoryPicker open={selectingDirectory} {directory} onSelect={openDirectory} onCancel={() => selectingDirectory = false} />
 <style>
-  .syncbar {
-    display: flex; align-items: center; gap: 8px; padding: 4px 16px;
-    background: var(--quote); border-bottom: 1px solid var(--line);
-    font-size: 12px; color: var(--muted);
-  }
-  .syncbar.syncbad { color: var(--critical); }
-  .syncbar button { font-size: 12px; margin-left: auto; }
+  .app-message { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 20px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 12px; }
+  .app-message span { flex: 1; overflow-wrap: anywhere; }
+  .app-message button { font-size: 12px; }
+  .setup { padding: 32px; }
 </style>

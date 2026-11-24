@@ -35,6 +35,10 @@ pub enum ExportError {
     BadLabel(String),
     #[error("{0}")]
     Summary(String),
+    #[error(
+        "export destination cannot be inside the working directory's logs/, runs/, testplan/, or .field-sop/ folders"
+    )]
+    UnsafeDestination,
 }
 
 /// What an export produced: where it landed and what it holds.
@@ -84,11 +88,27 @@ pub fn export_package(
         return Err(ExportError::BadLabel(label.to_owned()));
     }
     fs::create_dir_all(dest).map_err(|source| io(dest, source))?;
-    let target = unique_target(dest, label);
-    let partial = dest.join(format!("export_{label}.partial"));
-    if partial.exists() {
-        fs::remove_dir_all(&partial).map_err(|source| io(&partial, source))?;
+    let root = repo
+        .root()
+        .canonicalize()
+        .map_err(|source| io(repo.root(), source))?;
+    let resolved_dest = dest.canonicalize().map_err(|source| io(dest, source))?;
+    if ["logs", "runs", "testplan", ".field-sop"]
+        .iter()
+        .any(|folder| resolved_dest.starts_with(root.join(folder)))
+    {
+        return Err(ExportError::UnsafeDestination);
     }
+    let target = unique_target(dest, label);
+    let serial = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|time| time.as_nanos())
+        .unwrap_or(0);
+    let partial = dest.join(format!(
+        "export_{label}-{}-{serial}.partial",
+        std::process::id()
+    ));
+    fs::create_dir(&partial).map_err(|source| io(&partial, source))?;
 
     let mut report = ExportReport {
         dir: target,
@@ -130,20 +150,28 @@ fn fill(
 
     let listed: Vec<(String, String)> = match runs {
         Some(list) => list.to_vec(),
-        None => crate::run::all_runs(repo),
+        None => {
+            let source = repo.resolve("runs");
+            if source.is_dir() {
+                copy_tree(&source, &partial.join("runs"), report)?;
+            }
+            report.runs = crate::run::all_runs(repo).len();
+            Vec::new()
+        }
     };
     for (sop, run_id) in listed {
-        if !sop_core::vocab::is_valid_id(&sop) || !sop_core::vocab::is_valid_id(&run_id) {
+        if !sop_core::vocab::is_valid_id(&sop)
+            || !sop_core::vocab::is_valid_id(&run_id)
+            || crate::run::ensure_run_scope(repo, &sop, &run_id).is_err()
+        {
             report.failed.push(format!("{sop}/{run_id}"));
             continue;
         }
-        let out_runs = partial
-            .join("runs")
-            .join(crate::run::run_subdir(repo, &sop));
+        let record_src = crate::run::committed_record_file(repo, &sop, &run_id);
+        let dir_src = crate::run::run_dir(repo, &sop, &run_id);
+        let source_parent = record_src.parent().unwrap_or(repo.root());
+        let out_runs = partial.join(repo.relpath(source_parent));
         fs::create_dir_all(&out_runs).map_err(|source| io(&out_runs, source))?;
-
-        let record_src = repo.resolve(&format!("runs/{}/{run_id}.md", crate::run::run_subdir(repo, &sop)));
-        let dir_src = repo.resolve(&format!("runs/{}/{run_id}", crate::run::run_subdir(repo, &sop)));
         let mut found = false;
         if record_src.is_file() {
             copy_file(&record_src, &out_runs.join(format!("{run_id}.md")), report)?;
@@ -159,6 +187,29 @@ fn fill(
             report.failed.push(format!("{sop}/{run_id}"));
         }
     }
+    // A full workspace export also carries unassociated logs and their tags/remarks,
+    // as well as the local test plans. A selected-run export stays deliberately narrow.
+    if runs.is_none() {
+        for folder in ["logs", "testplan"] {
+            let source = repo.resolve(folder);
+            if source.is_dir() {
+                copy_tree(&source, &partial.join(folder), report)?;
+            }
+        }
+        for relative in [
+            sop_core::vocab::PROJECT_FILE,
+            crate::workspace::REMARKS_FILE,
+        ] {
+            let source = repo.resolve(relative);
+            if source.is_file() {
+                let target = partial.join(relative);
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent).map_err(|source| io(parent, source))?;
+                }
+                copy_file(&source, &target, report)?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -169,6 +220,11 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ExportError> {
 /// Copy one regular file and check it arrived whole.
 fn copy_file(from: &Path, to: &Path, report: &mut ExportReport) -> Result<(), ExportError> {
     fs::copy(from, to).map_err(|source| io(from, source))?;
+    if let Ok(modified) = fs::metadata(from).and_then(|meta| meta.modified())
+        && let Ok(file) = fs::OpenOptions::new().write(true).open(to)
+    {
+        let _ = file.set_times(fs::FileTimes::new().set_modified(modified));
+    }
     let source_len = fs::metadata(from).map_err(|source| io(from, source))?.len();
     let copied_len = fs::metadata(to).map_err(|source| io(to, source))?.len();
     if source_len != copied_len {
@@ -187,6 +243,14 @@ fn copy_file(from: &Path, to: &Path, report: &mut ExportReport) -> Result<(), Ex
 /// Copy a directory tree, creating directories as needed. Symbolic links and special
 /// files are skipped rather than followed, so an export cannot leave the run it names.
 fn copy_tree(from: &Path, to: &Path, report: &mut ExportReport) -> Result<(), ExportError> {
+    if fs::symlink_metadata(from)
+        .map_err(|source| io(from, source))?
+        .file_type()
+        .is_symlink()
+    {
+        report.skipped.push(from.display().to_string());
+        return Ok(());
+    }
     fs::create_dir_all(to).map_err(|source| io(to, source))?;
     for entry in fs::read_dir(from).map_err(|source| io(from, source))? {
         let entry = entry.map_err(|source| io(from, source))?;

@@ -3,3 +3,6 @@
 *.json text eol=lf
 *.csv text eol=lf
 .gitattributes text eol=lf
+
+# Generated bundles contain literal whitespace strings. Keep those bytes intact.
+ui/dist/assets/*.js whitespace=-blank-at-eol

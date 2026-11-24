@@ -152,16 +152,20 @@ fn a_resolved_checklist_has_steps_and_no_unresolved_includes() {
 
 #[test]
 fn every_run_record_points_at_a_known_checklist_directory() {
-    let manifest = manifest::build(&repo());
+    let repo = repo();
+    let manifest = manifest::build(&repo);
+    let project = sop_repo::project::id(&repo);
     for run in &manifest.runs {
         let sop = run
             .sop
             .as_ref()
             .and_then(|s| s.as_str())
             .unwrap_or_default();
+        let flat = format!("runs/{sop}/");
+        let nested = format!("runs/{project}/{sop}/");
         assert!(
-            run.path.starts_with(&format!("runs/uvic-geomag-survey/{sop}/")),
-            "{} is not under runs/uvic-geomag-survey/{sop}/",
+            run.path.starts_with(&flat) || (!project.is_empty() && run.path.starts_with(&nested)),
+            "{} is not filed under its checklist in the selected workspace",
             run.path
         );
     }

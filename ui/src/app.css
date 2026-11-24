@@ -132,6 +132,8 @@ button:hover { border-color: var(--accent); background: var(--selection); }
 button.primary:hover { background: var(--accent); filter: brightness(1.06); }
 button:disabled { opacity: .45; cursor: not-allowed; background: none; }
 
+.tag-chip { display: inline-block; font-size: 11px; padding: 1px 7px; margin: 0 4px 4px 0; border: 1px solid var(--line); border-radius: 999px; background: var(--selection); color: var(--accent); overflow-wrap: anywhere; }
+
 /* Placeholder text, selected text, and the scrollbar follow the theme instead of the
    browser's defaults, so a light or dark palette does not fight a white placeholder or a
    default blue selection highlight. */

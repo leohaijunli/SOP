@@ -9,6 +9,9 @@
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test:devices": "node scripts/devices-test.mjs",
+    "test:records": "node scripts/records-test.mjs",
+    "test:api": "node scripts/api-test.mjs",
+    "test:language": "node scripts/language-test.mjs",
     "preview": "vite preview"
   },
   "devDependencies": {

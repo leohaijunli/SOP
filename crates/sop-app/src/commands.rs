@@ -6,7 +6,7 @@
 //! when the answer is no.
 //!
 //! Every command is `#[tauri::command(async)]`. Tauri runs a synchronous command on the
-//! window's main thread, so a slow one - a `git pull` with no network, a directory walk
+//! window's main thread, so a slow one - a directory walk
 //! over a big repository, a copy of a large attachment - freezes the window while it runs.
 //! The `async` flag moves the same body onto Tauri's blocking thread pool, which is the
 //! `spawn_blocking` this code would otherwise have to spell out by hand. The functions
@@ -16,14 +16,14 @@ use std::path::{Path, PathBuf};
 
 use sop_core::RunEvent;
 use sop_core::authoring::{ItemRef, Move};
-use sop_repo::{Repo, authoring, git, manifest, project, run, validate};
+use sop_repo::{Repo, authoring, manifest, project, run, validate, workspace};
 use tauri::State;
 
 use crate::api::{
-    AttachResult, CaptureInput, ChecklistItemView, ContentCounts, GitInfo, ProjectField,
-    ProjectView, RunAddedStepView, RunAttachmentView, RunCaptureView, RunClockView, RunFileView,
-    RunFiles, RunMarkerView, RunMetaInput, RunNoteView, RunStepView, RunView, SensorView,
-    SettingRow, Status, StepInput, StepPatch, SummaryExportReport, ValidationCounts,
+    AttachResult, CaptureInput, ChecklistItemView, ContentCounts, ProjectField, ProjectView,
+    RunAddedStepView, RunAttachmentView, RunCaptureView, RunClockView, RunFiles, RunMarkerView,
+    RunMetaInput, RunStepView, RunView, SensorView, SettingRow, Status, StepInput, StepPatch,
+    SummaryExportReport,
 };
 use crate::state::AppState;
 
@@ -40,48 +40,15 @@ pub fn manifest_json(state: State<'_, AppState>) -> Reply<String> {
 /// The test plans and their cases, from the `testplan/` tree of the testcase repository.
 #[tauri::command(async)]
 pub fn test_plans(state: State<'_, AppState>) -> Reply<Vec<sop_repo::testplan::TestPlan>> {
-    let repo = Repo::open(state.testcase_repo_root()?);
+    let repo = state.repo()?;
     Ok(sop_repo::testplan::plans(&repo))
-}
-
-/// Pull the working copy and the testcase repository, fast-forward only, and report.
-#[tauri::command(async)]
-pub fn sync_pull(state: State<'_, AppState>) -> Reply<String> {
-    let mut lines: Vec<String> = Vec::new();
-
-    let work_root = state.root()?;
-    let work_remote = state.settings()?.remote;
-    match git::pull(&work_root, &work_remote) {
-        Ok(log) => lines.push(format!("working copy: {}", log.join("; "))),
-        Err(error) => lines.push(format!("working copy: {error}")),
-    }
-
-    let tc_root = state.testcase_repo_root()?;
-    let tc_remote = state.settings()?.remote;
-    if tc_root != work_root {
-        match git::pull(&tc_root, &tc_remote) {
-            Ok(log) => lines.push(format!("test cases: {}", log.join("; "))),
-            Err(error) => lines.push(format!("test cases: {error}")),
-        }
-    }
-
-    Ok(lines.join("\n"))
-}
-
-/// Commit and push the testcase repository after the operator changed a case or plan.
-#[tauri::command(async)]
-pub fn testcase_push(message: String, state: State<'_, AppState>) -> Reply<String> {
-    let root = state.testcase_repo_root()?;
-    let remote = state.settings()?.remote;
-    let report = git::commit_and_push(&root, &remote, &message).map_err(text)?;
-    Ok(report.log.join("; "))
 }
 
 /// Duplicate a test case (a plan folder's md) so a repeat or variant experiment has its
 /// own case. The copy gets a new id and title from its new filename.
 #[tauri::command(async)]
 pub fn duplicate_test_case(path: String, state: State<'_, AppState>) -> Reply<String> {
-    let repo = Repo::open(state.testcase_repo_root()?);
+    let repo = state.repo()?;
     let src = resolve_file(&repo, &path)?;
     if !src.is_file() {
         return Err(format!("{path}: no such test case"));
@@ -119,7 +86,7 @@ pub fn duplicate_test_case(path: String, state: State<'_, AppState>) -> Reply<St
 /// Delete a test case (remove its md from the plan folder).
 #[tauri::command(async)]
 pub fn delete_test_case(path: String, state: State<'_, AppState>) -> Reply<()> {
-    let repo = Repo::open(state.testcase_repo_root()?);
+    let repo = state.repo()?;
     let file = resolve_file(&repo, &path)?;
     std::fs::remove_file(&file).map_err(|error| format!("{}: {error}", file.display()))?;
     Ok(())
@@ -133,7 +100,7 @@ pub fn import_test_case(
     source: String,
     state: State<'_, AppState>,
 ) -> Reply<String> {
-    let repo = Repo::open(state.testcase_repo_root()?);
+    let repo = state.repo()?;
     let plan_dir = resolve_file(&repo, &plan_path)?;
     if !plan_dir.is_dir() {
         return Err(format!("{plan_path}: no such plan folder"));
@@ -171,7 +138,17 @@ pub fn import_test_case(
 /// Create a new test plan: a folder under `testplan/` with a `plan.md` carrying its title.
 #[tauri::command(async)]
 pub fn create_test_plan(name: String, title: String, state: State<'_, AppState>) -> Reply<String> {
-    let name = name.trim().to_lowercase();
+    let name = if name.trim().is_empty() {
+        format!(
+            "plan-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|time| time.as_nanos())
+                .unwrap_or(0)
+        )
+    } else {
+        name.trim().to_lowercase()
+    };
     if !sop_core::vocab::is_valid_id(&name) {
         return Err("plan name must be a lowercase id with hyphens".to_owned());
     }
@@ -204,7 +181,7 @@ pub fn create_test_plan(name: String, title: String, state: State<'_, AppState>)
 #[tauri::command(async)]
 pub fn run_summary(out: String, state: State<'_, AppState>) -> Reply<String> {
     let repo = state.repo()?;
-    let testcases = Repo::open(state.testcase_repo_root()?);
+    let testcases = state.repo()?;
     let meta = sop_repo::export::repo_meta(&repo, local_display(&sop_core::now_utc_rfc3339()));
     let text = sop_repo::summary::markdown(&repo, &testcases, &|time| local_display(time), &meta);
     let path = PathBuf::from(&out);
@@ -230,7 +207,7 @@ pub fn run_export_package(
     state: State<'_, AppState>,
 ) -> Reply<SummaryExportReport> {
     let repo = state.repo()?;
-    let testcases = Repo::open(state.testcase_repo_root()?);
+    let testcases = state.repo()?;
     let dest = dest.trim();
     if dest.is_empty() {
         return Err("no destination folder was chosen".to_owned());
@@ -508,34 +485,17 @@ pub fn config_save(json: String, state: State<'_, AppState>) -> Reply<String> {
 }
 
 #[tauri::command(async)]
-pub fn open_repository(repo: String, state: State<'_, AppState>) -> Reply<Status> {
-    state.open(&repo)?;
-    build_status(&state)
+pub fn working_directory(state: State<'_, AppState>) -> Reply<crate::state::WorkingDirectory> {
+    state.working_directory()
 }
 
 #[tauri::command(async)]
-pub fn remote_url(state: State<'_, AppState>) -> Reply<Option<String>> {
-    let repo = state.repo()?;
-    let settings = state.settings()?;
-    Ok(git::state(repo.root(), &settings.remote).url)
-}
-
-#[tauri::command(async)]
-pub fn remote_set(url: String, state: State<'_, AppState>) -> Reply<String> {
-    let repo = state.repo()?;
-    let settings = state.settings()?;
-    let url = url.trim();
-    if url.is_empty() {
-        return Err("the URL is empty".to_owned());
-    }
-    if !git::state(repo.root(), &settings.remote).is_repository {
-        return Err(format!(
-            "{} is not a git working copy; run `git init` there first",
-            repo.root().display()
-        ));
-    }
-    git::set_remote_url(repo.root(), &settings.remote, url).map_err(text)?;
-    Ok(url.to_owned())
+pub fn open_working_directory(
+    path: String,
+    state: State<'_, AppState>,
+) -> Reply<crate::state::WorkingDirectory> {
+    state.open(&path)?;
+    state.working_directory()
 }
 
 // ------------------------------------------------------------------- project
@@ -645,6 +605,43 @@ pub fn include_remove(file: String, target: String, state: State<'_, AppState>) 
 }
 
 // ------------------------------------------------------------------ running
+
+/// A quick notebook entry: a generated id, a title, and optional context. It does not
+/// require a test plan, a checklist, a sign-in, or a git repository.
+#[tauri::command(async)]
+pub fn run_note_create(
+    title: String,
+    note: String,
+    operator: String,
+    site: String,
+    meta: Option<RunMetaInput>,
+    state: State<'_, AppState>,
+) -> Reply<RunView> {
+    let repo = state.repo()?;
+    let input = meta.unwrap_or_default();
+    let sensor = sop_core::run::SensorIdentity {
+        model: input.sensor_model.unwrap_or_default().trim().to_owned(),
+        serial: input.sensor_serial.unwrap_or_default().trim().to_owned(),
+        firmware: input.sensor_firmware.unwrap_or_default().trim().to_owned(),
+    };
+    let meta = run::RunMeta {
+        sensor: (!sensor.is_empty()).then_some(sensor),
+        hardware: input.hardware,
+        conditions: input.conditions,
+        ..run::RunMeta::default()
+    };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|time| time.subsec_nanos())
+        .unwrap_or(0);
+    let run_id = format!(
+        "note-{}-{nanos:09}",
+        chrono::Local::now().format("%Y-%m-%d-%H%M%S")
+    );
+    let loaded =
+        run::create_note(&repo, &run_id, &title, &operator, &site, &note, &meta).map_err(text)?;
+    Ok(build_run_view(&loaded, &run_id))
+}
 
 #[tauri::command(async)]
 pub fn run_start(
@@ -925,6 +922,82 @@ pub fn run_files(sop: String, run_id: String, state: State<'_, AppState>) -> Rep
     build_run_files(&repo, &sop, &run_id)
 }
 
+#[tauri::command(async)]
+pub fn run_file_update(
+    sop: String,
+    run_id: String,
+    path: String,
+    remark: String,
+    tags: Vec<String>,
+    state: State<'_, AppState>,
+) -> Reply<RunFiles> {
+    let repo = state.repo()?;
+    require_id(&sop, "checklist")?;
+    require_id(&run_id, "run")?;
+    run::annotate_file(&repo, &sop, &run_id, &path, &remark, tags).map_err(text)?;
+    build_run_files(&repo, &sop, &run_id)
+}
+
+#[tauri::command(async)]
+pub fn workspace_log_update(
+    path: String,
+    remark: String,
+    tags: Vec<String>,
+    state: State<'_, AppState>,
+) -> Reply<()> {
+    state.annotate_log(&path, &remark, &tags)
+}
+
+#[tauri::command(async)]
+pub fn workspace_log_import(
+    paths: Vec<String>,
+    state: State<'_, AppState>,
+) -> Reply<Vec<AttachResult>> {
+    let repo = state.repo()?;
+    Ok(paths
+        .into_iter()
+        .map(
+            |source| match workspace::import_log(&repo, Path::new(&source)) {
+                Ok(path) => AttachResult {
+                    source,
+                    path: Some(path),
+                    error: None,
+                },
+                Err(error) => AttachResult {
+                    source,
+                    path: None,
+                    error: Some(error.to_string()),
+                },
+            },
+        )
+        .collect())
+}
+
+/// Open only a registered file's containing directory, never execute an uploaded file.
+#[tauri::command(async)]
+pub fn open_file_folder(
+    path: String,
+    sop: Option<String>,
+    run_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Reply<String> {
+    let repo = state.repo()?;
+    let file = match (sop, run_id) {
+        (Some(sop), Some(run_id)) => {
+            require_id(&sop, "checklist")?;
+            require_id(&run_id, "run")?;
+            run::attachment_path(&repo, &sop, &run_id, &path).map_err(text)?
+        }
+        (None, None) => workspace::log_path(&repo, &path).map_err(text)?,
+        _ => return Err("a recorded file needs both a checklist and a run id".to_owned()),
+    };
+    let folder = file
+        .parent()
+        .ok_or_else(|| "the file has no parent directory".to_owned())?;
+    open_in_file_manager(folder)?;
+    Ok(folder.display().to_string())
+}
+
 /// Open the folder a run's material lives in, in the desktop's file manager.
 ///
 /// The path is built here from the two ids, never passed in, so the window cannot ask to
@@ -936,17 +1009,17 @@ pub fn open_run_folder(sop: String, run_id: String, state: State<'_, AppState>) 
     let repo = state.repo()?;
     require_id(&sop, "checklist")?;
     require_id(&run_id, "run")?;
-    let run_dir = repo.resolve(&format!("runs/{sop}/{run_id}"));
-    let target = if run_dir.is_dir() {
-        run_dir
-    } else {
-        let parent = repo.resolve(&format!("runs/{sop}"));
-        if parent.is_dir() {
-            parent
-        } else {
-            repo.root().to_path_buf()
-        }
-    };
+    let paths = run::existing_paths(&repo, &sop, &run_id);
+    let target = paths
+        .iter()
+        .find(|path| path.is_dir())
+        .cloned()
+        .or_else(|| {
+            paths
+                .first()
+                .and_then(|path| path.parent().map(Path::to_path_buf))
+        })
+        .ok_or_else(|| format!("record '{run_id}' does not exist"))?;
     open_in_file_manager(&target)?;
     Ok(target.display().to_string())
 }
@@ -1000,59 +1073,7 @@ fn local_label(now: &str) -> String {
 
 /// Build the file/note list and counts the drawer renders.
 fn build_run_files(repo: &Repo, sop: &str, run_id: &str) -> Reply<RunFiles> {
-    let loaded = run::load(repo, sop, run_id).map_err(text)?;
-    let state = &loaded.state;
-    let mut files: Vec<RunFileView> = Vec::new();
-    let mut notes: Vec<RunNoteView> = Vec::new();
-    let mut push_attachment = |step: Option<&str>, attachment: &sop_core::run::Attachment| {
-        let name = std::path::Path::new(&attachment.path)
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| attachment.path.clone());
-        files.push(RunFileView {
-            kind: attachment.kind.as_str().to_owned(),
-            name,
-            path: attachment.path.clone(),
-            size: attachment.size,
-            added_at: attachment.at.clone(),
-            post_run: attachment.post_run,
-            step: step.map(str::to_owned),
-        });
-    };
-    for (step_id, step) in &state.steps {
-        for attachment in &step.attachments {
-            push_attachment(Some(step_id), attachment);
-        }
-        for note in &step.notes {
-            notes.push(RunNoteView {
-                text: note.text.clone(),
-                added_at: note.at.clone(),
-                post_run: note.post_run,
-                step: Some(step_id.clone()),
-            });
-        }
-    }
-    for attachment in &state.run_attachments {
-        push_attachment(None, attachment);
-    }
-    for note in &state.run_notes {
-        notes.push(RunNoteView {
-            text: note.text.clone(),
-            added_at: note.at.clone(),
-            post_run: note.post_run,
-            step: None,
-        });
-    }
-    files.sort_by(|a, b| a.added_at.cmp(&b.added_at));
-    notes.sort_by(|a, b| a.added_at.cmp(&b.added_at));
-    let count = |kind: &str| files.iter().filter(|file| file.kind == kind).count();
-    Ok(RunFiles {
-        log_count: count("log"),
-        photo_count: count("photo"),
-        file_count: count("file"),
-        files,
-        notes,
-    })
+    run::files(repo, sop, run_id).map_err(text)
 }
 
 /// Open a directory in the platform's file manager. Fire-and-forget: the process's
@@ -1147,6 +1168,7 @@ fn build_run_view(loaded: &run::LoadedRun, run_id: &str) -> RunView {
     }
     RunView {
         sop: state.sop.clone().unwrap_or_default(),
+        title: state.title.clone(),
         run_id: run_id.to_owned(),
         operator: state.operator.clone(),
         site: state.site.clone(),
@@ -1213,6 +1235,8 @@ fn attachment_view(attachment: &sop_core::run::Attachment) -> RunAttachmentView 
         t_min: attachment.t_min.clone(),
         t_max: attachment.t_max.clone(),
         row_count: attachment.row_count,
+        remark: attachment.remark.clone(),
+        tags: attachment.tags.clone(),
     }
 }
 
@@ -1382,43 +1406,6 @@ pub fn load_external_md(path: String, state: State<'_, AppState>) -> Reply<Optio
     Ok(Some(entry.to_string()))
 }
 
-/// Publish the working copy: `git add -A`, commit, push.
-#[derive(Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PushResult {
-    pub branch: Option<String>,
-    pub remote: String,
-    pub changed: usize,
-    pub commit: Option<String>,
-    pub up_to_date: bool,
-    pub log: Vec<String>,
-}
-
-/// Stage everything, commit it when there is anything to commit, and push.
-///
-/// The app names the commit and the remote; `git` does the rest, with the operator's
-/// identity and the operator's credentials. See `sop_repo::git`.
-#[tauri::command(async)]
-pub fn repo_push(message: String, state: State<'_, AppState>) -> Reply<PushResult> {
-    let repo = state.repo()?;
-    let settings = state.settings()?;
-    let message = message.trim();
-    let message = if message.is_empty() {
-        format!("field-sop: record {} run(s)", repo.discover().runs.len())
-    } else {
-        message.to_owned()
-    };
-    let report = git::commit_and_push(repo.root(), &settings.remote, &message).map_err(text)?;
-    Ok(PushResult {
-        branch: report.branch,
-        remote: report.remote,
-        changed: report.changed,
-        commit: report.commit,
-        up_to_date: report.up_to_date,
-        log: report.log,
-    })
-}
-
 // ------------------------------------------------------------------ helpers
 
 fn text(error: impl std::fmt::Display) -> String {
@@ -1462,12 +1449,11 @@ fn build_project(state: &AppState) -> Reply<ProjectView> {
 
 fn build_status(state: &AppState) -> Reply<Status> {
     let repo: Repo = state.repo()?;
-    let settings = state.settings()?;
-    let loaded = project::load(&repo).map_err(text)?;
+    // Project metadata is optional. A broken project file must not prevent selecting
+    // a data directory or managing logs; the explicit content check still reports it.
+    let loaded = project::load(&repo).ok().flatten();
     let front = loaded.as_ref().map(|loaded| &loaded.doc.front);
-    let state_git = git::state(repo.root(), &settings.remote);
     let found = repo.discover();
-    let validation = validate::validate_repository(&repo).report;
 
     Ok(Status {
         working_copy: repo.root().display().to_string(),
@@ -1481,26 +1467,12 @@ fn build_status(state: &AppState) -> Reply<Status> {
         institution: front
             .and_then(|front| front.str("institution").flatten())
             .map(str::to_owned),
-        git: GitInfo {
-            is_repository: state_git.is_repository,
-            branch: state_git.branch,
-            remote: state_git.remote,
-            url: state_git.url,
-            url_has_credentials: state_git.url_has_credentials,
-            dirty: state_git.dirty,
-            ahead: state_git.ahead,
-            behind: state_git.behind,
-        },
         content: ContentCounts {
             procedures: found.procedures.len(),
             checklists: found.checklists.len(),
             runs: found.runs.len(),
             help: found.help.len(),
             log_directories: found.log_dirs.len(),
-        },
-        validation: ValidationCounts {
-            errors: validation.error_count(),
-            warnings: validation.warning_count(),
         },
     })
 }

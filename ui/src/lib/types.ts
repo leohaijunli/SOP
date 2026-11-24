@@ -8,25 +8,13 @@ export interface Status {
   projectTitle: string | null;
   projectId: string | null;
   institution: string | null;
-  git: GitInfo;
   content: ContentCounts;
-  validation: ValidationCounts;
 }
 
-export interface ValidationCounts {
-  errors: number;
-  warnings: number;
-}
-
-export interface GitInfo {
-  isRepository: boolean;
-  branch: string | null;
-  remote: string;
-  url: string | null;
-  urlHasCredentials: boolean;
-  dirty: boolean;
-  ahead: number | null;
-  behind: number | null;
+export interface WorkingDirectory {
+  path: string | null;
+  configuredPath: string | null;
+  recent: string[];
 }
 
 export interface ContentCounts {
@@ -72,6 +60,8 @@ export interface Manifest {
   checklists: ChecklistEntry[];
   testplans: TestPlan[];
   runs: RunEntry[];
+  workspace_files: RunFileView[];
+  workspace_error: string | null;
   help: HelpEntry[];
   help_sections: HelpSection[];
 }
@@ -155,6 +145,8 @@ export interface TestPlan {
 
 export interface RunEntry {
   run_id: unknown;
+  title: unknown;
+  notebook: boolean;
   sop: unknown;
   sop_version: unknown;
   operator: unknown;
@@ -164,6 +156,7 @@ export interface RunEntry {
   started: unknown;
   status: unknown;
   conclusion: unknown;
+  conclusion_note: unknown;
   deviations_count: unknown;
   sensor: { model?: unknown; serial?: unknown; firmware?: unknown } | null;
   conditions: Record<string, unknown> | null;
@@ -173,6 +166,9 @@ export interface RunEntry {
   file_count: number;
   path: string;
   step_count: number;
+  notes: RunNoteView[];
+  files: RunFileView[];
+  editable: boolean;
 }
 
 /// A value the checklist asks the operator to record at run start.
@@ -234,6 +230,7 @@ export interface StepInput {
 
 export interface RunView {
   sop: string;
+  title: string | null;
   runId: string;
   operator: string | null;
   site: string | null;
@@ -344,6 +341,8 @@ export interface RunAttachmentView {
   tMin: string | null;
   tMax: string | null;
   rowCount: number | null;
+  remark: string;
+  tags: string[];
 }
 
 /// The kind of an uploaded file. It decides the run subdirectory and the picker filter.
@@ -358,6 +357,12 @@ export interface RunFileView {
   addedAt: string;
   postRun: boolean;
   step: string | null;
+  remark: string;
+  remarkAt: string | null;
+  tags: string[];
+  missing: boolean;
+  fileTime: string;
+  timeSource: string;
 }
 
 /// One note, as the History detail drawer lists it.
@@ -375,6 +380,7 @@ export interface RunFiles {
   logCount: number;
   photoCount: number;
   fileCount: number;
+  editable: boolean;
 }
 
 /// The result of attaching one file: where it landed, or why it did not.
@@ -393,6 +399,7 @@ export type RunEventInput =
   | { type: "CaptureCleared"; at: string; step: string; key: string; reason: string }
   | { type: "CaptureAcknowledged"; at: string; step: string; key: string; reason: string | null }
   | { type: "NoteAdded"; at: string; step: string | null; text: string }
+  | { type: "RunTitleSet"; at: string; title: string }
   | {
       type: "AttachmentAdded";
       at: string;
@@ -431,15 +438,6 @@ export interface SummaryExportReport {
   bytes: number;
   skipped: string[];
   failed: string[];
-}
-
-export interface PushResult {
-  branch: string | null;
-  remote: string;
-  changed: number;
-  commit: string | null;
-  upToDate: boolean;
-  log: string[];
 }
 
 export interface StepPatch {

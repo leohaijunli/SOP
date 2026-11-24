@@ -52,6 +52,12 @@ pub enum RunError {
 
     #[error("a run conclusion can only be recorded once the run has ended")]
     ConclusionBeforeEnd,
+
+    #[error("a record title must be a non-empty single line")]
+    TitleRequired,
+
+    #[error("'{0}' is not a file attached to this record")]
+    NoAttachment(String),
 }
 
 /// The instrument a run was recorded with.
@@ -193,6 +199,21 @@ pub enum RunEvent {
         at: String,
         step: Option<String>,
         text: String,
+    },
+    /// A display title, independent of the immutable run id and checklist revision.
+    RunTitleSet {
+        at: String,
+        title: String,
+    },
+    /// Describe a recorded file without changing its bytes or its original attachment.
+    /// An empty remark clears the current text; earlier remarks remain in the event log.
+    AttachmentRemarkSet {
+        at: String,
+        path: String,
+        remark: String,
+        /// Omitted by older callers so a remark-only update preserves existing tags.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tags: Option<Vec<String>>,
     },
     AttachmentAdded {
         at: String,
@@ -338,6 +359,10 @@ pub struct Attachment {
     pub t_min: Option<String>,
     pub t_max: Option<String>,
     pub row_count: Option<u64>,
+    pub remark: String,
+    pub remark_at: Option<String>,
+    pub remark_post_run: bool,
+    pub tags: Vec<String>,
 }
 
 /// A note recorded against a step or the run, with the tool's clock at the moment it was
@@ -387,6 +412,7 @@ pub struct StepState {
 /// The state of the whole run, produced by replaying its events.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunState {
+    pub title: Option<String>,
     pub sop: Option<String>,
     pub sop_version: Option<String>,
     pub sop_commit: Option<String>,
@@ -570,6 +596,40 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
                 None => state.run_notes.push(note),
             }
         }
+        RunEvent::RunTitleSet { title, .. } => {
+            let title = title.trim();
+            if title.is_empty() || title.contains(['\n', '\r']) {
+                return Err(RunError::TitleRequired);
+            }
+            state.title = Some(title.to_owned());
+        }
+        RunEvent::AttachmentRemarkSet {
+            path,
+            remark,
+            tags,
+            at,
+        } => {
+            let mut found = false;
+            for attachment in state.run_attachments.iter_mut().chain(
+                state
+                    .steps
+                    .values_mut()
+                    .flat_map(|step| &mut step.attachments),
+            ) {
+                if attachment.path == *path {
+                    attachment.remark = remark.trim().to_owned();
+                    attachment.remark_at = Some(at.clone());
+                    attachment.remark_post_run = was_ended;
+                    if let Some(tags) = tags {
+                        attachment.tags = normalize_tags(tags);
+                    }
+                    found = true;
+                }
+            }
+            if !found {
+                return Err(RunError::NoAttachment(path.clone()));
+            }
+        }
         RunEvent::AttachmentAdded {
             step,
             kind,
@@ -594,6 +654,10 @@ pub fn apply(state: &mut RunState, event: &RunEvent) -> Result<(), RunError> {
                 t_min: t_min.clone(),
                 t_max: t_max.clone(),
                 row_count: *row_count,
+                remark: String::new(),
+                remark_at: None,
+                remark_post_run: false,
+                tags: Vec::new(),
             };
             match step {
                 Some(id) => state
@@ -673,6 +737,8 @@ impl RunEvent {
             self,
             RunEvent::AttachmentAdded { .. }
                 | RunEvent::NoteAdded { .. }
+                | RunEvent::RunTitleSet { .. }
+                | RunEvent::AttachmentRemarkSet { .. }
                 | RunEvent::RunConcluded { .. }
         )
     }
@@ -688,6 +754,8 @@ impl RunEvent {
             | RunEvent::CaptureCleared { at, .. }
             | RunEvent::CaptureAcknowledged { at, .. }
             | RunEvent::NoteAdded { at, .. }
+            | RunEvent::RunTitleSet { at, .. }
+            | RunEvent::AttachmentRemarkSet { at, .. }
             | RunEvent::AttachmentAdded { at, .. }
             | RunEvent::StepStatusChanged { at, .. }
             | RunEvent::RunEnded { at, .. }
@@ -710,6 +778,8 @@ impl RunEvent {
             | RunEvent::CaptureCleared { at: slot, .. }
             | RunEvent::CaptureAcknowledged { at: slot, .. }
             | RunEvent::NoteAdded { at: slot, .. }
+            | RunEvent::RunTitleSet { at: slot, .. }
+            | RunEvent::AttachmentRemarkSet { at: slot, .. }
             | RunEvent::AttachmentAdded { at: slot, .. }
             | RunEvent::StepStatusChanged { at: slot, .. }
             | RunEvent::RunEnded { at: slot, .. }
@@ -725,6 +795,19 @@ pub fn replay(events: &[RunEvent]) -> Result<RunState, RunError> {
         apply(&mut state, event)?;
     }
     Ok(state)
+}
+
+/// Tags are small, free-form labels. Keep the operator's spelling and order, but drop
+/// empty labels, line breaks, and case-insensitive duplicates.
+pub fn normalize_tags(tags: &[String]) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    tags.iter()
+        .map(|tag| tag.trim())
+        .filter(|tag| {
+            !tag.is_empty() && !tag.contains(['\n', '\r']) && seen.insert(tag.to_lowercase())
+        })
+        .map(str::to_owned)
+        .collect()
 }
 
 /// The slice of a step the record renderer needs. Filled from the frozen snapshot.
@@ -1020,8 +1103,10 @@ pub fn render_notes(state: &RunState) -> String {
         items.push((note.at.clone(), note.text.clone()));
     }
     items.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut out =
-        String::from("<!-- generated from events.jsonl; do not edit -->\n\n# Run notes\n\n");
+    let mut out = format!(
+        "<!-- generated from events.jsonl; do not edit -->\n\n# {}\n\n",
+        state.title.as_deref().unwrap_or("Run notes")
+    );
     if items.is_empty() {
         out.push_str("_No notes were recorded for this run._\n");
         return out;
@@ -1039,11 +1124,15 @@ pub fn render_notes(state: &RunState) -> String {
 
 pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
     let mut out = String::new();
-    out.push_str(&format!(
-        "# Run {} ({})\n\n",
-        state.sop.as_deref().unwrap_or("?"),
-        state.started.as_deref().unwrap_or("?")
-    ));
+    if let Some(title) = &state.title {
+        out.push_str(&format!("# {title}\n\n"));
+    } else {
+        out.push_str(&format!(
+            "# Run {} ({})\n\n",
+            state.sop.as_deref().unwrap_or("?"),
+            state.started.as_deref().unwrap_or("?")
+        ));
+    }
     out.push_str(&format!(
         "operator: {}\n\nsite: {}\n\n",
         state.operator.as_deref().unwrap_or(""),
@@ -1093,7 +1182,9 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
     }
     out.push('\n');
 
-    out.push_str(&render_timeline(state, steps));
+    if !steps.is_empty() || !state.added_steps.is_empty() {
+        out.push_str(&render_timeline(state, steps));
+    }
 
     for step in steps {
         let step_state = state.steps.get(&step.id);
@@ -1190,7 +1281,7 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
 
     if !state.added_steps.is_empty() {
         out.push_str("## Steps added during the run\n\n");
-        out.push_str("| ID | 标题 | 插入位置 | 状态 | 开始 | 结束 |\n");
+        out.push_str("| ID | Title | Position | Status | Start | End |\n");
         out.push_str("|----|------|----------|------|------|------|\n");
         for added in &state.added_steps {
             let step_state = state.steps.get(&added.id);
@@ -1262,6 +1353,37 @@ pub fn render_record(state: &RunState, steps: &[RecordStep]) -> String {
         out.push('\n');
     }
 
+    let remarked: Vec<&Attachment> = state
+        .run_attachments
+        .iter()
+        .chain(state.steps.values().flat_map(|step| &step.attachments))
+        .filter(|attachment| !attachment.remark.is_empty() || !attachment.tags.is_empty())
+        .collect();
+    if !remarked.is_empty() {
+        out.push_str("## File remarks\n\n");
+        for attachment in remarked {
+            let display_path = attachment.path.replace('\n', "\\n").replace('\r', "\\r");
+            out.push_str(&format!("### {display_path}\n\n"));
+            if let Some(at) = &attachment.remark_at {
+                let late = if attachment.remark_post_run {
+                    " (after run)"
+                } else {
+                    ""
+                };
+                out.push_str(&format!("{at}{late}\n\n"));
+            }
+            if !attachment.tags.is_empty() {
+                out.push_str(&format!("tags: {}\n\n", attachment.tags.join(", ")));
+            }
+            // Keep arbitrary Markdown remarks out of the record's structural result
+            // fences, just like step notes. The stored text remains unchanged.
+            for line in attachment.remark.lines() {
+                out.push_str(&format!("> {line}\n"));
+            }
+            out.push('\n');
+        }
+    }
+
     render_post_run(state, &mut out);
 
     if let Some(status) = &state.run_status {
@@ -1297,6 +1419,96 @@ mod tests {
             conditions: BTreeMap::new(),
             clock: None,
         }
+    }
+
+    #[test]
+    fn a_record_title_is_additive_and_can_be_changed_after_end() {
+        let mut state = replay(&[
+            started(),
+            RunEvent::RunEnded {
+                at: "t1".into(),
+                status: "partial".into(),
+            },
+        ])
+        .unwrap();
+        apply(
+            &mut state,
+            &RunEvent::RunTitleSet {
+                at: "t2".into(),
+                title: " 温度漂移测试 ".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(state.title.as_deref(), Some("温度漂移测试"));
+        assert!(render_record(&state, &[]).starts_with("# 温度漂移测试\n"));
+        assert_eq!(
+            apply(
+                &mut state,
+                &RunEvent::RunTitleSet {
+                    at: "t3".into(),
+                    title: "\n".into()
+                }
+            ),
+            Err(RunError::TitleRequired)
+        );
+    }
+
+    #[test]
+    fn file_remarks_replay_update_and_clear_without_changing_the_file_identity() {
+        let attachment: RunEvent = serde_json::from_str(r#"{"type":"AttachmentAdded","at":"t1","step":null,"path":"logs/raw.csv","sha256":"abc","size":12}"#).unwrap();
+        let events = vec![
+            started(),
+            attachment,
+            RunEvent::RunEnded {
+                at: "t2".into(),
+                status: "partial".into(),
+            },
+            RunEvent::AttachmentRemarkSet {
+                at: "t3".into(),
+                path: "logs/raw.csv".into(),
+                remark: " 前 10 秒预热\n不要参与拟合 ".into(),
+                tags: Some(vec!["预热".into(), " GPS ".into(), "gps".into()]),
+            },
+        ];
+        let mut state = replay(&events).unwrap();
+        let file = &state.run_attachments[0];
+        assert_eq!(file.remark, "前 10 秒预热\n不要参与拟合");
+        assert_eq!(file.sha256, "abc");
+        assert!(file.remark_post_run);
+        assert_eq!(file.tags, vec!["预热", "GPS"]);
+        assert!(render_record(&state, &[]).contains("## File remarks"));
+        apply(
+            &mut state,
+            &RunEvent::AttachmentRemarkSet {
+                at: "t4".into(),
+                path: "logs/raw.csv".into(),
+                remark: String::new(),
+                tags: None,
+            },
+        )
+        .unwrap();
+        assert!(state.run_attachments[0].remark.is_empty());
+        assert_eq!(state.run_attachments[0].size, 12);
+        assert_eq!(state.run_attachments[0].tags, vec!["预热", "GPS"]);
+    }
+
+    #[test]
+    fn a_remark_cannot_name_an_unattached_path() {
+        let mut state = replay(&[started()]).unwrap();
+        let before = state.clone();
+        assert!(matches!(
+            apply(
+                &mut state,
+                &RunEvent::AttachmentRemarkSet {
+                    at: "t".into(),
+                    path: "../other.csv".into(),
+                    remark: "text".into(),
+                    tags: None
+                }
+            ),
+            Err(RunError::NoAttachment(_))
+        ));
+        assert_eq!(state, before);
     }
 
     #[test]

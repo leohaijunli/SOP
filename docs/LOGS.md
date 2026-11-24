@@ -2,6 +2,10 @@
 
 ## Where logs live
 
+The desktop requires an explicitly selected data directory. Independent logs may live
+under its `logs/` folder (including subfolders) without a test record. Logs attached to
+a test remain inside that record's own directory as below.
+
 ```
 runs/<sop_id>/<run_id>/
   logs/
@@ -33,10 +37,8 @@ it has ended; the run record and `record.md` list what arrived after the end sep
 (`SPEC.md` section 8.2, `docs/DECISIONS.md` D29). What the seal protects is the field
 record, not the later uploads.
 
-`logs/<run_id>/` at the repository root is the older location, kept readable for
-records written before the run directory became self-contained. A directory there
-without a matching `runs/<sop_id>/<run_id>.md` is a validator error, because a log with
-no record has no context.
+`logs/<run_id>/` at the working-directory root is also readable for older records.
+Unassociated log folders are supported; matching a record is not a requirement.
 
 ## Why hash on attach
 
@@ -58,45 +60,28 @@ renfrew_20260924_gsm19_raw.csv
 renfrew_20260924_gsm19_base.csv
 ```
 
-Avoid spaces and non-ASCII characters in log filenames. Instrument-generated names
-that violate this should be renamed on attach, not left as-is.
+Imports preserve the original file name, including spaces and Unicode. Same-name files
+with different contents receive a suffix; no source file is renamed or modified.
 
-## Size and Git LFS
+## Chronological history, remarks, and tags
 
-Text logs from a day of walking survey are typically single-digit megabytes and are
-fine to commit directly.
+The log list defaults to newest first; it can be reversed or sorted by import time.
+For recorded CSV logs with a recognized time column, the data timestamp is used.
+Otherwise file modification time is used and labeled. Import time is kept separate,
+and a source file's modification time is preserved when copying it.
 
-Switch to Git LFS before the repository exceeds roughly 50 MB, or as soon as binary
-artifacts (HDF5, imagery, raw instrument binaries) appear. This repo intentionally
-does not enable LFS by default, because an active `filter=lfs` attribute in a clone
-without LFS installed breaks checkout. To opt in:
+Every file can carry a free-form remark and multiple tags. Tags are displayed in the
+list, clickable for filtering, and searchable along with names and remarks. They never
+change the log bytes. Attached-file metadata is an append-only event, including changes
+after the run ends. Loose-log metadata lives in `.field-sop/log-remarks.json`.
 
-```bash
-git lfs install
-git lfs track "runs/**/logs/**/*.h5" "runs/**/logs/**/*.bin" "runs/**/logs/**/*.tif"
-git add .gitattributes
-```
+## Size and backup
 
-Photographs are the usual reason to cross the threshold: a phone photo is a few
-megabytes and a run may collect a dozen. If photographs are being committed, track them
-too:
+Files over 50 MB ask for confirmation before copying. Independent log imports are
+streamed rather than loaded into memory as one large buffer. Search reads indexed
+metadata and notes, not raw log bodies; full content validation is a manual operation.
 
-```bash
-git lfs track "runs/**/photos/**"
-git add .gitattributes
-```
-
-LFS is still opt-in. Enabling it in this repository would break a clone on a machine
-without the LFS filter installed, so the decision stays with the operator, and this is
-the line to run if they make it.
-
-## If a log is too large or cannot be committed
-
-Keep the record and the manifest in git, and store the payload elsewhere:
-
-1. Still write the `logs:` entry, with `sha256` and `size`.
-2. Add `external: true` and a `location:` string naming the archive.
-3. Commit only the run record.
-
-The record stays valid because the hash is what makes it verifiable, not the file's
-presence in this repository.
+Use **Export working directory** for a self-contained backup. It contains all records and attachments,
+independent logs, local test plans, the project file, remark/tag metadata and a checksum
+manifest. If copying a folder manually, include `.field-sop/log-remarks.json` as well.
+There is no git synchronization or sign-in requirement.

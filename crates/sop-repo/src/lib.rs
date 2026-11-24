@@ -12,6 +12,7 @@ pub mod settings;
 pub mod summary;
 pub mod testplan;
 pub mod validate;
+pub mod workspace;
 
 use std::fs;
 use std::io;
@@ -88,8 +89,14 @@ pub struct Discovery {
 }
 
 impl Repo {
+    /// Open user data without moving or migrating any files. Desktop directory
+    /// selection and read-only indexing must not change the selected folder's layout.
+    pub fn open_data_directory(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
     pub fn open(root: impl Into<PathBuf>) -> Self {
-        let repo = Self { root: root.into() };
+        let repo = Self::open_data_directory(root);
         // Upgrade a pre-project run layout (`runs/<sop_id>/`) to the project-nested one
         // (`runs/<project_id>/<sop_id>/`) as soon as the repository is opened, so reads and
         // writes both see the same shape. Idempotent; nothing to move on a repo already in
@@ -135,6 +142,22 @@ impl Repo {
     pub fn load(&self, path: &Path) -> Result<Loaded, RepoError> {
         let text = self.read_text(path)?;
         let doc = Document::parse(&text).map_err(|source| RepoError::Parse {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        Ok(Loaded {
+            path: path.to_path_buf(),
+            relpath: self.relpath(path),
+            text,
+            doc,
+        })
+    }
+
+    /// A user-supplied plan/case may be ordinary Markdown without front matter.
+    /// Validation of authored procedures/checklists remains on the strict loader.
+    pub fn load_standalone(&self, path: &Path) -> Result<Loaded, RepoError> {
+        let text = self.read_text(path)?;
+        let doc = Document::parse_standalone(&text).map_err(|source| RepoError::Parse {
             path: path.to_path_buf(),
             source,
         })?;
@@ -364,8 +387,12 @@ impl Repo {
                 if path.file_name().is_some_and(|name| name == "plan.md") {
                     continue;
                 }
-                if let Ok(loaded) = self.load(&path)
-                    && loaded.doc.front.str("sop_id").flatten() == Some(sop_id)
+                if let Ok(loaded) = self.load_standalone(&path)
+                    && loaded.doc.front.str("sop_id").flatten().unwrap_or_else(|| {
+                        path.file_stem()
+                            .and_then(|stem| stem.to_str())
+                            .unwrap_or("")
+                    }) == sop_id
                 {
                     return Some(path);
                 }
@@ -377,7 +404,7 @@ impl Repo {
     /// Step ids of a checklist, resolved. Used by run records to check citations.
     pub fn checklist_step_ids(&self, sop_id: &str) -> Option<Vec<String>> {
         let path = self.checklist_path(sop_id)?;
-        let loaded = self.load(&path).ok()?;
+        let loaded = self.load_standalone(&path).ok()?;
         let resolved = resolve_checklist(self, &loaded);
         Some(
             resolved
@@ -396,12 +423,7 @@ impl Repo {
     /// it does. `None` means the run has no snapshot, which is only true of records
     /// written before runs became self-contained directories.
     pub fn run_snapshot_step_ids(&self, sop_id: &str, run_id: &str) -> Option<Vec<String>> {
-        let path = self
-            .root
-            .join("runs")
-            .join(crate::run::run_subdir(self, sop_id))
-            .join(run_id)
-            .join("snapshot.md");
+        let path = crate::run::run_dir(self, sop_id, run_id).join("snapshot.md");
         let text = self.read_text(&path).ok()?;
         let doc = Document::parse(&text).ok()?;
         Some(
@@ -421,12 +443,7 @@ impl Repo {
         sop_id: &str,
         run_id: &str,
     ) -> Option<Vec<(String, Vec<String>)>> {
-        let path = self
-            .root
-            .join("runs")
-            .join(crate::run::run_subdir(self, sop_id))
-            .join(run_id)
-            .join("snapshot.md");
+        let path = crate::run::run_dir(self, sop_id, run_id).join("snapshot.md");
         let text = self.read_text(&path).ok()?;
         let doc = Document::parse(&text).ok()?;
         Some(
